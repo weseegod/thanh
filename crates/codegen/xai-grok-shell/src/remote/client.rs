@@ -975,6 +975,12 @@ pub fn parse_remote_model_value(
             .get("streamToolCalls")
             .or_else(|| obj.get("stream_tool_calls"))
             .and_then(|v| v.as_bool()),
+        input_modalities: obj
+            .get("inputModalities")
+            .or_else(|| obj.get("input_modalities"))
+            .or_else(|| obj.get("input"))
+            .or_else(|| meta.and_then(|m| m.get("inputModalities")))
+            .and_then(|v| xai_grok_sampling_types::parse_input_modalities(v)),
         laziness_detector: get_object(obj, "lazinessDetector")
             .or_else(|| get_object(obj, "laziness_detector"))
             .or_else(|| meta.and_then(|m| get_object(m, "lazinessDetector")))

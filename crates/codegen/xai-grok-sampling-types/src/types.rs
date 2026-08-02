@@ -1007,6 +1007,82 @@ pub fn reasoning_efforts_meta_value(opts: &[ReasoningEffortOption]) -> serde_jso
     serde_json::to_value(opts).unwrap_or_else(|_| serde_json::Value::Array(Vec::new()))
 }
 
+/// Input modality a model can accept. Mirrors the OpenAI `/v1/models`
+/// `input_modalities` vocabulary (`"text"`, `"image"`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum InputModality {
+    Text,
+    Image,
+}
+
+impl InputModality {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Text => "text",
+            Self::Image => "image",
+        }
+    }
+
+    /// Case-insensitive parse; unknown values are rejected so config typos
+    /// surface as a warning instead of silently changing behavior.
+    pub fn from_str(s: &str) -> Option<Self> {
+        match s.to_ascii_lowercase().as_str() {
+            "text" => Some(Self::Text),
+            "image" => Some(Self::Image),
+            _ => None,
+        }
+    }
+}
+
+impl std::fmt::Display for InputModality {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// Parse a JSON array of input-modality strings, skipping unknown values with a
+/// warning (forward-compat for modalities a newer server introduces). The
+/// single home for the skip-invalid rule, shared by the meta reader and the
+/// remote `/models` parser. Returns `None` when the input is not an array or
+/// yields nothing usable.
+pub fn parse_input_modalities(raw: &serde_json::Value) -> Option<Vec<InputModality>> {
+    let arr = raw.as_array()?;
+    let modalities: Vec<InputModality> = arr
+        .iter()
+        .filter_map(|el| {
+            let s = el.as_str()?;
+            match InputModality::from_str(s) {
+                Some(m) => Some(m),
+                None => {
+                    tracing::warn!(value = %s, "input_modalities: skipping unknown modality");
+                    None
+                }
+            }
+        })
+        .collect();
+    (!modalities.is_empty()).then_some(modalities)
+}
+
+/// ACP `meta["inputModalities"]` value: an array of lowercase modality strings.
+pub fn input_modalities_meta_value(modalities: &[InputModality]) -> serde_json::Value {
+    serde_json::Value::Array(
+        modalities
+            .iter()
+            .map(|m| serde_json::Value::String(m.as_str().to_string()))
+            .collect(),
+    )
+}
+
+/// Read the per-model input-modality list from a model's ACP `meta`. Returns
+/// `None` when the key is absent or unusable, so consumers can distinguish
+/// "declared text/image" from "unknown" (callers decide the fallback).
+pub fn parse_input_modalities_meta(
+    meta: Option<&serde_json::Map<String, serde_json::Value>>,
+) -> Option<Vec<InputModality>> {
+    parse_input_modalities(meta?.get("inputModalities")?)
+}
+
 /// Which API backend to use for model inference.
 #[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]

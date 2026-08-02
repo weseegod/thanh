@@ -14,9 +14,10 @@ use std::sync::Arc;
 use xai_grok_agent::prompt::skills::SkillsConfig;
 use xai_grok_sampler::{AuthScheme, SamplerConfig};
 use xai_grok_sampling_types::{
-    CompactionAtTokens, CompactionsRemaining, REASONING_EFFORT_META_KEY,
+    CompactionAtTokens, CompactionsRemaining, InputModality, REASONING_EFFORT_META_KEY,
     REASONING_EFFORTS_META_KEY, ReasoningEffort, ReasoningEffortOption,
-    reasoning_effort_meta_value, reasoning_efforts_meta_value,
+    input_modalities_meta_value, parse_input_modalities, reasoning_effort_meta_value,
+    reasoning_efforts_meta_value,
 };
 use xai_grok_tools::types::compat::{
     COMPAT_CELLS, CompatConfig, CompatConfigToml, CompatRemoteKey, CompatSurface, CompatVendor,
@@ -3823,6 +3824,8 @@ struct DefaultModelJson {
     auto_compact_threshold_percent: Option<u8>,
     #[serde(default)]
     system_prompt_label: Option<String>,
+    #[serde(default)]
+    input_modalities: Option<Vec<InputModality>>,
 }
 fn default_models(endpoints: &EndpointsConfig) -> IndexMap<String, ModelEntryConfig> {
     let root: serde_json::Value = serde_json::from_str(crate::models::DEFAULT_MODELS_JSON)
@@ -3881,6 +3884,7 @@ fn default_models(endpoints: &EndpointsConfig) -> IndexMap<String, ModelEntryCon
                 compaction_at_tokens: m.compaction_at_tokens,
                 show_model_fingerprint: m.show_model_fingerprint,
                 stream_tool_calls: None,
+                input_modalities: m.input_modalities,
                 laziness_detector: LazinessDetectorPerModelConfig::default(),
             };
             (key, config)
@@ -4001,6 +4005,11 @@ pub struct ModelEntryConfig {
     /// flag should leave this unset to avoid request errors.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stream_tool_calls: Option<bool>,
+    /// Input modalities this model accepts (`"text"`, `"image"`). `None`
+    /// means unknown/undeclared — consumers fall back to their permissive
+    /// default (e.g. the TUI treats an absent key as image-capable).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub input_modalities: Option<Vec<InputModality>>,
     /// Per-model Layer-3 LazinessDetector configuration. Defaults to
     /// the all-disabled state via `#[serde(default)]`.
     #[serde(default, skip_serializing_if = "is_default_laziness_detector")]
@@ -4072,6 +4081,11 @@ pub struct ConfigModelOverride {
     pub compaction_at_tokens: Option<CompactionAtTokens>,
     pub show_model_fingerprint: Option<bool>,
     pub stream_tool_calls: Option<bool>,
+    /// Input modalities this model accepts (`"text"`, `"image"`), e.g.
+    /// `input = ["text", "image"]`. Alias `input_modalities` accepted;
+    /// `None` leaves the base entry's value (or "unknown") untouched.
+    #[serde(alias = "input_modalities")]
+    pub input: Option<Vec<InputModality>>,
 }
 impl ConfigModelOverride {
     pub(crate) fn apply(
@@ -4166,6 +4180,9 @@ impl ConfigModelOverride {
         if self.stream_tool_calls.is_some() {
             entry.info.stream_tool_calls = self.stream_tool_calls;
         }
+        if self.input.is_some() {
+            entry.info.input_modalities = self.input.clone();
+        }
         if self.api_key.is_some() {
             entry.api_key.clone_from(&self.api_key);
         }
@@ -4253,6 +4270,13 @@ pub struct ModelInfo {
     pub show_model_fingerprint: bool,
     /// When `Some(true)`, the sampler injects `stream_tool_calls: true`
     pub stream_tool_calls: Option<bool>,
+    /// Input modalities this model accepts (`"text"`, `"image"`), from
+    /// `[model.<id>] input = [...]`, the remote `/v1/models`
+    /// `input_modalities`, or `default_models.json`. `None` means
+    /// unknown/undeclared — the ACP projection omits `inputModalities` so
+    /// consumers keep their permissive default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub input_modalities: Option<Vec<InputModality>>,
     /// Per-model Layer-3 LazinessDetector configuration. Defaults to
     /// the all-disabled state — the feature is per-model opt-in with a
     /// second-step `max_nudges_per_session > 0` opt-in for actually
@@ -4296,6 +4320,7 @@ impl ModelInfo {
             compaction_at_tokens: None,
             show_model_fingerprint: false,
             stream_tool_calls: None,
+            input_modalities: None,
             laziness_detector: LazinessDetectorPerModelConfig::default(),
         }
     }
@@ -4333,6 +4358,7 @@ impl ModelInfo {
             compaction_at_tokens: entry.compaction_at_tokens,
             show_model_fingerprint: entry.show_model_fingerprint,
             stream_tool_calls: entry.stream_tool_calls,
+            input_modalities: entry.input_modalities.clone(),
             laziness_detector: entry.laziness_detector.clone(),
         }
     }
@@ -5075,6 +5101,7 @@ pub fn resolve_aux_model_sampling_config(
                 compaction_at_tokens: None,
                 show_model_fingerprint: false,
                 stream_tool_calls: None,
+                input_modalities: None,
                 laziness_detector: LazinessDetectorPerModelConfig::default(),
             },
             api_key: Some(bearer),
@@ -5309,6 +5336,7 @@ fn resolve_hidden_default_web_search_sampling_config(
             compaction_at_tokens: None,
             show_model_fingerprint: false,
             stream_tool_calls: None,
+            input_modalities: None,
             laziness_detector: LazinessDetectorPerModelConfig::default(),
         },
         api_key: None,
@@ -5407,6 +5435,14 @@ pub fn to_acp_model_info(
                     map.insert(
                         REASONING_EFFORTS_META_KEY.to_string(),
                         reasoning_efforts_meta_value(&info.reasoning_efforts),
+                    );
+                }
+                if let Some(modalities) = &info.input_modalities
+                    && !modalities.is_empty()
+                {
+                    map.insert(
+                        "inputModalities".to_string(),
+                        input_modalities_meta_value(modalities),
                     );
                 }
                 if map.is_empty() { None } else { Some(map) }
@@ -6526,6 +6562,7 @@ reasoning_effort = "low"
                 compaction_at_tokens: None,
                 show_model_fingerprint: false,
                 stream_tool_calls: None,
+                input_modalities: None,
                 laziness_detector: LazinessDetectorPerModelConfig::default(),
             },
             api_key: api_key.map(|s| s.to_string()),
@@ -7551,6 +7588,7 @@ reasoning_effort = "low"
             compaction_at_tokens: None,
             show_model_fingerprint: false,
             stream_tool_calls: None,
+            input_modalities: None,
             laziness_detector: LazinessDetectorPerModelConfig::default(),
         };
         let info = ModelInfo::from_config(&entry);
@@ -7710,6 +7748,7 @@ reasoning_effort = "low"
             compaction_at_tokens: None,
             show_model_fingerprint: false,
             stream_tool_calls: None,
+            input_modalities: None,
             laziness_detector: LazinessDetectorPerModelConfig::default(),
         };
         let info = ModelInfo::from_config(&entry);
@@ -7777,6 +7816,42 @@ reasoning_effort = "low"
             .unwrap();
         assert_eq!(meta["supportsReasoningEffort"], true);
         assert!(meta.get("reasoningEffort").is_none());
+    }
+    #[test]
+    fn acp_model_meta_emits_input_modalities_when_declared() {
+        let mut models = IndexMap::new();
+        let mut entry = test_model_entry("m", "https://test.api/v1", None, None, None);
+        entry.info.input_modalities = Some(vec![InputModality::Text, InputModality::Image]);
+        models.insert("m".to_string(), entry);
+        let meta = to_acp_model_info(&models)
+            .values()
+            .next()
+            .unwrap()
+            .meta
+            .clone()
+            .unwrap();
+        assert_eq!(
+            meta["inputModalities"],
+            serde_json::json!(["text", "image"])
+        );
+    }
+    #[test]
+    fn acp_model_meta_omits_input_modalities_when_undeclared() {
+        let mut models = IndexMap::new();
+        let mut entry = test_model_entry("m", "https://test.api/v1", None, None, None);
+        entry.info.name = Some("M".to_string());
+        models.insert("m".to_string(), entry);
+        let meta = to_acp_model_info(&models)
+            .values()
+            .next()
+            .unwrap()
+            .meta
+            .clone()
+            .unwrap();
+        assert!(
+            meta.get("inputModalities").is_none(),
+            "undeclared input modalities must not be advertised"
+        );
     }
     #[test]
     fn acp_model_meta_emits_reasoning_efforts_and_derives_legacy() {
@@ -8161,6 +8236,7 @@ reasoning_effort = "low"
             compaction_at_tokens: None,
             show_model_fingerprint: false,
             stream_tool_calls: None,
+            input_modalities: None,
             laziness_detector: LazinessDetectorPerModelConfig::default(),
         };
         let info = ModelInfo::from_config(&entry);
@@ -11979,6 +12055,7 @@ default = "grok-4.5"
                 compaction_at_tokens: None,
                 show_model_fingerprint: false,
                 stream_tool_calls: None,
+                input_modalities: None,
                 laziness_detector: LazinessDetectorPerModelConfig::default(),
                 auto_compact_threshold_percent: None,
                 system_prompt_label: None,

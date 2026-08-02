@@ -359,7 +359,10 @@ fn parse_model_override_table(
 /// `(canonical, legacy)` key pairs that serde rejects as duplicate fields
 /// when both appear in one table. Keep in sync with the `#[serde(alias)]`
 /// attributes on [`ConfigModelOverride`].
-const ALIASES: &[(&str, &str)] = &[("compactions_remaining", "send_compactions_remaining")];
+const ALIASES: &[(&str, &str)] = &[
+    ("compactions_remaining", "send_compactions_remaining"),
+    ("input", "input_modalities"),
+];
 
 /// Removes one key of each [`ALIASES`] pair that appears twice in `table`.
 /// The canonical key wins; when its value doesn't parse, the legacy key is
@@ -726,6 +729,10 @@ mod tests {
             compaction_at_tokens: Some(CompactionAtTokens::Fixed(100_000)),
             show_model_fingerprint: Some(true),
             stream_tool_calls: Some(false),
+            input: Some(vec![
+                xai_grok_sampling_types::InputModality::Text,
+                xai_grok_sampling_types::InputModality::Image,
+            ]),
         }
     }
 
@@ -756,6 +763,86 @@ mod tests {
         assert_eq!(warnings.len(), 1);
         let reparsed = toml::Value::try_from(models.get("m").unwrap()).unwrap();
         assert_eq!(reparsed, serialized, "round-trip must be lossless");
+    }
+
+    #[test]
+    fn input_field_parses_modalities() {
+        let mut entry = toml::map::Map::new();
+        entry.insert(
+            "input".to_owned(),
+            toml::Value::Array(vec![
+                toml::Value::String("text".into()),
+                toml::Value::String("image".into()),
+            ]),
+        );
+        let (models, warnings) = parse_single_entry(entry);
+        assert_eq!(warnings, Vec::new());
+        let parsed = models.get("m").unwrap();
+        use xai_grok_sampling_types::InputModality;
+        assert_eq!(
+            parsed.input,
+            Some(vec![InputModality::Text, InputModality::Image])
+        );
+    }
+
+    #[test]
+    fn input_field_accepts_input_modalities_alias() {
+        let mut entry = toml::map::Map::new();
+        entry.insert(
+            "input_modalities".to_owned(),
+            toml::Value::Array(vec![toml::Value::String("text".into())]),
+        );
+        let (models, warnings) = parse_single_entry(entry);
+        assert_eq!(warnings, Vec::new());
+        let parsed = models.get("m").unwrap();
+        use xai_grok_sampling_types::InputModality;
+        assert_eq!(parsed.input, Some(vec![InputModality::Text]));
+    }
+
+    #[test]
+    fn input_field_unknown_modality_warns_but_keeps_model() {
+        let mut entry = toml::map::Map::new();
+        entry.insert(
+            "input".to_owned(),
+            toml::Value::Array(vec![
+                toml::Value::String("text".into()),
+                toml::Value::String("video".into()),
+            ]),
+        );
+        entry.insert("name".to_owned(), toml::Value::String("M".into()));
+        let (models, warnings) = parse_single_entry(entry);
+        // The bad `input` value is pruned; the model survives with the rest.
+        assert_eq!(models.get("m").unwrap().name.as_deref(), Some("M"));
+        assert_eq!(models.get("m").unwrap().input, None);
+        assert_eq!(warnings.len(), 1);
+        assert_eq!(warnings[0].kind, ConfigWarningKind::InvalidValue);
+        assert_eq!(warnings[0].field(), Some("input"));
+    }
+
+    #[test]
+    fn input_and_input_modalities_aliases_dedupe() {
+        let mut entry = toml::map::Map::new();
+        entry.insert(
+            "input".to_owned(),
+            toml::Value::Array(vec![
+                toml::Value::String("text".into()),
+                toml::Value::String("image".into()),
+            ]),
+        );
+        entry.insert(
+            "input_modalities".to_owned(),
+            toml::Value::Array(vec![toml::Value::String("text".into())]),
+        );
+        let (models, warnings) = parse_single_entry(entry);
+        // Canonical `input` wins; the legacy alias is skipped with a warning.
+        use xai_grok_sampling_types::InputModality;
+        assert_eq!(
+            models.get("m").unwrap().input,
+            Some(vec![InputModality::Text, InputModality::Image])
+        );
+        assert_eq!(warnings.len(), 1);
+        assert_eq!(warnings[0].kind, ConfigWarningKind::DuplicateAlias);
+        assert_eq!(warnings[0].field(), Some("input_modalities"));
     }
 
     /// `auth_provider` alongside `api_key`/`env_key` warns (static keys

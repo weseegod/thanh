@@ -1850,6 +1850,7 @@ fn test_model_entry(model_id: &str) -> crate::agent::config::ModelEntry {
             compaction_at_tokens: None,
             show_model_fingerprint: false,
             stream_tool_calls: None,
+            input_modalities: None,
             laziness_detector: crate::agent::config::LazinessDetectorPerModelConfig::default(),
         },
         api_key: None,

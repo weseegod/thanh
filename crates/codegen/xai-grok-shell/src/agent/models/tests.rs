@@ -1696,6 +1696,7 @@ fn make_entry_config_with_id(
         compaction_at_tokens: None,
         show_model_fingerprint: false,
         stream_tool_calls: None,
+        input_modalities: None,
         laziness_detector: config::LazinessDetectorPerModelConfig::default(),
     }
 }

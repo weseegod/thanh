@@ -118,6 +118,19 @@ impl ModelState {
         true
     }
 
+    /// Declared input modalities (`"text"`, `"image"`) for a catalog model,
+    /// read from its ACP `meta` `inputModalities` array. `None` when the model
+    /// does not declare them — the display layer decides what "unknown" means.
+    pub fn model_input_modalities(&self, id: &acp::ModelId) -> Option<Vec<String>> {
+        let meta = self.available.get(id)?.meta.as_ref()?;
+        let arr = meta.get("inputModalities")?.as_array()?;
+        let modalities: Vec<String> = arr
+            .iter()
+            .filter_map(|v| v.as_str().map(|s| s.to_string()))
+            .collect();
+        (!modalities.is_empty()).then_some(modalities)
+    }
+
     /// Get the effective context window size (tokens).
     ///
     /// Returns the override if set, otherwise reads from the current model's
@@ -642,5 +655,40 @@ mod tests {
             !state_with_meta(Some(serde_json::json!({ "inputModalities": ["text"] })))
                 .current_model_accepts_images()
         );
+    }
+
+    #[test]
+    fn model_input_modalities_reads_declared_list() {
+        let id = acp::ModelId::new(Arc::from("m"));
+        let state = ModelState {
+            available: [(
+                id.clone(),
+                acp::ModelInfo::new(id.clone(), "M".to_string()).meta(
+                    serde_json::json!({ "inputModalities": ["text", "image"] })
+                        .as_object()
+                        .cloned(),
+                ),
+            )]
+            .into_iter()
+            .collect(),
+            ..ModelState::default()
+        };
+        assert_eq!(
+            state.model_input_modalities(&id),
+            Some(vec!["text".to_string(), "image".to_string()])
+        );
+        // Undeclared / empty list → None (display treats it as "unknown").
+        let undeclared = acp::ModelId::new(Arc::from("u"));
+        let state = ModelState {
+            available: [(
+                undeclared.clone(),
+                acp::ModelInfo::new(undeclared.clone(), "U".to_string()),
+            )]
+            .into_iter()
+            .collect(),
+            ..ModelState::default()
+        };
+        assert_eq!(state.model_input_modalities(&undeclared), None);
+        assert_eq!(state.model_input_modalities(&id), None);
     }
 }

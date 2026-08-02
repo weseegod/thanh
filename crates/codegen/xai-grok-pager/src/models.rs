@@ -30,12 +30,24 @@ pub async fn list_available_models(agent_config: &AgentConfig) -> Result<()> {
     println!("Default model: {}", state.current_model_id.0);
     println!();
     println!("Available models:");
-    for m in state.available_models {
-        if m.model_id == state.current_model_id {
-            println!("  * {} (default)", m.model_id.0);
+    let models = crate::acp::ModelState::from(Some(state));
+    for id in models.available.keys() {
+        let marker = if Some(id) == models.current.as_ref() {
+            "  * "
         } else {
-            println!("  - {}", m.model_id.0);
+            "  - "
+        };
+        let mut line = format!("{marker}{}", id.0);
+        let modalities = models
+            .model_input_modalities(id)
+            .map(|m| format!("[{}]", m.join(", ")));
+        if let Some(m) = modalities {
+            line.push_str(&format!(" {m}"));
         }
+        if Some(id) == models.current.as_ref() {
+            line.push_str(" (default)");
+        }
+        println!("{line}");
     }
 
     Ok(())

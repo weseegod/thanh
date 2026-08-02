@@ -12,6 +12,7 @@
       "context_window": 500000,
       "api_backend": "responses",
       "supports_backend_search": false,
+      "input_modalities": ["text", "image"],
       "system_prompt_label": "Grok 4.5",
       "show_model_fingerprint": true,
       "supports_reasoning_effort": true,
