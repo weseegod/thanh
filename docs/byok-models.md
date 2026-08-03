@@ -260,6 +260,7 @@ Backup lúc import: `~/.grok/config.toml.bak-20260731-221150`
 | 404 model | Field `model` phải khớp id API của provider |
 | Request đi nhầm xAI | Model cần `base_url` hoặc `model_provider` trỏ provider đúng |
 | Tool / reasoning lỗi | Provider có thể cần header/compat đặc biệt — xem `11-custom-models.md` |
+| `400 unknown variant image_url, expected text` | Model khai báo `input = ["text"]` nhưng request vẫn kèm ảnh (ảnh dán cũ trong session). Kể từ fix này, Grok tự strip ảnh khỏi request khi model text-only — ảnh được thay bằng placeholder text, file path (nếu có) vẫn giữ để đọc qua `read_file`. Không cần làm gì thêm; nếu vẫn lỗi, kiểm tra `input = ["text"]` đã khai báo đúng chưa (`grok models` phải hiện `[text]`) |
 | Muốn ẩn model xAI | Dùng `[models] allowed_models` / `hidden_models` / `disabled_models` (glob) trong docs chính thức |
 
 ```bash

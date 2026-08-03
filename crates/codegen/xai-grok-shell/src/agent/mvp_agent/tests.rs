@@ -3468,7 +3468,6 @@ async fn remove_session_releases_workspace_binding_and_side_maps() {
     agent
         .session_registry
         .set_permission_receiver(&sid, permission_rx);
-    agent.session_registry.mark_require_gateway(&sid);
     agent.remove_session(&sid);
     assert!(
         toolset_weak.upgrade().is_none(),

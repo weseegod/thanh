@@ -849,6 +849,86 @@ fn make_prefetched(ids: &[&str]) -> IndexMap<String, ModelEntry> {
         .collect()
 }
 
+// ── model_accepts_images ───────────────────────────────────────────
+
+/// A catalog entry whose `ModelInfo` carries the given `input_modalities`.
+fn entry_with_modalities(model_id: &str, modalities: Option<Vec<InputModality>>) -> ModelEntry {
+    let mut entry = make_model_entry(model_id);
+    entry.info.input_modalities = modalities;
+    entry
+}
+
+fn manager_with_models(models: IndexMap<String, ModelEntry>) -> ModelsManager {
+    let tmp = std::env::temp_dir().join("grok-test-models-manager-accepts-images");
+    let auth_manager = Arc::new(AuthManager::new(&tmp, GrokComConfig::default()));
+    ModelsManager::new(
+        None,
+        models,
+        acp::ModelId::new("default"),
+        auth_manager,
+        config::Config::default(),
+    )
+}
+
+#[test]
+fn model_accepts_images_undeclared_defaults_true() {
+    let models = make_prefetched(&["plain-model"]);
+    let mgr = manager_with_models(models);
+    assert!(
+        mgr.model_accepts_images("plain-model"),
+        "undeclared input_modalities must stay permissive"
+    );
+}
+
+#[test]
+fn model_accepts_images_declared_vision_true() {
+    let models = IndexMap::from([(
+        "vision-model".to_string(),
+        entry_with_modalities(
+            "vision-model",
+            Some(vec![InputModality::Text, InputModality::Image]),
+        ),
+    )]);
+    let mgr = manager_with_models(models);
+    assert!(mgr.model_accepts_images("vision-model"));
+}
+
+#[test]
+fn model_accepts_images_declared_text_only_false() {
+    let models = IndexMap::from([(
+        "text-model".to_string(),
+        entry_with_modalities("text-model", Some(vec![InputModality::Text])),
+    )]);
+    let mgr = manager_with_models(models);
+    assert!(
+        !mgr.model_accepts_images("text-model"),
+        "input = [\"text\"] must report image-incapable"
+    );
+}
+
+#[test]
+fn model_accepts_images_resolves_routing_slug() {
+    // The catalog key differs from the routing slug sent to the API
+    // (e.g. `[model.deepseek/deepseek-v4-flash]` with `model = "deepseek-v4-flash"`).
+    let mut entry = make_model_entry("deepseek-v4-flash");
+    entry.info.input_modalities = Some(vec![InputModality::Text]);
+    let models = IndexMap::from([("deepseek/deepseek-v4-flash".to_string(), entry)]);
+    let mgr = manager_with_models(models);
+    assert!(
+        !mgr.model_accepts_images("deepseek-v4-flash"),
+        "routing slug must resolve to its catalog entry's modalities"
+    );
+}
+
+#[test]
+fn model_accepts_images_unknown_model_defaults_true() {
+    let mgr = manager_with_models(make_prefetched(&["known-model"]));
+    assert!(
+        mgr.model_accepts_images("not-in-catalog"),
+        "unresolvable model id must not trigger stripping"
+    );
+}
+
 // ── startup background refresh ─────────────────────────────────────
 
 #[test]

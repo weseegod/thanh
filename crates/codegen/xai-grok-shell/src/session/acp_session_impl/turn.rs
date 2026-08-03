@@ -2169,6 +2169,25 @@ impl SessionActor {
                 .tool_context
                 .clamp_task_model_request(request.max_output_tokens)
                 .map_err(|message| acp::Error::internal_error().data(message))?;
+            // Text-only BYOK models (`input = ["text"]` in config.toml) reject
+            // `image_url` content blocks with HTTP 400 ("unknown variant
+            // `image_url`, expected `text`"). Strip image parts up front so a
+            // declared text-only model never receives one — this covers pasted
+            // images, interjection images, and tool-result images already
+            // persisted in the conversation.
+            if let Some(model_id) = request.model.clone()
+                && !self.models_manager.model_accepts_images(&model_id)
+            {
+                let stripped = request.strip_images_for_text_only();
+                if stripped > 0 {
+                    tracing::info!(
+                        session_id = %self.session_info.id,
+                        model = model_id,
+                        stripped,
+                        "text-only model: stripped image parts from request"
+                    );
+                }
+            }
             self.emit_event(crate::session::events::Event::PhaseChanged {
                 phase: crate::session::events::Phase::WaitingForModel,
             });

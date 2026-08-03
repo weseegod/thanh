@@ -190,6 +190,19 @@ impl SessionActor {
             .wall_clock_budget_secs;
         let hosted_tools = self.hosted_tools_for_turn();
         let (cancel, _cancel_scope) = self.compaction.cancel.enter();
+        let mut history = history;
+        if !self.models_manager.model_accepts_images(&sampling_config.model) {
+            let stripped =
+                xai_grok_sampling_types::strip_image_parts_for_text_only(&mut history);
+            if stripped > 0 {
+                tracing::info!(
+                    session_id = %self.session_info.id,
+                    model = %sampling_config.model,
+                    stripped,
+                    "two-pass: stripped image parts for text-only model"
+                );
+            }
+        }
         match generate_session_compact(
             history,
             tools,
@@ -1086,6 +1099,8 @@ impl SessionActor {
             sampling_client,
             self.session_info.id.clone(),
             sampling_config.clone(),
+            self.models_manager
+                .model_accepts_images(&sampling_config.model),
             self.inference_idle_timeout,
             wall_clock_budget_secs,
             self.compaction.tool_choice,

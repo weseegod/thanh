@@ -658,6 +658,55 @@ impl ConversationRequest {
         }
         stripped
     }
+
+    /// Strip image content parts because the active model is declared
+    /// text-only (`input = ["text"]`). BYOK endpoints that only deserialize
+    /// `text` content reject an `image_url` block with HTTP 400
+    /// (`unknown variant 'image_url', expected 'text'`), so this runs on the
+    /// request before it is sent — see [`strip_image_parts_for_text_only`].
+    pub fn strip_images_for_text_only(&mut self) -> usize {
+        strip_image_parts_for_text_only(&mut self.items)
+    }
+}
+
+/// Placeholder replacing an inline image when the active model is declared
+/// text-only (`input = ["text"]`). Follows the same honesty rule as the
+/// 413-recovery placeholder: the model learns an image was attached but
+/// cannot view it, so it never invents contents from memory.
+pub const TEXT_ONLY_IMAGE_PLACEHOLDER: &str =
+    "[image attached — the current model is text-only and cannot view images]";
+
+/// Strip image content parts from a conversation because the active model is
+/// declared text-only (`input = ["text"]`).
+///
+/// Mirrors [`ConversationRequest::strip_images`]: user-message image parts
+/// are replaced with [`TEXT_ONLY_IMAGE_PLACEHOLDER`] and tool-result images
+/// are cleared (their text content, e.g. `Read image file: <path>`, already
+/// references the file). Operates on a bare item slice so non-request paths
+/// (compaction history) share the same rule. Idempotent; returns the number
+/// of parts stripped.
+pub fn strip_image_parts_for_text_only(items: &mut [ConversationItem]) -> usize {
+    let mut stripped = 0usize;
+    for item in items {
+        match item {
+            ConversationItem::User(user) => {
+                for part in &mut user.content {
+                    if matches!(part, ContentPart::Image { .. }) {
+                        *part = ContentPart::Text {
+                            text: Arc::<str>::from(TEXT_ONLY_IMAGE_PLACEHOLDER),
+                        };
+                        stripped += 1;
+                    }
+                }
+            }
+            ConversationItem::ToolResult(t) => {
+                stripped += t.images.len();
+                t.images.clear();
+            }
+            _ => {}
+        }
+    }
+    stripped
 }
 
 /// Tool choice options
@@ -4556,6 +4605,104 @@ mod tests {
         } else {
             panic!("Expected ToolResult");
         }
+    }
+
+    // ========== strip_images_for_text_only tests ==========
+
+    #[test]
+    fn test_strip_images_for_text_only_replaces_user_images() {
+        let mut req = ConversationRequest::default();
+        let mut user = ConversationItem::user("describe this");
+        user.add_image("data:image/png;base64,abc123".to_string());
+        req.items.push(user);
+
+        let stripped = req.strip_images_for_text_only();
+        assert_eq!(stripped, 1);
+
+        if let ConversationItem::User(user) = &req.items[0] {
+            assert_eq!(user.content.len(), 2); // original text + replaced image
+            assert_matches!(&user.content[1], ContentPart::Text { text } => {
+                assert_eq!(text.as_ref(), TEXT_ONLY_IMAGE_PLACEHOLDER);
+            });
+        } else {
+            panic!("Expected User item");
+        }
+        // The wire format must no longer carry any image_url block.
+        let messages = conversation_to_chat_messages(req.items.clone());
+        let has_image_block = messages.iter().any(|m| match &m.content {
+            MessageContent::Blocks(blocks) => blocks
+                .iter()
+                .any(|b| matches!(b, ChatContentBlock::ImageUrl { .. })),
+            MessageContent::Text(_) => false,
+        });
+        assert!(
+            !has_image_block,
+            "chat-completions wire messages must not contain image_url blocks"
+        );
+    }
+
+    #[test]
+    fn test_strip_images_for_text_only_clears_tool_result_images() {
+        let mut req = ConversationRequest::default();
+        req.items.push(ConversationItem::tool_result_with_images(
+            "call_1",
+            "Read image file: photo.png",
+            vec![
+                ContentPart::Image {
+                    url: "data:image/png;base64,aaa".into(),
+                },
+                ContentPart::Image {
+                    url: "data:image/png;base64,bbb".into(),
+                },
+            ],
+        ));
+
+        let stripped = req.strip_images_for_text_only();
+        assert_eq!(stripped, 2);
+
+        if let ConversationItem::ToolResult(t) = &req.items[0] {
+            assert!(t.images.is_empty(), "tool-result images must be cleared");
+            assert_eq!(t.content.as_ref(), "Read image file: photo.png");
+        } else {
+            panic!("Expected ToolResult");
+        }
+    }
+
+    #[test]
+    fn test_strip_images_for_text_only_is_idempotent() {
+        let mut req = ConversationRequest::default();
+        let mut user = ConversationItem::user("look");
+        user.add_image("data:image/png;base64,aaa".to_string());
+        req.items.push(user);
+
+        assert_eq!(req.strip_images_for_text_only(), 1);
+        assert_eq!(req.strip_images_for_text_only(), 0, "second pass is a no-op");
+        assert_eq!(req.strip_images_for_text_only(), 0);
+    }
+
+    #[test]
+    fn test_strip_image_parts_for_text_only_bare_slice() {
+        // The bare-slice variant is what compaction history reuses.
+        let mut items = vec![
+            ConversationItem::system("sys"),
+            ConversationItem::user("plain"),
+        ];
+        let mut user = ConversationItem::user("pic");
+        user.add_image("data:image/png;base64,zzz".to_string());
+        items.push(user);
+
+        let stripped = strip_image_parts_for_text_only(&mut items);
+        assert_eq!(stripped, 1);
+        assert!(
+            items
+                .iter()
+                .filter_map(|i| match i {
+                    ConversationItem::User(u) => Some(u),
+                    _ => None,
+                })
+                .all(|u| !u.content.iter().any(|p| matches!(p, ContentPart::Image { .. }))),
+            "no image parts may survive"
+        );
     }
 
     #[test]

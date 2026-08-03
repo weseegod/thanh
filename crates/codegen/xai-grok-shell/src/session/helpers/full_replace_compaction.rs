@@ -64,6 +64,11 @@ pub(crate) struct ShellCompactionSampler {
     client: OaiCompatClient,
     session_id: acp::SessionId,
     sampling_config: SamplingConfig,
+    /// Whether the summarizer model accepts image input. When `false`
+    /// (`input = ["text"]` in config.toml), image parts are stripped from the
+    /// compaction history — text-only BYOK endpoints reject `image_url`
+    /// blocks with HTTP 400.
+    accepts_images: bool,
     /// Per-chunk idle timeout forwarded to `generate_session_compact`: a stalled
     /// summarizer stream (no model-output chunk for this long) fails instead of
     /// hanging.
@@ -87,6 +92,7 @@ impl ShellCompactionSampler {
         client: OaiCompatClient,
         session_id: acp::SessionId,
         sampling_config: SamplingConfig,
+        accepts_images: bool,
         idle_timeout: Duration,
         wall_clock_budget_secs: u64,
         tool_choice: crate::util::config::CompactionToolChoice,
@@ -100,6 +106,7 @@ impl ShellCompactionSampler {
             client,
             session_id,
             sampling_config,
+            accepts_images,
             idle_timeout,
             wall_clock_budget_secs,
             tool_choice,
@@ -127,11 +134,22 @@ impl CompactionSampler for ShellCompactionSampler {
         // Append the harness-selected summarization prompt as the final user
         // message (compat short vs structured grok-build), ignoring the shared
         // engine's `_prompt` (see the struct doc).
-        let chat_history = build_compaction_chat_history(
+        let mut chat_history = build_compaction_chat_history(
             turns.to_vec(),
             self.user_context.as_deref(),
             self.use_short_prompt,
         );
+        if !self.accepts_images {
+            let stripped = xai_grok_sampling_types::strip_image_parts_for_text_only(&mut chat_history);
+            if stripped > 0 {
+                tracing::info!(
+                    session_id = %self.session_id,
+                    model = %self.sampling_config.model,
+                    stripped,
+                    "full-replace: stripped image parts for text-only model"
+                );
+            }
+        }
 
         match generate_session_compact(
             chat_history,
