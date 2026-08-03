@@ -50,7 +50,7 @@ The TUI creates a new session each time you launch. To explicitly start fresh mi
 /new
 ```
 
-This clears the current context and begins a new conversation. Alias: `/clear`.
+This clears the current context and begins a new conversation. To clear the on-screen transcript without losing context, use `/clear`.
 
 ### Exit
 

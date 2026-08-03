@@ -42,7 +42,8 @@ use super::permissions::{
     dispatch_permission_cancel, dispatch_permission_followup, dispatch_permission_select,
 };
 use super::prompt::{
-    dispatch_accept_word_select_tip, dispatch_clear_prompt, dispatch_open_history_search,
+    dispatch_accept_word_select_tip, dispatch_clear_display, dispatch_clear_prompt,
+    dispatch_open_history_search,
     dispatch_send_bash_command, dispatch_send_prompt, dispatch_send_prompt_inner,
     dispatch_show_plan_nudge, dispatch_show_undo_tip, dispatch_show_word_select_tip,
 };
@@ -455,6 +456,7 @@ pub(crate) fn dispatch(action: Action, app: &mut AppView) -> Vec<Effect> {
             vec![]
         }
         Action::ClearPrompt => dispatch_clear_prompt(app),
+        Action::ClearDisplay => dispatch_clear_display(app),
         Action::OpenHistorySearch => dispatch_open_history_search(app),
         Action::OpenScrollbackSearch(query) => {
             with_active_agent(app, |agent| {

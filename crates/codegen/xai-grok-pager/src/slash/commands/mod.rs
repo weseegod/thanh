@@ -8,6 +8,7 @@ pub mod announcements;
 pub mod auto;
 pub mod btw;
 pub mod cd;
+pub mod clear;
 pub mod compact;
 pub mod compact_mode;
 pub mod config_agents;
@@ -84,6 +85,7 @@ pub fn builtin_commands() -> Vec<Arc<dyn SlashCommand>> {
         Arc::new(home::HomeCommand),
         Arc::new(delete::DeleteCommand),
         Arc::new(new::NewCommand),
+        Arc::new(clear::ClearCommand),
         Arc::new(fork::ForkCommand),
         Arc::new(compact::CompactCommand),
         Arc::new(copy::CopyCommand),
@@ -396,6 +398,24 @@ mod tests {
         let cmd = new::NewCommand;
         let result = cmd.run(&mut ctx, "");
         assert!(matches!(result, CommandResult::Action(Action::NewSession)));
+    }
+    #[test]
+    fn clear_and_new_are_distinct_commands() {
+        let reg = CommandRegistry::new(builtin_commands());
+        assert_ne!(reg.get("clear").unwrap().name(), reg.get("new").unwrap().name());
+    }
+    #[test]
+    fn clear_returns_clear_display_action() {
+        let models = ModelState::default();
+        let cmd = clear::ClearCommand;
+        let mut ctx = make_ctx(&models);
+        assert!(matches!(cmd.run(&mut ctx, ""), CommandResult::Error(_)));
+        let session_id = acp::SessionId::new("sess-clear");
+        ctx.session_id = Some(&session_id);
+        assert!(matches!(
+            cmd.run(&mut ctx, ""),
+            CommandResult::Action(Action::ClearDisplay)
+        ));
     }
     #[test]
     fn home_returns_exit_session_action() {

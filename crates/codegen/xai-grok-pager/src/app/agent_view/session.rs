@@ -388,6 +388,23 @@ impl AgentView {
     pub(crate) fn clear_minimal_btw_lifecycle(&mut self) {
         crate::minimal_api::clear_minimal_btw(self);
     }
+    /// Wipe the on-screen transcript while keeping the active session and LLM
+    /// context intact. Used by `/clear`.
+    pub(crate) fn clear_transcript_display(&mut self) {
+        self.dismiss_jump_picker();
+        self.scrollback_search = None;
+        self.update_scrollback_selection_state(Default::default(), Default::default());
+        if let Some(esc) = self.take_inline_media_clear_escapes() {
+            xai_grok_shell::util::with_locked_stderr(|stderr| {
+                let _ = std::io::Write::write_all(stderr, esc.as_bytes());
+            });
+        }
+        while self.scrollback.in_batch() {
+            self.scrollback.end_batch();
+        }
+        self.scrollback = self.scrollback.fresh_continuation();
+        self.scrollback.enable_follow_with_preserve();
+    }
     /// Enter a `session/load` replay window: flip `loading_replay` on and reset
     /// every field coupled to that transition together, so no site can drift
     /// (e.g. reset one coupled field but miss another). Called at every

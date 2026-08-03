@@ -1,6 +1,7 @@
 //! Tests for prompt and bash submission, queueing, and interject shims.
 
 use super::*;
+use crate::scrollback::block::RenderBlock;
 
 /// Sending a prompt is a submit: it retires the active ephemeral tip.
 #[test]
@@ -4124,4 +4125,28 @@ fn suggestion_debounce_routes_by_agent_id_not_active_view() {
         )),
         "expiry must fetch for the arming agent even off-screen: {effects:?}"
     );
+}
+
+#[test]
+fn clear_display_wipes_scrollback_preserves_session() {
+    let mut app = test_app_with_agent();
+    let id = AgentId(0);
+    let session_id = app.agents[&id].session.session_id.clone();
+    app.agents
+        .get_mut(&id)
+        .unwrap()
+        .scrollback
+        .push_block(RenderBlock::system("hello"));
+    app.agents
+        .get_mut(&id)
+        .unwrap()
+        .scrollback
+        .push_block(RenderBlock::system("world"));
+    assert_eq!(app.agents[&id].scrollback.len(), 2);
+
+    let effects = dispatch(Action::ClearDisplay, &mut app);
+
+    assert!(effects.is_empty());
+    assert_eq!(app.agents[&id].scrollback.len(), 0);
+    assert_eq!(app.agents[&id].session.session_id, session_id);
 }

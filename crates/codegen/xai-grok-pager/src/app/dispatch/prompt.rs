@@ -191,6 +191,14 @@ pub(super) fn dispatch_clear_prompt(app: &mut AppView) -> Vec<Effect> {
     vec![]
 }
 
+/// Wipe the on-screen transcript without ending the session (`/clear`).
+pub(super) fn dispatch_clear_display(app: &mut AppView) -> Vec<Effect> {
+    with_active_agent(app, |agent| {
+        agent.clear_transcript_display();
+    });
+    vec![]
+}
+
 /// Open the prompt-history search panel on the active agent (composer as
 /// filter query). Dispatched by `/history`; the slash pipeline has already
 /// cleared the composer, so the panel opens with an empty query.

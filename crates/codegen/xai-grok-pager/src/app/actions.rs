@@ -261,6 +261,8 @@ pub enum Action {
     /// Clear the prompt (history-aware). Armed by idle Esc double-press via
     /// [`super::app_view::InputOutcome::ArmPending`] (no ActionDef; not a keybinding).
     ClearPrompt,
+    /// Wipe the on-screen transcript without ending the session or clearing LLM context.
+    ClearDisplay,
     /// Focus the scrollback pane and open an incremental search over it.
     /// Drives the `/find` slash command so simple-mode users (where a bare
     /// `/` goes to the prompt) reach the same search as the vim `/` key.

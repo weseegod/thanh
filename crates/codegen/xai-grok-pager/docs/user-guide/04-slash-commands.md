@@ -12,7 +12,11 @@ Every command below lists its aliases where it has them. A few commands only app
 
 ### `/new`
 
-Start a fresh session and clear the current conversation. Alias: `/clear`.
+Start a fresh session and clear the current conversation.
+
+### `/clear`
+
+Clear the transcript from the screen without starting a new session. The agent keeps its context — use this when a long conversation makes scrolling slow or cluttered.
 
 ### `/resume`
 
