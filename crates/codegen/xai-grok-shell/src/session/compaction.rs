@@ -173,9 +173,8 @@ impl SessionActor {
     /// the turn loop; a long-lived borrow would race with turn/compact/cancel
     /// and panic on double-borrow.
     async fn two_pass_sample(&self, history: Vec<ConversationItem>) -> Option<CompactOutput> {
-        let sampling_config = self.reconstruct_full_config().await;
-        let client = match self.prepare_chat_completion(false).await {
-            Ok(c) => c,
+        let (client, sampling_config) = match self.prepare_compaction_sampling(false).await {
+            Ok(pair) => pair,
             Err(e) => {
                 tracing::warn!(error = %e, "two_pass: failed to prepare sampling client");
                 return None;
@@ -1035,8 +1034,11 @@ impl SessionActor {
             return Err(acp::Error::internal_error()
                 .data("Compaction failed: no system message in simplified conversation"));
         }
-        let sampling_config = self.reconstruct_full_config().await;
-        let sampling_client = self.prepare_chat_completion(false).await?;
+        let (sampling_client, sampling_config) =
+            match self.prepare_compaction_sampling(false).await {
+                Ok(pair) => pair,
+                Err(e) => return Err(e),
+            };
         let backend_search_active = self.backend_search_active();
         let effective_tool_defs: Vec<xai_grok_sampling_types::ToolDefinition> = self
             .prepare_tool_definitions()
@@ -2418,6 +2420,8 @@ mod inline_auto_compact_flow_tests {
             last_reported_branch: std::sync::Arc::new(parking_lot::Mutex::new(None)),
             git_head_enabled: false,
             models_manager: Default::default(),
+            provider_context: Default::default(),
+            compaction_model_slug: None,
             display_cwd: std::sync::OnceLock::new(),
             active_agent_type: parking_lot::Mutex::new(None),
             queue_exit_reminder_on_approved_exit: Arc::new(std::sync::atomic::AtomicBool::new(

@@ -921,6 +921,20 @@ fn model_accepts_images_resolves_routing_slug() {
 }
 
 #[test]
+fn model_accepts_images_byok_without_modalities_defaults_false() {
+    let mut entry = make_model_entry("deepseek-v4-flash");
+    entry.api_key = Some("sk-test".into());
+    entry.info.base_url = "https://api.deepseek.com/v1".into();
+    entry.info.input_modalities = None;
+    let models = IndexMap::from([("deepseek-v4-flash".to_string(), entry)]);
+    let mgr = manager_with_models(models);
+    assert!(
+        !mgr.model_accepts_images("deepseek-v4-flash"),
+        "undeclared BYOK models with custom base_url default to text-only"
+    );
+}
+
+#[test]
 fn model_accepts_images_unknown_model_defaults_true() {
     let mgr = manager_with_models(make_prefetched(&["known-model"]));
     assert!(

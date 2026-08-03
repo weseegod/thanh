@@ -308,6 +308,21 @@ To pin the model a subagent uses, set its entry under `[subagents.models]`.
 
 `/goal` has two drivers, chosen by the background-workflows setting. With workflows enabled, the host-owned workflow engine evaluates rounds and drives completion verification; with them disabled, `/goal` falls back to the legacy model-facing `update_goal` tool. Whether `/goal` is available at all is a separate switch (the goal feature setting).
 
+BYOK and single-provider catalogs automatically enable `[goal] use_current_model_only` and lower the default skeptic count to 1. Override in config when you want multi-model verification on BYOK:
+
+```toml
+[goal]
+use_current_model_only = false
+verifier_count = 3
+```
+
+Optional compaction model (resolves through the same BYOK catalog rules as other aux models):
+
+```toml
+[compactions]
+model = "deepseek-v4-flash"
+```
+
 Background workflows — the `workflow` tool, named `.grok/workflows/*.rhai` scripts, `/deep-research`, and `/workflow` launches — are **on by default**. Disable with config, env, or remote settings.
 
 ```toml

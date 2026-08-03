@@ -981,6 +981,11 @@ pub struct FeedbackUserConfig {
 pub struct CompactionConfig {
     pub memory_flush: Option<crate::config::MemoryFlushConfig>,
     pub pruning: Option<crate::config::PruningConfig>,
+    /// Optional catalog model slug for compaction/summary calls. When set,
+    /// resolves through the same BYOK catalog rules as other aux models.
+    /// Unset keeps using the active session model (native default).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
 }
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(default)]
@@ -2783,9 +2788,18 @@ impl Config {
     }
     /// Per-attempt adversarial-skeptic count, clamped to
     /// `[GOAL_VERIFIER_SKEPTIC_MIN, GOAL_VERIFIER_SKEPTIC_MAX]`.
-    pub(crate) fn resolve_goal_verifier_count(&self) -> Resolved<u32> {
+    pub(crate) fn resolve_goal_verifier_count(
+        &self,
+        provider: &ProviderContext,
+        use_current_model_only: bool,
+    ) -> Resolved<u32> {
         use crate::session::goal_classifier::{
             GOAL_VERIFIER_SKEPTIC_COUNT, GOAL_VERIFIER_SKEPTIC_MAX, GOAL_VERIFIER_SKEPTIC_MIN,
+        };
+        let byok_default = if provider.prefers_single_model_goal() && use_current_model_only {
+            1
+        } else {
+            GOAL_VERIFIER_SKEPTIC_COUNT
         };
         Self::resolve_goal_u32(
             "GROK_GOAL_VERIFIER_N",
@@ -2793,7 +2807,7 @@ impl Config {
             self.remote_settings
                 .as_ref()
                 .and_then(|s| s.goal_verifier_count),
-            GOAL_VERIFIER_SKEPTIC_COUNT,
+            byok_default,
             |v| v.clamp(GOAL_VERIFIER_SKEPTIC_MIN, GOAL_VERIFIER_SKEPTIC_MAX),
         )
     }
@@ -2816,14 +2830,30 @@ impl Config {
     /// Stall-triggered strategist cadence N (fires every N consecutive
     /// `NotAchieved`). Default tracks the resolved classifier cap
     /// (`max(1, cap / 2)`); floored at 1 so it can never silently disable.
-    pub(crate) fn resolve_goal_strategist_every(&self, classifier_max_runs: u32) -> Resolved<u32> {
+    /// Single-provider BYOK catalogs with one skeptic use the full cap so
+    /// strategist fires less often on identical-model panels.
+    pub(crate) fn resolve_goal_strategist_every(
+        &self,
+        classifier_max_runs: u32,
+        provider: &ProviderContext,
+        verifier_count: u32,
+        use_current_model_only: bool,
+    ) -> Resolved<u32> {
+        let default = if provider.prefers_single_model_goal()
+            && use_current_model_only
+            && verifier_count <= 1
+        {
+            classifier_max_runs.max(1)
+        } else {
+            (classifier_max_runs / 2).max(1)
+        };
         Self::resolve_goal_u32(
             "GROK_GOAL_STRATEGIST_EVERY",
             self.goal.strategist_every,
             self.remote_settings
                 .as_ref()
                 .and_then(|s| s.goal_strategist_every),
-            (classifier_max_runs / 2).max(1),
+            default,
             |v| v.max(1),
         )
     }
@@ -2838,12 +2868,24 @@ impl Config {
         )
     }
     /// When `true`, every `/goal` role inherits the current model regardless of
-    /// configured pairs.
-    pub(crate) fn resolve_goal_use_current_model_only(&self) -> Resolved<bool> {
-        BoolFlag::env("GROK_GOAL_USE_CURRENT_MODEL_ONLY")
-            .config(self.goal.use_current_model_only)
-            .default(false)
-            .resolve()
+    /// configured pairs. BYOK-primary and single-provider catalogs default to
+    /// `true` unless explicitly overridden.
+    pub(crate) fn resolve_goal_use_current_model_only(
+        &self,
+        provider: &ProviderContext,
+    ) -> Resolved<bool> {
+        if let Some(env_value) = env_string("GROK_GOAL_USE_CURRENT_MODEL_ONLY")
+            && let Ok(parsed) = env_value.parse::<bool>()
+        {
+            return Resolved::new(parsed, ConfigSource::Env);
+        }
+        if let Some(v) = self.goal.use_current_model_only {
+            return Resolved::new(v, ConfigSource::Config);
+        }
+        if provider.prefers_single_model_goal() {
+            return Resolved::new(true, ConfigSource::Default);
+        }
+        Resolved::new(false, ConfigSource::Default)
     }
     /// Shared single-pair resolution. Precedence: kill-switch ⇒
     /// `InheritCurrent`/`Config` > `config_pair` ⇒ `Explicit`/`Config` >
@@ -4456,6 +4498,18 @@ impl ModelEntry {
         self.own_credential().is_some() || self.auth_provider.is_some()
     }
 }
+/// Whether a catalog entry accepts image input. Explicit `input_modalities`
+/// win; undeclared BYOK models with a custom non-xAI endpoint default to
+/// text-only so OpenAI-compatible providers are not sent `image_url` blocks.
+pub fn model_entry_accepts_images(entry: &ModelEntry) -> bool {
+    if let Some(mods) = entry.info.input_modalities.as_ref() {
+        return mods.contains(&InputModality::Image);
+    }
+    if entry.has_own_credentials() && !crate::util::is_xai_api_url(&entry.base_url) {
+        return false;
+    }
+    true
+}
 impl std::ops::Deref for ModelEntry {
     type Target = ModelInfo;
     fn deref(&self) -> &ModelInfo {
@@ -4962,6 +5016,51 @@ pub struct ModelAuthFacts {
     pub byok: ModelByok,
     pub auth_scheme: AuthScheme,
 }
+/// Catalog-derived context distinguishing native xAI sessions from BYOK /
+/// single-provider setups. Built once at session spawn from the active model
+/// and selectable catalog entries.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ProviderContext {
+    pub primary_is_byok: bool,
+    pub selectable_model_count: usize,
+    pub distinct_base_urls: usize,
+    pub primary_base_url: Option<String>,
+}
+impl ProviderContext {
+    pub fn from_catalog(
+        models: &IndexMap<String, ModelEntry>,
+        primary_model_id: &str,
+    ) -> Self {
+        let selectable: Vec<&ModelEntry> = models
+            .values()
+            .filter(|e| e.user_selectable)
+            .collect();
+        let primary = find_model_by_id(models, primary_model_id);
+        let primary_is_byok = primary
+            .map(|e| e.has_own_credentials())
+            .unwrap_or(false);
+        let primary_base_url = primary.map(|e| e.base_url.clone());
+        let mut base_urls = std::collections::HashSet::new();
+        for entry in &selectable {
+            base_urls.insert(entry.base_url.clone());
+        }
+        Self {
+            primary_is_byok,
+            selectable_model_count: selectable.len(),
+            distinct_base_urls: base_urls.len(),
+            primary_base_url,
+        }
+    }
+    /// All selectable models share one inference endpoint (typical DeepSeek-only catalog).
+    pub fn is_single_provider_catalog(&self) -> bool {
+        self.selectable_model_count > 0 && self.distinct_base_urls <= 1
+    }
+    /// BYOK primary or a single-provider catalog — goal mode should default to
+    /// one model for all roles unless explicitly overridden.
+    pub fn prefers_single_model_goal(&self) -> bool {
+        self.primary_is_byok || self.is_single_provider_catalog()
+    }
+}
 /// Resolve `model_id` to its auth facts and auth-provider reference from one
 /// effective-config load; both ride the same memo (see
 /// `SessionActor::model_auth_memo`). Load/parse failure → `byok = Unknown`;
@@ -5177,6 +5276,44 @@ pub fn finalize_image_describe_sampler_config(
             (model, active_session_config.clone())
         }
     }
+}
+/// Whether a goal role model pair is usable in the local catalog.
+pub fn goal_role_model_is_selectable(
+    pair: &crate::util::config::GoalRoleModel,
+    models: &IndexMap<String, ModelEntry>,
+) -> bool {
+    find_model_by_id(models, &pair.model)
+        .is_some_and(|e| e.info.user_selectable)
+}
+/// Resolve an auxiliary model slug, falling back to the active session config
+/// without forcing the slug onto the session endpoint (safe for BYOK routes).
+pub fn resolve_aux_or_active_sampler_config(
+    slug: &str,
+    models: &IndexMap<String, ModelEntry>,
+    endpoints: &EndpointsConfig,
+    session_key: Option<&str>,
+    disable_api_key_auth: bool,
+    alpha_test_key: Option<String>,
+    client_version: Option<String>,
+    active_session_config: &SamplerConfig,
+    client_identifier: Option<String>,
+    max_retries: Option<u32>,
+) -> (String, SamplerConfig) {
+    let resolved_aux = resolve_aux_model_sampling_config(
+        slug,
+        models,
+        endpoints,
+        session_key,
+        disable_api_key_auth,
+        alpha_test_key,
+        client_version,
+    );
+    finalize_image_describe_sampler_config(
+        resolved_aux,
+        active_session_config,
+        client_identifier,
+        max_retries,
+    )
 }
 /// Re-derive `auth_type` from the model's own credentials so BYOK env-key
 /// models stay on `ApiKey` even when a session token is present. Falls
@@ -10204,7 +10341,7 @@ reverify_after = 6
     fn goal_use_current_model_only_env_true() {
         clear_goal_model_env();
         unsafe { std::env::set_var(GOAL_USE_CURRENT_ENV, "1") };
-        let r = Config::default().resolve_goal_use_current_model_only();
+        let r = Config::default().resolve_goal_use_current_model_only(&ProviderContext::default());
         assert!(r.value);
         assert_eq!(r.source, ConfigSource::Env);
         clear_goal_model_env();
@@ -10217,7 +10354,7 @@ reverify_after = 6
             use_current_model_only: Some(true),
             ..Default::default()
         });
-        let r = cfg.resolve_goal_use_current_model_only();
+        let r = cfg.resolve_goal_use_current_model_only(&ProviderContext::default());
         assert!(r.value);
         assert_eq!(r.source, ConfigSource::Config);
         clear_goal_model_env();
@@ -10226,10 +10363,70 @@ reverify_after = 6
     #[serial]
     fn goal_use_current_model_only_default_false() {
         clear_goal_model_env();
-        let r = Config::default().resolve_goal_use_current_model_only();
+        let r = Config::default().resolve_goal_use_current_model_only(&ProviderContext::default());
         assert!(!r.value);
         assert_eq!(r.source, ConfigSource::Default);
         clear_goal_model_env();
+    }
+    #[test]
+    fn goal_use_current_model_only_byok_primary_defaults_true() {
+        let provider = ProviderContext {
+            primary_is_byok: true,
+            selectable_model_count: 1,
+            distinct_base_urls: 1,
+            primary_base_url: Some("https://api.deepseek.com".into()),
+        };
+        let r = Config::default().resolve_goal_use_current_model_only(&provider);
+        assert!(r.value);
+        assert_eq!(r.source, ConfigSource::Default);
+    }
+    #[test]
+    fn resolve_goal_verifier_count_byok_single_model_defaults_one() {
+        let provider = ProviderContext {
+            primary_is_byok: true,
+            selectable_model_count: 1,
+            distinct_base_urls: 1,
+            primary_base_url: Some("https://api.deepseek.com".into()),
+        };
+        assert_eq!(
+            Config::default()
+                .resolve_goal_verifier_count(&provider, true)
+                .value,
+            1
+        );
+    }
+    #[test]
+    fn provider_context_from_catalog_detects_byok_primary() {
+        let mut entry = prefetch_model_entry("deepseek-v4-flash", 128_000, ApiBackend::ChatCompletions);
+        entry.info.base_url = "https://api.deepseek.com".into();
+        entry.api_key = Some("sk-test".into());
+        let models = IndexMap::from([("deepseek".to_string(), entry)]);
+        let ctx = ProviderContext::from_catalog(&models, "deepseek-v4-flash");
+        assert!(ctx.primary_is_byok);
+        assert!(ctx.is_single_provider_catalog());
+        assert!(ctx.prefers_single_model_goal());
+    }
+    #[test]
+    fn resolve_aux_or_active_keeps_session_model_on_miss() {
+        let active = SamplerConfig {
+            model: "deepseek-v4-flash".into(),
+            base_url: "https://api.deepseek.com".into(),
+            ..SamplerConfig::default()
+        };
+        let (model, cfg) = resolve_aux_or_active_sampler_config(
+            "grok-build",
+            &IndexMap::new(),
+            &EndpointsConfig::default(),
+            None,
+            false,
+            None,
+            None,
+            &active,
+            None,
+            None,
+        );
+        assert_eq!(model, "deepseek-v4-flash");
+        assert_eq!(cfg.base_url, active.base_url);
     }
     #[test]
     #[serial]
@@ -10240,7 +10437,7 @@ reverify_after = 6
             use_current_model_only: Some(false),
             ..Default::default()
         });
-        let r = cfg.resolve_goal_use_current_model_only();
+        let r = cfg.resolve_goal_use_current_model_only(&ProviderContext::default());
         assert!(r.value);
         assert_eq!(r.source, ConfigSource::Env);
         clear_goal_model_env();
@@ -10503,9 +10700,15 @@ agent_type = "cursor"
         assert!(goal_enabled);
         assert!(cfg.resolve_goal_classifier_enabled(goal_enabled).value);
         assert!(cfg.resolve_goal_planner_enabled(goal_enabled).value);
-        assert_eq!(cfg.resolve_goal_verifier_count().value, 3);
+        assert_eq!(
+            cfg.resolve_goal_verifier_count(&ProviderContext::default(), false)
+                .value,
+            3
+        );
         assert_eq!(cfg.resolve_goal_classifier_max_runs().value, 6);
-        let use_current = cfg.resolve_goal_use_current_model_only().value;
+        let use_current = cfg
+            .resolve_goal_use_current_model_only(&ProviderContext::default())
+            .value;
         assert!(!use_current);
         let planner = cfg.resolve_goal_planner_model(use_current);
         assert_eq!(

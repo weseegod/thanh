@@ -251,7 +251,44 @@ Backup lúc import: `~/.grok/config.toml.bak-20260731-221150`
 
 ---
 
-## 6. Troubleshooting
+## 6. Dual provider: native Grok + BYOK
+
+Grok is built for native xAI models first, but BYOK entries (DeepSeek, OpenAI-compatible, etc.) get automatic tuning:
+
+| Feature | Native Grok | BYOK (auto) |
+|---------|-------------|-------------|
+| `/goal` role models | Multi-model skeptics (default 3) | Same model for all roles; 1 skeptic |
+| Aux models (summary, evaluator) | May use internal slugs | Falls back to active session model (no 404 on BYOK URL) |
+| Images | Full vision | Undeclared custom `base_url` → text-only; set `input = ["text", "image"]` to opt in |
+| Web search | Hosted backend search | Client tool only; configure `[model.<web_search>]` or use native Grok |
+| Compaction | Uses session model | Optional `[compactions] model = "<catalog-id>"` |
+
+Override BYOK `/goal` defaults explicitly:
+
+```toml
+[goal]
+use_current_model_only = false   # allow multi-model goal roles
+verifier_count = 3
+```
+
+Or force single-model mode on native Grok:
+
+```toml
+[goal]
+use_current_model_only = true
+verifier_count = 1
+```
+
+Optional cheaper compaction model:
+
+```toml
+[compactions]
+model = "deepseek-v4-flash"
+```
+
+---
+
+## 7. Troubleshooting
 
 | Triệu chứng | Việc kiểm tra |
 |-------------|----------------|

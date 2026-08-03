@@ -111,16 +111,18 @@ impl SessionActor {
             .map(|config| config.model)
             .filter(|model| !model.is_empty())
             .unwrap_or_else(|| self.models_manager.current_model_id().0.to_string());
-        let small_model = crate::session::helpers::prompt_suggest::DEFAULT_SUGGEST_MODEL;
-        let preferred_model = self
-            .models_manager
-            .model_in_catalog(small_model)
-            .then_some(small_model);
+        let preferred_model = crate::session::helpers::prompt_suggest::effective_suggest_model(
+            &self.models_manager.prompt_suggest_model_pin(),
+            None,
+            |m| self.models_manager.model_in_catalog(m),
+        );
         let session_id = self.session_info.id.to_string();
         let mut last_error = String::new();
         for attempt in 0..2 {
             let requested_model = if attempt == 0 {
-                preferred_model.unwrap_or(active_model.as_str())
+                preferred_model
+                    .as_deref()
+                    .unwrap_or(active_model.as_str())
             } else {
                 active_model.as_str()
             };
@@ -746,6 +748,10 @@ impl SessionActor {
             ChannelBackend, SubagentBackend,
         };
         use xai_grok_tools::implementations::grok_build::task::types::SubagentDescribeOutcome;
+
+        if self.goal_use_current_model_only {
+            return RoleSpawnOverride::default();
+        }
 
         let fail_open = |reason: Reason| {
             self.emit_event(Event::GoalRoleModelFailOpen {

@@ -1338,66 +1338,68 @@ impl SamplingClient {
             user_id: request.x_grok_user_id.as_deref(),
         };
         let extra_tool_entries = std::mem::take(&mut request.extra_tool_entries);
-        let mut request_body = serde_json::to_value(&request.inner).map_err(|e| {
-            tracing::error!("Failed to serialize responses request: {}", e);
-            SamplingError::Serialization(e)
-        })?;
-        // Inject xAI-specific fields not in async-openai's CreateResponse type.
-        if self.defaults.stream_tool_calls {
-            request_body["stream_tool_calls"] = serde_json::json!(true);
-        }
-        // Inject xAI-specific tools (e.g., x_search) that can't be expressed
-        // via async_openai's rs::Tool enum.
-        if !extra_tool_entries.is_empty() {
-            if let Some(tools) = request_body.get_mut("tools").and_then(|v| v.as_array_mut()) {
-                tools.extend(extra_tool_entries);
-            } else {
-                request_body["tools"] = serde_json::Value::Array(extra_tool_entries);
-            }
-        }
-        xai_grok_sampling_types::patch_reasoning_text_types(&mut request_body);
-        // Fresh per attempt so signals never leak across retries; `None`
-        // (check disabled) sends no header and does no peek work per event.
+        let extra_tool_entries_retry = extra_tool_entries.clone();
         let doom_loop = self
             .defaults
             .doom_loop_recovery
             .map(crate::doom_loop::DoomLoopSignalCollector::new);
-        let SentRequest {
-            builder,
-            sent_bearer,
-        } = self.post(self.endpoint("responses"));
-        let mut http_request = grok_headers
-            .apply(builder)
-            .header(ACCEPT, HeaderValue::from_static("text/event-stream"));
-        if doom_loop.is_some() {
-            // Presence opts in; the server ignores the value.
-            http_request = http_request.header(DOOM_LOOP_CHECK_HEADER, "true");
-        }
-        let http_request = http_request.json(&request_body);
-
-        let built_request = http_request.build().map_err(|e| {
-            tracing::error!("Failed to build HTTP request: {}", e);
-            SamplingError::Http(e)
-        })?;
-
-        tracing::debug!(
-            url = %built_request.url(),
-            method = %built_request.method(),
-            "Sending responses API stream request"
-        );
-        Self::log_request_headers(&built_request, "responses");
-
-        let response = self.http.execute(built_request).await.map_err(|e| {
-            tracing::debug!("HTTP request failed: {}", e);
-            record_stream_request_failure(&e);
-            e
-        })?;
-
-        let status = response.status();
-        let span = tracing::Span::current();
-        span.record("status_code", status.as_u16() as i64);
-        span.record("success", status.is_success());
-        if !status.is_success() {
+        let mut include_stream_tool_calls = self.defaults.stream_tool_calls;
+        let (response, _sent_bearer) = 'responses_request: loop {
+            let mut request_body = serde_json::to_value(&request.inner).map_err(|e| {
+                tracing::error!("Failed to serialize responses request: {}", e);
+                SamplingError::Serialization(e)
+            })?;
+            // Inject xAI-specific fields not in async-openai's CreateResponse type.
+            if include_stream_tool_calls {
+                request_body["stream_tool_calls"] = serde_json::json!(true);
+            }
+            // Inject xAI-specific tools (e.g., x_search) that can't be expressed
+            // via async_openai's rs::Tool enum.
+            if !extra_tool_entries_retry.is_empty() {
+                if let Some(tools) = request_body.get_mut("tools").and_then(|v| v.as_array_mut())
+                {
+                    tools.extend(extra_tool_entries_retry.clone());
+                } else {
+                    request_body["tools"] =
+                        serde_json::Value::Array(extra_tool_entries_retry.clone());
+                }
+            }
+            xai_grok_sampling_types::patch_reasoning_text_types(&mut request_body);
+            let SentRequest {
+                builder,
+                sent_bearer,
+            } = self.post(self.endpoint("responses"));
+            let mut http_request = grok_headers
+                .apply(builder)
+                .header(ACCEPT, HeaderValue::from_static("text/event-stream"));
+            if doom_loop.is_some() {
+                // Presence opts in; the server ignores the value.
+                http_request = http_request.header(DOOM_LOOP_CHECK_HEADER, "true");
+            }
+            let http_request = http_request.json(&request_body);
+            let built_request = http_request.build().map_err(|e| {
+                tracing::error!("Failed to build HTTP request: {}", e);
+                SamplingError::Http(e)
+            })?;
+            tracing::debug!(
+                url = %built_request.url(),
+                method = %built_request.method(),
+                stream_tool_calls = include_stream_tool_calls,
+                "Sending responses API stream request"
+            );
+            Self::log_request_headers(&built_request, "responses");
+            let resp = self.http.execute(built_request).await.map_err(|e| {
+                tracing::debug!("HTTP request failed: {}", e);
+                record_stream_request_failure(&e);
+                e
+            })?;
+            let status = resp.status();
+            if status.is_success() {
+                break (resp, sent_bearer);
+            }
+            let span = tracing::Span::current();
+            span.record("status_code", status.as_u16() as i64);
+            span.record("success", false);
             if status == reqwest::StatusCode::UNAUTHORIZED {
                 span.record("error", "unauthorized (401)");
                 self.record_401_attribution(
@@ -1405,17 +1407,28 @@ impl SamplingClient {
                     sent_bearer.as_deref(),
                 );
                 let endpoint = self.endpoint("responses");
-                let body = response.bytes().await.unwrap_or_default();
+                let body = resp.bytes().await.unwrap_or_default();
                 let server_message = user_facing_api_error_message(status, body.as_ref());
                 return Err(auth_rejected(
                     format!("Unauthorized (401) from {endpoint}: {server_message}"),
                     sent_bearer.as_deref(),
                 ));
             }
-            let model_metadata = extract_model_metadata(response.headers());
-            let retry_after_secs = extract_retry_after(response.headers());
-            let should_retry = extract_should_retry(response.headers());
-            let bytes = response.bytes().await?;
+            let model_metadata = extract_model_metadata(resp.headers());
+            let retry_after_secs = extract_retry_after(resp.headers());
+            let should_retry = extract_should_retry(resp.headers());
+            let bytes = resp.bytes().await?;
+            if include_stream_tool_calls
+                && status == reqwest::StatusCode::BAD_REQUEST
+                && String::from_utf8_lossy(&bytes).contains("stream_tool_calls")
+            {
+                tracing::warn!(
+                    model_id = %model_id,
+                    "responses endpoint rejected stream_tool_calls; retrying without"
+                );
+                include_stream_tool_calls = false;
+                continue 'responses_request;
+            }
             let message = user_facing_api_error_message(status, bytes.as_ref());
             span.record("error", message.as_str());
             tracing::error!(
@@ -1432,7 +1445,12 @@ impl SamplingClient {
                 retry_after_secs,
                 should_retry,
             });
-        }
+        };
+
+        let status = response.status();
+        let span = tracing::Span::current();
+        span.record("status_code", status.as_u16() as i64);
+        span.record("success", status.is_success());
 
         let model_metadata = extract_model_metadata(response.headers());
 

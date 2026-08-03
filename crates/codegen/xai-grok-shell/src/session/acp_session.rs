@@ -737,6 +737,10 @@ pub(crate) struct SessionActor {
     git_head_enabled: bool,
     /// Shared models manager for etag-triggered refresh from response headers.
     pub(crate) models_manager: crate::agent::models::ModelsManager,
+    /// Catalog-derived BYOK / single-provider context, frozen at spawn.
+    pub(crate) provider_context: crate::agent::config::ProviderContext,
+    /// Optional compaction model slug from `[compactions] model`.
+    pub(crate) compaction_model_slug: Option<String>,
     /// Stable display path for forked sessions (original project path).
     ///
     /// Used by `build_user_message_prefix` (user-message `Workspace Path`),

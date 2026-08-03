@@ -717,6 +717,38 @@ impl SessionActor {
             xai_grok_sampler::SamplingClient::new(full_config).map_err(|e| self.to_acp_error(e))?;
         Ok(sampling_client)
     }
+    /// Build a compaction sampler, optionally routing through `[compactions] model`.
+    pub(super) async fn prepare_compaction_sampling(
+        &self,
+        force_http1: bool,
+    ) -> Result<(xai_grok_sampler::SamplingClient, xai_grok_sampler::SamplerConfig), acp::Error>
+    {
+        self.refresh_token_if_expired().await;
+        let active_session_config = self.reconstruct_full_config().await;
+        if let Some(slug) = self.compaction_model_slug.as_deref() {
+            if let Some(mut cfg) = self.resolve_aux_sampler_config(slug).await {
+                crate::agent::config::stamp_session_local_sampler_fields(
+                    &mut cfg,
+                    &active_session_config,
+                    self.client_identifier.clone(),
+                    Some(self.max_retries),
+                );
+                cfg.force_http1 = force_http1;
+                let client =
+                    xai_grok_sampler::SamplingClient::new(cfg.clone()).map_err(|e| self.to_acp_error(e))?;
+                return Ok((client, cfg));
+            }
+            tracing::warn!(
+                model = slug,
+                "compaction model could not be resolved; using active session model"
+            );
+        }
+        let mut full_config = active_session_config;
+        full_config.force_http1 = force_http1;
+        let sampling_client =
+            xai_grok_sampler::SamplingClient::new(full_config.clone()).map_err(|e| self.to_acp_error(e))?;
+        Ok((sampling_client, full_config))
+    }
     /// Push a fresh `SamplerConfig` into the per-session sampler actor
     /// before each turn. Mirrors `prepare_chat_completion`'s
     /// auth-refresh + config rebuild, but routes the result to the

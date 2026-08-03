@@ -131,7 +131,19 @@ stream_tool_calls           = true
 
 This is a small, fixed set of environment-wide knobs. Settings that identify a specific model (`model`, `base_url`, `api_key`, `context_window`, ...) cannot be defaulted this way, and a few settings with their own dedicated configuration -- auto-compaction (`[session]`), the system-prompt label (`[agent]`), and reasoning effort (`[models].default_reasoning_effort`) -- keep their existing homes.
 
-> **Note on `stream_tool_calls`:** this one affects request *shape*, not just sampling. A few endpoints (some BYOK providers) expect it left unset; if a global `stream_tool_calls = true` causes problems for such a model, opt that model out with `stream_tool_calls = false` in its `[model.<id>]` block.
+> **Note on `stream_tool_calls`:** this one affects request *shape*, not just sampling. A few endpoints (some BYOK providers) expect it left unset; if a global `stream_tool_calls = true` causes problems for such a model, opt that model out with `stream_tool_calls = false` in its `[model.<id>]` block. On the Responses API, Grok retries once without `stream_tool_calls` when a provider returns HTTP 400 mentioning that field.
+
+### BYOK and `/goal`
+
+When the active model uses its own credentials (BYOK) or your catalog has a single inference endpoint, Grok defaults `/goal` to **single-model mode**: all roles inherit the session model and the skeptic count defaults to **1**. Native multi-model Grok catalogs keep the default of **3** skeptics unless you override:
+
+```toml
+[goal]
+use_current_model_only = false   # opt back into multi-model goal roles on BYOK
+verifier_count = 3
+```
+
+Undeclared BYOK models with a custom non-xAI `base_url` are treated as **text-only** until you set `input = ["text", "image"]`.
 
 ### Request Query Parameters
 

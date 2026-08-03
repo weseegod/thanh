@@ -788,7 +788,8 @@ async fn read_parent_sampling_config(
                 reasoning_effort: cfg.reasoning_effort,
                 force_http1: false,
                 max_retries: None,
-                stream_tool_calls: cfg.stream_tool_calls.unwrap_or(false),
+                stream_tool_calls: subagent_stream_tool_calls_from_catalog(ctx, &cfg.model)
+                    .unwrap_or_else(|| cfg.stream_tool_calls.unwrap_or(false)),
                 idle_timeout_secs: None,
                 client_identifier: ctx.sampling_config.client_identifier.clone(),
                 deployment_id: ctx.sampling_config.deployment_id.clone(),
@@ -800,15 +801,9 @@ async fn read_parent_sampling_config(
                 } else {
                     inherited_bearer_resolver(ctx, &cfg.model, &inherited_base_url)
                 },
-                supports_backend_search: ctx
-                    .models_manager
-                    .model_supports_backend_search(ctx.model_id.0.as_ref()),
-                compactions_remaining: ctx
-                    .models_manager
-                    .model_compactions_remaining(ctx.model_id.0.as_ref()),
-                compaction_at_tokens: ctx
-                    .models_manager
-                    .model_compaction_at_tokens(ctx.model_id.0.as_ref()),
+                supports_backend_search: catalog_supports_backend_search(ctx, &cfg.model),
+                compactions_remaining: catalog_compactions_remaining(ctx, &cfg.model),
+                compaction_at_tokens: catalog_compaction_at_tokens(ctx, &cfg.model),
                 doom_loop_recovery: ctx.sampling_config.doom_loop_recovery,
                 header_injector: ctx.sampling_config.header_injector.clone(),
             };
@@ -850,16 +845,51 @@ async fn read_parent_sampling_config(
     } else {
         inherited_bearer_resolver(ctx, &fallback.model, &fallback.base_url)
     };
-    fallback.supports_backend_search = ctx
-        .models_manager
-        .model_supports_backend_search(ctx.model_id.0.as_ref());
-    fallback.compactions_remaining = ctx
-        .models_manager
-        .model_compactions_remaining(ctx.model_id.0.as_ref());
-    fallback.compaction_at_tokens = ctx
-        .models_manager
-        .model_compaction_at_tokens(ctx.model_id.0.as_ref());
+    fallback.supports_backend_search = catalog_supports_backend_search(ctx, &fallback.model);
+    fallback.compactions_remaining = catalog_compactions_remaining(ctx, &fallback.model);
+    fallback.compaction_at_tokens = catalog_compaction_at_tokens(ctx, &fallback.model);
+    if let Some(stream_tool_calls) =
+        subagent_stream_tool_calls_from_catalog(ctx, &fallback.model)
+    {
+        fallback.stream_tool_calls = stream_tool_calls;
+    }
     (fallback, ctx.model_id.clone())
+}
+/// Resolve a catalog-backed sampler flag from the child/parent model slug,
+/// preferring the spawn-time `available_models` snapshot over the live manager.
+fn catalog_supports_backend_search(ctx: &SubagentSpawnContext, model_slug: &str) -> bool {
+    crate::agent::config::find_model_by_id(&ctx.available_models, model_slug)
+        .map(|e| e.info.supports_backend_search)
+        .unwrap_or_else(|| ctx.models_manager.model_supports_backend_search(model_slug))
+}
+fn catalog_compactions_remaining(
+    ctx: &SubagentSpawnContext,
+    model_slug: &str,
+) -> Option<xai_grok_sampling_types::CompactionsRemaining> {
+    crate::agent::config::find_model_by_id(&ctx.available_models, model_slug)
+        .and_then(|e| e.info.compactions_remaining)
+        .or_else(|| ctx.models_manager.model_compactions_remaining(model_slug))
+}
+fn catalog_compaction_at_tokens(
+    ctx: &SubagentSpawnContext,
+    model_slug: &str,
+) -> Option<xai_grok_sampling_types::CompactionAtTokens> {
+    crate::agent::config::find_model_by_id(&ctx.available_models, model_slug)
+        .and_then(|e| e.info.compaction_at_tokens)
+        .or_else(|| ctx.models_manager.model_compaction_at_tokens(model_slug))
+}
+/// Resolve `stream_tool_calls` from the child model's catalog entry when known.
+fn subagent_stream_tool_calls_from_catalog(
+    ctx: &SubagentSpawnContext,
+    model_slug: &str,
+) -> Option<bool> {
+    if let Some(entry) =
+        crate::agent::config::find_model_by_id(&ctx.available_models, model_slug)
+    {
+        return entry.info.stream_tool_calls;
+    }
+    let models = ctx.models_manager.models();
+    crate::agent::config::find_model_by_id(&models, model_slug).and_then(|e| e.info.stream_tool_calls)
 }
 /// `AuthType` for a subagent: BYOK ⇒ `ApiKey` (don't overwrite the BYOK
 /// key); session-based ACP method ⇒ `SessionToken` (keep refresh wired);

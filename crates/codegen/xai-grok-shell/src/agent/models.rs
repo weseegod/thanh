@@ -544,18 +544,16 @@ impl ModelsManager {
 
     /// Whether the catalog model `model_id` (routing slug) declares image
     /// input via its `input_modalities` (`input = ["text", "image"]` in
-    /// config.toml). `None`/unknown — undeclared `input`, or a model that
-    /// does not resolve in the catalog — returns `true` so models we know
-    /// nothing about are never stripped. Mirrors the TUI's permissive
-    /// default in `ModelState::current_model_accepts_images`.
+    /// config.toml). Undeclared BYOK models with a custom non-xAI base URL
+    /// default to text-only (conservative). Other unknown models return `true`
+    /// so models we know nothing about are never stripped prematurely.
     pub fn model_accepts_images(&self, model_id: &str) -> bool {
         let cat = self.inner.catalog.read();
         let models = &cat.models;
         match resolve_catalog_key(models, &acp::ModelId::new(model_id)) {
             Some(key) => models
                 .get(key.0.as_ref())
-                .and_then(|e| e.info().input_modalities.as_ref())
-                .map(|mods| mods.contains(&InputModality::Image))
+                .map(|e| crate::agent::config::model_entry_accepts_images(e))
                 .unwrap_or(true),
             None => true,
         }

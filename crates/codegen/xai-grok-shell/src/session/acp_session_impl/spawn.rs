@@ -495,7 +495,11 @@ pub(crate) async fn spawn_session_actor(
             xai_grok_tools::implementations::WebSearchConfig::Disabled
         }
     } else {
-        tracing::warn!("web_search disabled: configured model could not be resolved");
+        tracing::warn!(
+            "web_search disabled: configured model could not be resolved; \
+             BYOK sessions need a `[model.<web_search>]` entry with Responses API support, \
+             or use native Grok for hosted web search"
+        );
         xai_grok_tools::implementations::WebSearchConfig::Disabled
     };
     let embed_base_url = sampling_config.base_url.clone();
@@ -1514,12 +1518,28 @@ pub(crate) async fn spawn_session_actor(
         .and_then(|raw| crate::agent::config::Config::new_from_toml_cfg(&raw).ok())
         .unwrap_or_default();
     effective_config.remote_settings = remote_settings.clone();
+    let catalog_models = models_manager.models();
+    let provider_context = crate::agent::config::ProviderContext::from_catalog(
+        &catalog_models,
+        &primary_model_id,
+    );
+    let compaction_model_slug = effective_config.compaction.model.clone();
     let goal_classifier_max_runs = effective_config.resolve_goal_classifier_max_runs().value;
+    let goal_use_current_model_only = effective_config
+        .resolve_goal_use_current_model_only(&provider_context)
+        .value;
+    let goal_verifier_skeptic_count = effective_config
+        .resolve_goal_verifier_count(&provider_context, goal_use_current_model_only)
+        .value;
     let goal_strategist_every = effective_config
-        .resolve_goal_strategist_every(goal_classifier_max_runs)
+        .resolve_goal_strategist_every(
+            goal_classifier_max_runs,
+            &provider_context,
+            goal_verifier_skeptic_count,
+            goal_use_current_model_only,
+        )
         .value;
     let goal_reverify_after = effective_config.resolve_goal_reverify_after().value;
-    let goal_use_current_model_only = effective_config.resolve_goal_use_current_model_only().value;
     let goal_role_models = {
         let planner = effective_config
             .resolve_goal_planner_model(goal_use_current_model_only)
@@ -1532,13 +1552,47 @@ pub(crate) async fn spawn_session_actor(
             .value
             .into_iter()
             .filter_map(|c| match c {
-                crate::agent::config::GoalRoleModelChoice::Explicit(p) => Some(p),
+                crate::agent::config::GoalRoleModelChoice::Explicit(p) => {
+                    if crate::agent::config::goal_role_model_is_selectable(&p, &catalog_models) {
+                        Some(p)
+                    } else {
+                        tracing::warn!(
+                            model = %p.model,
+                            "dropping goal skeptic role model absent from local catalog"
+                        );
+                        None
+                    }
+                }
                 crate::agent::config::GoalRoleModelChoice::InheritCurrent => None,
             })
             .collect();
+        let filtered_planner = match &planner {
+            crate::agent::config::GoalRoleModelChoice::Explicit(p)
+                if !crate::agent::config::goal_role_model_is_selectable(p, &catalog_models) =>
+            {
+                tracing::warn!(
+                    model = %p.model,
+                    "dropping goal planner role model absent from local catalog"
+                );
+                crate::agent::config::GoalRoleModelChoice::InheritCurrent
+            }
+            other => other.clone(),
+        };
+        let filtered_strategist = match &strategist {
+            crate::agent::config::GoalRoleModelChoice::Explicit(p)
+                if !crate::agent::config::goal_role_model_is_selectable(p, &catalog_models) =>
+            {
+                tracing::warn!(
+                    model = %p.model,
+                    "dropping goal strategist role model absent from local catalog"
+                );
+                crate::agent::config::GoalRoleModelChoice::InheritCurrent
+            }
+            other => other.clone(),
+        };
         GoalRoleModelConfig {
-            planner,
-            strategist,
+            planner: filtered_planner,
+            strategist: filtered_strategist,
             skeptic_pool,
         }
     };
@@ -1657,6 +1711,8 @@ pub(crate) async fn spawn_session_actor(
         last_reported_branch: Arc::new(Mutex::new(None)),
         git_head_enabled: fs_watch_caps.git_head,
         models_manager,
+        provider_context,
+        compaction_model_slug,
         display_cwd: {
             let lock = std::sync::OnceLock::new();
             if let Some(ref cwd) = prompt_display_cwd {
@@ -1696,7 +1752,7 @@ pub(crate) async fn spawn_session_actor(
         goal_summary_enabled: effective_config
             .resolve_goal_summary_enabled(goal_enabled)
             .value,
-        goal_verifier_skeptic_count: effective_config.resolve_goal_verifier_count().value,
+        goal_verifier_skeptic_count,
         goal_role_models,
         goal_use_current_model_only,
         goal_classifier_max_runs,
