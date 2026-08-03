@@ -203,7 +203,7 @@ impl AgentView {
             hit_cwd: Default::default(),
             hit_cancel_button: Default::default(),
             hit_watching_cue: Default::default(),
-            watching_cue_toast_shown: false,
+            watching_cue_expanded: false,
             hit_announcement_hide: Default::default(),
             hit_announcement_cta: Default::default(),
             privacy_banner: Default::default(),

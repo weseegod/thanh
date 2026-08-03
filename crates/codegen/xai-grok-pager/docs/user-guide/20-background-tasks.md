@@ -204,6 +204,8 @@ While a turn is waiting on background work (blocked in a `get_task_output` or `w
 
 The same hint appears as `◎ waiting · send a message to interrupt` when the agent is waiting on something with no live counter (a sleep, or work that already finished). Sending a message interrupts the wait and runs your message right away. The transcript keeps its usual shape throughout: one "Worked for" marker when the turn ends. When a completion wakes the agent and it replies, that reply gets its own "Worked for" marker; a wake the agent answers silently leaves no trace in the transcript — unless it fails, in which case a "Turn failed" line appears even for a silent wake, so a standing instruction never stops executing invisibly.
 
+**Click** the still-running line to expand an inline list of each running item (commands, monitors, loops, subagents). Click again to collapse back to the summary. For kill, output, and other actions, use the tasks pane (`Ctrl+G`) or the top-bar running-count badge.
+
 ---
 
 ## Use Cases and Patterns

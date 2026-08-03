@@ -175,18 +175,7 @@ impl AgentView {
                 if self.hit_watching_cue.contains(mouse.column, mouse.row)
                     && !self.pos_occluded(mouse.column, mouse.row)
                 {
-                    let was_visible = self.tasks.overlay.visible;
-                    self.tasks.overlay.toggle();
-                    self.tasks.on_state_change();
-                    if self.tasks.overlay.focused {
-                        self.set_active_pane(AgentPane::Tasks, false);
-                    } else if self.active_pane == AgentPane::Tasks {
-                        self.set_active_pane(AgentPane::Scrollback, false);
-                    }
-                    if !was_visible && !self.watching_cue_toast_shown {
-                        self.watching_cue_toast_shown = true;
-                        self.show_toast("Tip: Ctrl+G toggles the tasks pane");
-                    }
+                    self.watching_cue_expanded = !self.watching_cue_expanded;
                     return InputOutcome::Changed;
                 }
                 if self.hit_announcement_hide.contains(mouse.column, mouse.row)

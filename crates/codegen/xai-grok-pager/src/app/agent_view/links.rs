@@ -485,6 +485,16 @@ mod link_click_tests {
     ) {
         draw_frame_sized(agent, reg, announcements, banner_height, 80);
     }
+    fn buffer_to_text(buf: &Buffer) -> String {
+        (0..buf.area.height)
+            .map(|y| {
+                (0..buf.area.width)
+                    .filter_map(|x| buf.cell((x, y)).map(|c| c.symbol().to_string()))
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
     fn draw_frame_sized(
         agent: &mut AgentView,
         reg: &ActionRegistry,
@@ -745,37 +755,85 @@ mod link_click_tests {
             "click where stop used to be must not cancel the turn under a dropdown"
         );
     }
-    /// Clicking the still-running watcher cue toggles the tasks pane like
-    /// Ctrl+G; only the first click that reveals the pane shows the one-time
-    /// shortcut toast.
+    /// Clicking the still-running watcher cue toggles inline detail rows; the
+    /// tasks pane stays closed (Ctrl+G still opens it).
     #[test]
-    fn watching_cue_click_opens_tasks_pane_with_one_time_shortcut_toast() {
+    fn watching_cue_click_expands_inline_details() {
         let reg = ActionRegistry::defaults();
         let mut agent = make_agent();
         agent.last_terminal_size = (80, 30);
         super::test_fixtures::add_running_bg_task(&mut agent);
         draw_banner_frame(&mut agent, &reg, &[], 0);
+        // New live bg tasks auto-open the tasks pane on sync — close it so
+        // we can verify the watching-cue click toggles inline details only.
+        if agent.tasks.overlay.visible {
+            agent.tasks.overlay.hide();
+            agent.tasks.on_state_change();
+        }
+        assert!(!agent.watching_cue_expanded);
         let rect = agent.hit_watching_cue.rect.expect("cue rect must be armed");
         let click = Event::Mouse(mouse_down(rect.x + 1, rect.y));
         let _ = agent.handle_input(&click, &reg);
-        assert!(agent.tasks.overlay.focused);
-        assert!(agent.toast.is_none(), "focus-only click must not toast");
-        agent.tasks.overlay.hide();
-        agent.tasks.on_state_change();
-        draw_banner_frame(&mut agent, &reg, &[], 0);
+        assert!(
+            agent.watching_cue_expanded,
+            "first click must expand inline details"
+        );
+        assert!(
+            !agent.tasks.overlay.visible,
+            "click must not open the tasks pane"
+        );
+        let buf = draw_frame_sized(&mut agent, &reg, &[], 0, 80);
+        let screen = buffer_to_text(&buf);
+        assert!(
+            screen.contains("sleep 5"),
+            "expanded view must list the running command; screen:\n{screen}"
+        );
         let _ = agent.handle_input(&click, &reg);
-        assert!(agent.tasks.overlay.visible && agent.tasks.overlay.focused);
-        assert_eq!(agent.active_pane, AgentPane::Tasks);
-        let toast = agent.toast.clone().map(|(msg, _)| msg);
-        assert_eq!(toast.as_deref(), Some("Tip: Ctrl+G toggles the tasks pane"));
-        agent.toast = None;
-        draw_banner_frame(&mut agent, &reg, &[], 0);
-        let _ = agent.handle_input(&click, &reg);
-        assert!(!agent.tasks.overlay.visible);
-        draw_banner_frame(&mut agent, &reg, &[], 0);
-        let _ = agent.handle_input(&click, &reg);
-        assert!(agent.tasks.overlay.visible);
-        assert!(agent.toast.is_none(), "toast fires only once per session");
+        assert!(
+            !agent.watching_cue_expanded,
+            "second click must collapse inline details"
+        );
+    }
+
+    #[test]
+    fn watching_cue_expanded_shows_two_command_rows() {
+        let reg = ActionRegistry::defaults();
+        let mut agent = make_agent();
+        agent.last_terminal_size = (80, 30);
+        super::test_fixtures::add_running_bg_task(&mut agent);
+        agent.session.bg_tasks.insert(
+            "task-2".into(),
+            crate::app::agent::BgTaskState {
+                task_id: "task-2".into(),
+                tool_call_id: "tool-2".into(),
+                command: "npm run dev".into(),
+                description: None,
+                cwd: String::new(),
+                output_file: String::new(),
+                status: crate::app::agent::BgTaskStatus::Running,
+                start_time: std::time::SystemTime::now(),
+                end_time: None,
+                exit_code: None,
+                signal: None,
+                stdout: String::new(),
+                stdout_line_count: 0,
+                truncated: false,
+                pending_kill: false,
+                kill_requested_at: None,
+                scrollback_entry_id: None,
+                is_monitor: false,
+                restored_from_replay: false,
+            },
+        );
+        agent.watching_cue_expanded = true;
+        let buf = draw_frame_sized(&mut agent, &reg, &[], 0, 80);
+        let screen = buffer_to_text(&buf);
+        assert!(
+            screen.contains("2 commands still running"),
+            "summary must show count; screen:\n{screen}"
+        );
+        assert!(screen.contains("sleep 5"), "command 1 missing; screen:\n{screen}");
+        assert!(screen.contains("npm run dev"), "command 2 missing; screen:\n{screen}");
     }
     /// Bg twin: the `[↓]` demote button rides the same turn-status row, so its
     /// rect must drop under an open dropdown too — a dropdown click must never

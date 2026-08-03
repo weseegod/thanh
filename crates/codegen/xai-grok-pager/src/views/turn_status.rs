@@ -74,8 +74,8 @@ pub struct TurnStatusOutput {
     pub cancel_button: Option<Rect>,
     /// Hit area for the background-demote button, if rendered.
     pub bg_button: Option<Rect>,
-    /// Hit area for the still-running watcher cue (click opens the tasks
-    /// pane). `None` on keyboard-only hosts.
+    /// Hit area for the still-running watcher cue (click toggles inline detail
+    /// rows). `None` on keyboard-only hosts.
     pub watching_cue: Option<Rect>,
 }
 
@@ -219,6 +219,10 @@ pub struct TurnStatusArgs<'a> {
     pub flat_background: bool,
     pub held_queue: usize,
     pub held_queue_top_sendable: bool,
+    /// Whether the watching-cue detail rows are shown below the summary.
+    pub expanded: bool,
+    /// Pre-built detail rows (one per running watcher) when `expanded`.
+    pub detail_lines: &'a [Line<'static>],
 }
 
 /// Render the turn status line into the given area.
@@ -249,6 +253,8 @@ pub fn render_turn_status(
         flat_background,
         held_queue,
         held_queue_top_sendable,
+        expanded,
+        detail_lines,
     } = args;
     // Resolve the mouse affordances: a keyboard-only host (`None`) suppresses
     // both buttons and reports no hover.
@@ -334,12 +340,31 @@ pub fn render_turn_status(
                 Span::styled(cue, Style::default().fg(label_fg)),
             ];
             buf.set_line(area.x, area.y, &Line::from(spans), area.width);
-            // The cue opens the tasks pane on click — only advertise the hit
-            // area when there are tasks to show (a watcherless parked cue has
-            // nothing behind it).
+            if expanded {
+                for (i, line) in detail_lines.iter().enumerate() {
+                    let row = area.y.saturating_add(1 + i as u16);
+                    if row >= area.y.saturating_add(area.height) {
+                        break;
+                    }
+                    buf.set_line(area.x, row, line, area.width);
+                }
+            }
+            // The cue toggles inline detail rows on click — only advertise the
+            // hit area when there are tasks to show (a watcherless parked cue
+            // has nothing behind it).
+            let hit_height = if expanded && !detail_lines.is_empty() {
+                1 + detail_lines.len().min(area.height.saturating_sub(1) as usize) as u16
+            } else {
+                1
+            };
+            let hit_width = if expanded && !detail_lines.is_empty() {
+                area.width
+            } else {
+                cue_width
+            };
             return TurnStatusOutput {
                 watching_cue: (show_buttons && watchers.total() > 0)
-                    .then(|| Rect::new(area.x, area.y, cue_width, 1)),
+                    .then(|| Rect::new(area.x, area.y, hit_width, hit_height)),
                 ..TurnStatusOutput::default()
             };
         }
@@ -822,6 +847,27 @@ pub fn should_show(
         || watchers.total() > 0
 }
 
+/// Row count for the turn-status area (0 when hidden, 1 summary row, or
+/// 1 + detail rows when the watching cue is expanded).
+pub fn row_count(
+    state: &AgentState,
+    drain_blocked: bool,
+    mcp_init_progress: Option<&McpInitProgress>,
+    watchers: Watchers,
+    parked: bool,
+    expanded: bool,
+    detail_count: usize,
+) -> u16 {
+    if !should_show(state, drain_blocked, mcp_init_progress, watchers, parked) {
+        return 0;
+    }
+    if expanded && detail_count > 0 {
+        1 + detail_count as u16
+    } else {
+        1
+    }
+}
+
 /// Format a duration for the turn/phase timer.
 ///
 /// Re-exports [`crate::util::format_duration`] under the old name for
@@ -1180,15 +1226,22 @@ mod tests {
             flat_background: false,
             held_queue: 0,
             held_queue_top_sendable: false,
+            expanded: false,
+            detail_lines: &[],
         }
+    }
+
+    /// Render `args` into a `width`×`height` area.
+    fn render_row_sized(args: TurnStatusArgs<'_>, width: u16, height: u16) -> (TurnStatusOutput, Buffer) {
+        let area = Rect::new(0, 0, width, height);
+        let mut buf = Buffer::empty(area);
+        let output = render_turn_status(&mut buf, area, args);
+        (output, buf)
     }
 
     /// Render `args` into a `width`×1 row.
     fn render_row(args: TurnStatusArgs<'_>, width: u16) -> (TurnStatusOutput, Buffer) {
-        let area = Rect::new(0, 0, width, 1);
-        let mut buf = Buffer::empty(area);
-        let output = render_turn_status(&mut buf, area, args);
-        (output, buf)
+        render_row_sized(args, width, 1)
     }
 
     /// Render `args` into a `width`×1 row, returning the visible text.
@@ -1310,6 +1363,78 @@ mod tests {
         args.buttons = None;
         let (output, _) = render_row(args, 60);
         assert!(output.watching_cue.is_none());
+    }
+
+    #[test]
+    fn expanded_watching_cue_renders_detail_rows() {
+        use ratatui::text::Line;
+        let detail_lines = [
+            Line::from("  · sleep 300"),
+            Line::from("  · npm run dev"),
+        ];
+        let mut args = idle_args(Watchers {
+            commands: 2,
+            ..Watchers::default()
+        });
+        args.expanded = true;
+        args.detail_lines = &detail_lines;
+        let (_, buf) = render_row_sized(args, 72, 3);
+        let text = buffer_text(&buf, buf.area);
+        assert!(
+            text.contains("2 commands still running"),
+            "summary must remain, got: {text:?}"
+        );
+        assert!(text.contains("sleep 300"), "detail row 1 missing: {text:?}");
+        assert!(text.contains("npm run dev"), "detail row 2 missing: {text:?}");
+    }
+
+    #[test]
+    fn expanded_watching_cue_hit_rect_covers_all_rows() {
+        use ratatui::text::Line;
+        let detail_lines = [Line::from("  · sleep 5"), Line::from("  · ls")];
+        let mut args = idle_args(Watchers {
+            commands: 2,
+            ..Watchers::default()
+        });
+        args.expanded = true;
+        args.detail_lines = &detail_lines;
+        let (output, _) = render_row_sized(args, 60, 3);
+        let rect = output.watching_cue.expect("expanded cue must be clickable");
+        assert_eq!(rect, Rect::new(0, 0, 60, 3));
+    }
+
+    #[test]
+    fn row_count_expands_with_detail_lines() {
+        assert_eq!(
+            row_count(
+                &AgentState::Idle,
+                false,
+                None,
+                Watchers {
+                    commands: 2,
+                    ..Watchers::default()
+                },
+                false,
+                true,
+                2,
+            ),
+            3
+        );
+        assert_eq!(
+            row_count(
+                &AgentState::Idle,
+                false,
+                None,
+                Watchers {
+                    commands: 2,
+                    ..Watchers::default()
+                },
+                false,
+                false,
+                2,
+            ),
+            1
+        );
     }
 
     #[test]

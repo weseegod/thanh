@@ -703,6 +703,94 @@ impl TaskEntry {
     }
 }
 
+/// Styled detail rows for the turn-status watching-cue expander — one row
+/// per running watcher, sorted like the tasks pane (workflows → subagents →
+/// commands → monitors → loops).
+pub fn watching_detail_lines(
+    bg_tasks: &std::collections::BTreeMap<String, BgTaskState>,
+    subagents: &HashMap<String, SubagentInfo>,
+    scheduled: &HashMap<String, ScheduledTaskInfo>,
+    workflow_runs: &[crate::views::workflows::WorkflowRunSnapshot],
+) -> Vec<Line<'static>> {
+    let theme = Theme::current();
+    let indent = Span::styled("  \u{00b7} ", Style::default().fg(theme.gray_dim));
+
+    let mut highlight_cache = HashMap::new();
+    let mut items: Vec<TaskEntry> = Vec::new();
+
+    for run in workflow_runs {
+        if run.is_active() {
+            items.push(TaskEntry::from_workflow_run(run));
+        }
+    }
+    for info in subagents.values() {
+        if info.workflow_run_id.is_some() {
+            continue;
+        }
+        if info.is_running() {
+            items.push(TaskEntry::from_subagent(info));
+        }
+    }
+    for task in bg_tasks.values() {
+        if task.status == BgTaskStatus::Running {
+            items.push(TaskEntry::from_bg_task(task, &mut highlight_cache));
+        }
+    }
+    for info in scheduled.values() {
+        items.push(TaskEntry::from_scheduled(info, None, false, None));
+    }
+
+    items.sort_by(|a, b| {
+        a.type_order()
+            .cmp(&b.type_order())
+            .then_with(|| b.is_running().cmp(&a.is_running()))
+            .then_with(|| match (a, b) {
+                (
+                    TaskEntry::Agent {
+                        type_label: ta,
+                        started_at: sa,
+                        ..
+                    },
+                    TaskEntry::Agent {
+                        type_label: tb,
+                        started_at: sb,
+                        ..
+                    },
+                ) => ta.cmp(tb).then_with(|| sb.cmp(sa)),
+                (
+                    TaskEntry::Scheduled { started_at: a, .. },
+                    TaskEntry::Scheduled { started_at: b, .. },
+                ) => b.cmp(a),
+                (
+                    TaskEntry::BgTask { start_time: a, .. },
+                    TaskEntry::BgTask { start_time: b, .. },
+                ) => b.cmp(a),
+                (
+                    TaskEntry::Workflow { started_at: a, .. },
+                    TaskEntry::Workflow { started_at: b, .. },
+                ) => b.cmp(a),
+                _ => std::cmp::Ordering::Equal,
+            })
+            .then_with(|| a.stable_id().cmp(&b.stable_id()))
+    });
+
+    items
+        .into_iter()
+        .map(|entry| {
+            let styled = match entry {
+                TaskEntry::BgTask { styled, .. }
+                | TaskEntry::Agent { styled, .. }
+                | TaskEntry::Scheduled { styled, .. }
+                | TaskEntry::Workflow { styled, .. } => styled,
+                TaskEntry::Header { .. } => unreachable!(),
+            };
+            let mut spans = vec![indent.clone()];
+            spans.extend(styled.spans);
+            Line::from(spans)
+        })
+        .collect()
+}
+
 impl ListItem for TaskEntry {
     fn content(&self) -> &Line<'_> {
         match self {

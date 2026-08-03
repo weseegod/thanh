@@ -1107,18 +1107,20 @@ impl AgentView {
         let queue_height = self.queue.desired_height();
         let drain_blocked = self.drain_blocked();
         let watchers = self.watchers();
+        if watchers.total() == 0 {
+            self.watching_cue_expanded = false;
+        }
         let parked = self.renders_parked();
-        let turn_status_height = if turn_status::should_show(
+        let detail_lines = self.watching_detail_lines();
+        let turn_status_height = turn_status::row_count(
             &self.session.state,
             drain_blocked,
             self.mcp_init_progress.as_ref(),
             watchers,
             parked,
-        ) {
-            1
-        } else {
-            0
-        };
+            self.watching_cue_expanded,
+            detail_lines.len(),
+        );
         let prompt_gap = if appearance.prompt.compact
             || (turn_status_height > 0 && !appearance.turn_status.gap)
             || area.height <= agent::SHORT_TERMINAL_ROWS
@@ -2068,6 +2070,8 @@ impl AgentView {
                         flat_background: false,
                         held_queue,
                         held_queue_top_sendable,
+                        expanded: self.watching_cue_expanded,
+                        detail_lines: &detail_lines,
                     },
                 );
                 self.hit_cancel_button

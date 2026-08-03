@@ -248,6 +248,16 @@ impl AgentView {
         watchers
     }
 
+    /// Styled detail rows for the expanded still-running status cue.
+    pub(crate) fn watching_detail_lines(&self) -> Vec<ratatui::text::Line<'static>> {
+        crate::views::tasks_pane::watching_detail_lines(
+            &self.session.bg_tasks,
+            &self.subagent_sessions,
+            &self.session.scheduled_tasks,
+            &self.workflow_runs,
+        )
+    }
+
     /// Shared tail of every turn-end marker push
     /// (`push_turn_terminal_marker`).
     pub(crate) fn push_end_marker_block(
