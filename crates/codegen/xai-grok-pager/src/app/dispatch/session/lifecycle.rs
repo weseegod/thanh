@@ -109,12 +109,25 @@ pub(crate) fn apply_deferred_switch_outcome(
     }
     outcome.switch
 }
+/// The model a `/new`-family session should inherit: the active agent's
+/// current model, so starting a fresh session doesn't silently reset to
+/// the default. `None` when no agent is active (welcome screen / startup),
+/// where the shell's default model applies.
+pub(in crate::app::dispatch) fn inherited_new_session_model(
+    app: &AppView,
+) -> Option<acp::ModelId> {
+    get_active_agent(app).and_then(|a| a.session.models.current.clone())
+}
 /// Top-level `/new` dispatcher. If the working directory is inside a
 /// git repository, consults the persisted `new_session_worktree_mode`
 /// preference: `Always` skips the popup and creates a worktree, `Never`
 /// skips the popup and stays in-cwd, `Ask` opens the worktree question
 /// modal (mirroring `/fork`'s UX). Otherwise proceeds directly via
 /// [`dispatch_new_session_inner`].
+///
+/// The new session inherits the active agent's current model (see
+/// [`inherited_new_session_model`]); when no agent is active the
+/// shell's default model applies.
 ///
 /// When no active agent exists (e.g. from the welcome screen), the
 /// git-repo check falls back to `app.cwd_has_git_ancestor` so the
@@ -134,25 +147,26 @@ pub(in crate::app::dispatch) fn dispatch_new_session(app: &mut AppView) -> Vec<E
             return effects;
         }
     }
+    let model = inherited_new_session_model(app);
     let in_git_repo = get_active_agent(app)
         .map(|a| a.current_branch.is_some())
         .unwrap_or(app.cwd_has_git_ancestor);
     if in_git_repo {
         match app.new_session_worktree_mode {
             WorktreeMode::Always => {
-                dispatch_new_worktree_session(app, None, None, None, None, None, None)
+                dispatch_new_worktree_session(app, None, None, None, model, None, None)
             }
-            WorktreeMode::Never => dispatch_new_session_inner(app, None),
+            WorktreeMode::Never => dispatch_new_session_inner(app, model),
             WorktreeMode::Ask => {
                 if matches!(app.active_view, ActiveView::Agent(_)) {
                     open_new_session_question(app)
                 } else {
-                    dispatch_new_session_inner(app, None)
+                    dispatch_new_session_inner(app, model)
                 }
             }
         }
     } else {
-        dispatch_new_session_inner(app, None)
+        dispatch_new_session_inner(app, model)
     }
 }
 /// Open the local worktree question modal for `/new`. Mirrors

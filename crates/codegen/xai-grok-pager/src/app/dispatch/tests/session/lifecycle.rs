@@ -889,6 +889,45 @@ fn slash_new_dispatches_new_session() {
     );
 }
 #[test]
+fn slash_new_inherits_active_agent_model() {
+    let mut app = test_app_with_agent();
+    let model_id = acp::ModelId::new(std::sync::Arc::from("grok-4.5"));
+    app.agents
+        .get_mut(&AgentId(0))
+        .unwrap()
+        .session
+        .models
+        .current = Some(model_id.clone());
+    let effects = dispatch(Action::SendPrompt("/new".into()), &mut app);
+    assert!(
+        effects.iter().any(|e| matches!(
+            e,
+            Effect::CreateSession { model_id: Some(m), .. } if m == &model_id
+        )),
+        "expected CreateSession to inherit the active agent's model, got: {effects:?}"
+    );
+}
+#[test]
+fn new_session_in_worktree_inherits_active_agent_model() {
+    let mut app = new_session_test_app();
+    app.new_session_worktree_mode = crate::app::app_view::WorktreeMode::Always;
+    let model_id = acp::ModelId::new(std::sync::Arc::from("grok-4.5"));
+    app.agents
+        .get_mut(&AgentId(0))
+        .unwrap()
+        .session
+        .models
+        .current = Some(model_id.clone());
+    let effects = dispatch(Action::NewSession, &mut app);
+    assert!(
+        effects.iter().any(|e| matches!(
+            e,
+            Effect::CreateWorktreeSession { model_id: Some(m), .. } if m == &model_id
+        )),
+        "expected CreateWorktreeSession to inherit the active agent's model, got: {effects:?}"
+    );
+}
+#[test]
 fn new_session_falls_back_to_app_cwd_on_welcome_screen() {
     let mut app = test_app();
     assert!(matches!(app.active_view, ActiveView::Welcome));
@@ -1587,6 +1626,60 @@ fn dispatch_new_session_answered_with_persist_never_updates_mode_and_emits_effec
         )),
         "expected PersistWorktreeMode with config_key new_session_worktree_mode"
     );
+}
+#[test]
+fn new_session_answered_inherits_active_agent_model() {
+    let model_id = acp::ModelId::new(std::sync::Arc::from("grok-4.5"));
+    // "No" (stay in cwd) routes to dispatch_new_session_inner.
+    {
+        let mut app = new_session_test_app();
+        app.new_session_worktree_mode = crate::app::app_view::WorktreeMode::Ask;
+        app.agents
+            .get_mut(&AgentId(0))
+            .unwrap()
+            .session
+            .models
+            .current = Some(model_id.clone());
+        let effects = dispatch(
+            Action::NewSessionAnswered {
+                worktree: false,
+                persist_mode: None,
+            },
+            &mut app,
+        );
+        assert!(
+            effects.iter().any(|e| matches!(
+                e,
+                Effect::CreateSession { model_id: Some(m), .. } if m == &model_id
+            )),
+            "worktree:false answer must inherit the model, got: {effects:?}"
+        );
+    }
+    // "Yes" (new worktree) routes to dispatch_new_worktree_session.
+    {
+        let mut app = new_session_test_app();
+        app.new_session_worktree_mode = crate::app::app_view::WorktreeMode::Ask;
+        app.agents
+            .get_mut(&AgentId(0))
+            .unwrap()
+            .session
+            .models
+            .current = Some(model_id.clone());
+        let effects = dispatch(
+            Action::NewSessionAnswered {
+                worktree: true,
+                persist_mode: None,
+            },
+            &mut app,
+        );
+        assert!(
+            effects.iter().any(|e| matches!(
+                e,
+                Effect::CreateWorktreeSession { model_id: Some(m), .. } if m == &model_id
+            )),
+            "worktree:true answer must inherit the model, got: {effects:?}"
+        );
+    }
 }
 #[test]
 fn dispatch_new_session_has_empty_scrollback() {

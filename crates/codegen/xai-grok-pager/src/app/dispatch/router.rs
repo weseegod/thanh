@@ -65,7 +65,8 @@ use super::session::lifecycle::{
     clear_startup_actions, dispatch_agent_type_mismatch_answered,
     dispatch_delete_current_session_answered, dispatch_exit_session, dispatch_new_session,
     dispatch_new_session_inner, dispatch_new_session_with_id, dispatch_new_worktree_session,
-    dispatch_trust_folder, open_delete_current_session_question, open_new_session_question,
+    dispatch_trust_folder, inherited_new_session_model, open_delete_current_session_question,
+    open_new_session_question,
 };
 use super::session::load::{
     dispatch_cycle_session_source_filter, dispatch_load_session, dispatch_pick_content_session,
@@ -1207,10 +1208,11 @@ pub(crate) fn dispatch(action: Action, app: &mut AppView) -> Vec<Effect> {
             worktree,
             persist_mode,
         } => {
+            let model = inherited_new_session_model(app);
             let mut effects = if worktree {
-                dispatch_new_worktree_session(app, None, None, None, None, None, None)
+                dispatch_new_worktree_session(app, None, None, None, model, None, None)
             } else {
-                dispatch_new_session_inner(app, None)
+                dispatch_new_session_inner(app, model)
             };
             apply_persist_worktree_mode(
                 &mut app.new_session_worktree_mode,
