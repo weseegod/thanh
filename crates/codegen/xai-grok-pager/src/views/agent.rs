@@ -1152,9 +1152,7 @@ pub fn build_hints(
                     registry.key_for(ActionId::NextTurn),
                 )
             {
-                let mut hint = HintItem::paired(l, h, "turn").pinned();
-                hint.custom_display = Some("Shift+l/h");
-                hints.push(hint);
+                hints.push(HintItem::paired(l, h, "turn").pinned());
             }
             if !selected_is_user_prompt
                 && let Some(key) = registry.key_for(ActionId::ExpandAllThinking)

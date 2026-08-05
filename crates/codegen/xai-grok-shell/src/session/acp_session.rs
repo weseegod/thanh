@@ -91,14 +91,17 @@ mod compaction_segments;
 mod types;
 pub(crate) use types::*;
 pub use types::{TodoGateDecision, TodoGateReason};
-#[path = "acp_session_impl/auth_retry.rs"]
-mod auth_retry;
 #[path = "acp_session_impl/goal.rs"]
 mod goal;
+#[path = "acp_session_impl/tool_layer_images.rs"]
+mod tool_layer_images;
 #[path = "acp_session_impl/turn.rs"]
 mod turn;
 #[path = "acp_session_impl/workflow.rs"]
 mod workflow_run;
+use tool_layer_images::*;
+#[path = "acp_session_impl/auth_retry.rs"]
+mod auth_retry;
 pub(crate) use auth_retry::{
     AuthRetryDecision, AuthRetrySchedule, human_duration, pace_uncharged_resubmit,
 };
@@ -109,6 +112,7 @@ mod tool_calls;
 pub(crate) use interjection::*;
 #[path = "acp_session_impl/laziness.rs"]
 mod laziness;
+#[cfg(test)]
 pub(crate) use laziness::*;
 #[path = "acp_session_impl/hooks_plugins.rs"]
 mod hooks_plugins;
@@ -1880,6 +1884,9 @@ mod reactive_managed_reauth_tests;
 #[cfg(test)]
 #[path = "acp_session_tests/session_thread_tests.rs"]
 mod session_thread_tests;
+#[cfg(test)]
+#[path = "acp_session_tests/tool_layer_images_bridge_tests.rs"]
+mod tool_layer_images_bridge_tests;
 #[cfg(test)]
 #[path = "acp_session_tests/turn/turn_end_guard_tests.rs"]
 mod turn_end_guard_tests;
