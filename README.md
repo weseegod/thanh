@@ -38,6 +38,21 @@ for the version of the code present in this tree.
 
 ---
 
+## About this fork (xgrok)
+
+This repository is a **BYOK-focused fork** of upstream
+[Grok Build](https://github.com/xai-org/grok-build). The goal is to leverage
+the upstream agent/TUI core unchanged and customize only what third-party
+models need — for example DeepSeek, OpenRouter, or any OpenAI-compatible API.
+
+| Topic | Link |
+|-------|------|
+| BYOK model setup | [`docs/byok-models.md`](docs/byok-models.md) |
+| Syncing upstream | [`UPSTREAM-MERGE.md`](UPSTREAM-MERGE.md) |
+| Build & install | [`build.sh`](build.sh) → installs `xgrok` to `~/.local/bin` |
+
+---
+
 ## Installing the released binary
 
 Prebuilt binaries are published for macOS, Linux, and Windows:
