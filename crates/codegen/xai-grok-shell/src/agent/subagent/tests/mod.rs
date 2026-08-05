@@ -1,7 +1,8 @@
 #![cfg_attr(rustfmt, rustfmt::skip)]
 use super::*;
 use super::handle_request::{
-    canonical_total_tokens, record_subagent_usage, usage_is_incomplete,
+    canonical_total_tokens, record_subagent_usage, stop_child_session_after_cancel,
+    usage_is_incomplete,
 };
 use crate::test_support::lsp_runtime::{
     DummyLspDispatch, ctx_with_toggle, test_gateway_with_receiver,
@@ -26,6 +27,32 @@ fn cancellation_makes_an_otherwise_complete_usage_snapshot_incomplete() {
     assert!(usage_is_incomplete(false, true, 10, false));
     assert!(!usage_is_incomplete(false, false, 0, false));
     assert!(usage_is_incomplete(true, false, 0, false));
+}
+/// Regression: when a subagent's cancellation token fires, the child
+/// session must be told to stop its turn. Previously `run_shell_child`'s
+/// `Cancelled` arm only detached the wait, so a cancelled workflow's
+/// agents kept executing (LLM calls, tools, bash) whenever the
+/// coordinator's `control.cancel()` never reached them — e.g. the child
+/// run completed and left `active` before the workflow Cancel event was
+/// processed. The teardown must cancel subagents and kill background
+/// tasks, mirroring `ShellChildRuntime::cancel`.
+#[tokio::test]
+async fn stop_child_session_after_cancel_sends_full_teardown_cancel() {
+    let (cmd_tx, mut cmd_rx) = mpsc::unbounded_channel::<SessionCommand>();
+    stop_child_session_after_cancel(&cmd_tx);
+    let received = cmd_rx.try_recv().expect("cancel command must be sent");
+    assert!(
+        matches!(
+            &received,
+            SessionCommand::Cancel(options)
+                if options.cancel_subagents && options.kill_background_tasks
+        ),
+        "expected SessionCommand::Cancel with cancel_subagents + kill_background_tasks"
+    );
+    assert!(
+        cmd_rx.try_recv().is_err(),
+        "exactly one teardown command should be sent here (Shutdown follows later)"
+    );
 }
 #[tokio::test]
 async fn usage_ack_precedes_terminal_presentation() {

@@ -54,6 +54,27 @@ pub(super) fn task_model_override_error(
     let requested = requested?;
     crate::agent::models::task_model_error_for_catalog(requested, available, is_session_auth)
 }
+/// Stop a subagent's child session after its cancellation token fired.
+///
+/// The token firing only detaches `run_shell_child`'s wait — the child
+/// session itself keeps executing its turn (LLM calls, tools, bash) unless
+/// it is told to stop. The coordinator's `control.cancel()` reaches
+/// children still in `active`/`pending`, but the child run can complete
+/// (moving the child to `completed`) before the coordinator processes the
+/// workflow Cancel event, in which case nothing else stops the session.
+/// Sending `SessionCommand::Cancel` here makes teardown deterministic
+/// regardless of coordinator timing. Idempotent: if the coordinator's
+/// cancel already landed, the session is already stopping.
+pub(super) fn stop_child_session_after_cancel(
+    child_cmd_tx: &mpsc::UnboundedSender<SessionCommand>,
+) {
+    let _ = child_cmd_tx.send(SessionCommand::Cancel(crate::session::CancelOptions {
+        cancel_subagents: true,
+        kill_background_tasks: true,
+        ..Default::default()
+    }));
+}
+
 /// Runtime adapter for one shell child. Shared lifecycle state is owned by the
 /// `xai-grok-tools` coordinator actor and reached only through `reporter`.
 #[tracing::instrument(
@@ -1242,6 +1263,13 @@ pub(crate) async fn run_shell_child(
     let mut cancellation_may_hide_usage = false;
     let mut result = match wait_outcome {
         SubagentWaitOutcome::Cancelled => {
+            // The cancel token firing only detaches our wait — the child
+            // session keeps executing its turn unless told to stop, and the
+            // coordinator's control.cancel() may never reach it (the run can
+            // complete and leave `active` before the Cancel event is
+            // processed). Stop the session NOW so a cancelled workflow
+            // cannot leave its agents running.
+            stop_child_session_after_cancel(&child_handle.cmd_tx);
             let (tool_calls, turns) = signals_snapshot_counts(&child_handle).await;
             cancellation_may_hide_usage = turns > 0 || tool_calls > 0;
             SubagentResult {
