@@ -1,9 +1,9 @@
 //! Frame rendering for [`AgentView`]: the `draw` entry point plus shortcut
 //! hints and the subagent fullscreen view.
 use super::{
-    ActivePane, AgentPane, AgentView, AgentViewLayout, CtaPhase, InlineMediaHitAreas,
-    MODE_BANNER_FADE_TICKS, PromptMode, collect_citation_links, dropdown_items_width,
-    record_dot_pulse, render_dropdown_chrome, supports_osc22,
+    ActivePane, AgentPane, AgentView, AgentViewLayout, BlockingCard, CtaPhase, EscStep,
+    InlineMediaHitAreas, KeyOwner, MODE_BANNER_FADE_TICKS, PromptMode, collect_citation_links,
+    dropdown_items_width, record_dot_pulse, render_dropdown_chrome, supports_osc22,
 };
 use crate::actions::{ActionId, ActionRegistry};
 use crate::key;
@@ -51,6 +51,16 @@ pub struct AppRenderParams<'a> {
     /// attached-agent popup). Feeds the hint path so the bar never
     /// advertises `Esc cancel` while an app-level owner would consume it.
     pub esc_owned_before_agent: bool,
+}
+/// What the bottom shortcuts bar renders this frame.
+enum ShortcutsBarContent {
+    /// A blocking surface's own keys, rendered as given.
+    Surface(Vec<HintItem>),
+    /// The focused pane's keys, trimmed to the compact bar with the
+    /// cheatsheet hint appended.
+    Pane(Vec<HintItem>),
+    /// Nothing: the row belongs to a surface that paints it itself.
+    Hidden,
 }
 impl AgentView {
     pub(crate) fn update_scrollback_selection_state(
@@ -128,36 +138,96 @@ impl AgentView {
                     ]
                 }
             }
-            PlanApprovalFocus::Preview => vec![HintItem::new(key!('y'), "copy plan")],
+            PlanApprovalFocus::Preview => {
+                vec![
+                    HintItem::new(key!('y'), "copy plan"),
+                    HintItem::new(key!(Tab), "prompt"),
+                ]
+            }
         }
     }
-    /// Shortcut hints for an open `ask_user_question` card.
+    /// The `Esc` hint for the focused card, named by the rung the key actually
+    /// takes ([`EscStep`]).
+    fn card_esc_hint(&self) -> HintItem {
+        HintItem::new(key!(Esc), self.card_esc().map_or("back", EscStep::label))
+    }
     fn question_shortcut_hints(
         &self,
         qv: &crate::views::question_view::QuestionViewState,
     ) -> Vec<HintItem> {
         use crate::views::question_view::QuestionFocus;
+        let esc = self.card_esc_hint();
         match qv.focus {
             QuestionFocus::InputMode if self.prompt.file_search_visible() => {
                 vec![
                     HintItem::paired(key!(Up), key!(Down), "nav"),
                     HintItem::new(key!(Tab), "accept"),
                     HintItem::new(key!(Right), "drill"),
-                    HintItem::new(key!(Esc), "dismiss"),
+                    esc,
                 ]
             }
-            QuestionFocus::InputMode => {
-                vec![
-                    HintItem::new(key!(Enter), "submit"),
-                    HintItem::new(key!(Esc), "back"),
-                ]
-            }
+            QuestionFocus::InputMode => vec![HintItem::new(key!(Enter), "submit"), esc],
             QuestionFocus::Navigation => {
                 vec![
                     HintItem::new(key!(Tab), "next answer"),
-                    HintItem::new(key!(Esc), "unselect"),
+                    esc,
                     HintItem::new(key!('X'), "dismiss"),
                 ]
+            }
+        }
+    }
+    fn permission_shortcut_hints(
+        &self,
+        perm: &crate::views::permission_view::PermissionViewState,
+    ) -> Vec<HintItem> {
+        use crate::views::permission_view::PermissionFocus;
+        let perm_content_w = self
+            .pane_areas
+            .prompt
+            .width
+            .saturating_sub(QUESTION_VIEW_HPAD) as usize;
+        let ctrl_f_hint = perm.has_collapsible_display(perm_content_w).then(|| {
+            let label = if perm.args_expanded {
+                "collapse"
+            } else {
+                "expand"
+            };
+            HintItem::new(key!('f', CONTROL), label)
+        });
+        match perm.focus {
+            PermissionFocus::FollowupInput => {
+                let mut hints = vec![HintItem::new(key!(Enter), "send")];
+                hints.extend(ctrl_f_hint);
+                hints.push(self.card_esc_hint());
+                hints
+            }
+            PermissionFocus::PatternEdit => {
+                let mut hints = vec![HintItem::new(key!(Enter), "save")];
+                hints.extend(ctrl_f_hint);
+                hints.push(self.card_esc_hint());
+                hints
+            }
+            PermissionFocus::Options => {
+                use crate::input::key::KeyShortcut;
+                use crossterm::event::{KeyCode, KeyModifiers};
+                let n = perm.options.len().min(9) as u8;
+                let last_ch = char::from(b'0' + n.max(1));
+                let last_key = KeyShortcut::new(KeyCode::Char(last_ch), KeyModifiers::NONE);
+                let mut hints = vec![HintItem::paired(key!('1'), last_key, "select")];
+                if perm.options.len() > 1 {
+                    hints.push(HintItem::new(key!(Tab), "next option"));
+                }
+                if perm.has_adjustable_scope() {
+                    hints.push(HintItem::paired(key!(Left), key!(Right), "scope"));
+                }
+                if perm.has_editable_bash_pattern() {
+                    hints.push(HintItem::new(key!('e'), "edit pattern"));
+                }
+                hints.extend(ctrl_f_hint);
+                hints.push(HintItem::new(key!('o', CONTROL), "always-approve"));
+                hints.push(HintItem::new(key!('c', CONTROL), "cancel"));
+                hints.push(self.card_esc_hint());
+                hints
             }
         }
     }
@@ -182,92 +252,85 @@ impl AgentView {
         registry: &ActionRegistry,
         esc_owned_before_agent: bool,
     ) -> Vec<HintItem> {
-        use crate::views::shortcuts_bar::HintItem;
-        if let Some(ref viewer) = self.block_viewer {
-            viewer.shortcuts_hints()
-        } else if !self.permission_queue.is_empty() {
-            use crate::views::permission_view::PermissionFocus;
-            if let Some(perm) = self.permission_queue.front() {
-                match perm.focus {
-                    PermissionFocus::FollowupInput => {
-                        vec![
-                            HintItem::new(key!(Enter), "send"),
-                            HintItem::new(key!(Esc), "back"),
-                        ]
-                    }
-                    PermissionFocus::PatternEdit => {
-                        vec![
-                            HintItem::new(key!(Enter), "save"),
-                            HintItem::new(key!(Esc), "cancel"),
-                        ]
-                    }
-                    PermissionFocus::Options => {
-                        use crate::input::key::KeyShortcut;
-                        use crossterm::event::{KeyCode, KeyModifiers};
-                        let n = perm.options.len().min(9) as u8;
-                        let last_ch = char::from(b'0' + n.max(1));
-                        let last_key = KeyShortcut::new(KeyCode::Char(last_ch), KeyModifiers::NONE);
-                        let mut hints = vec![HintItem::paired(key!('1'), last_key, "select")];
-                        if perm.has_adjustable_scope() {
-                            hints.push(HintItem::paired(key!(Left), key!(Right), "scope"));
-                        }
-                        if perm.has_editable_bash_pattern() {
-                            hints.push(HintItem::new(key!('e'), "edit pattern"));
-                        }
-                        if !perm.description.is_empty() {
-                            let label = if perm.args_expanded {
-                                "collapse"
-                            } else {
-                                "expand"
-                            };
-                            hints.push(HintItem::new(key!('f', CONTROL), label));
-                        }
-                        hints.push(HintItem::new(key!('o', CONTROL), "always-approve"));
-                        hints.push(HintItem::new(key!('c', CONTROL), "cancel"));
-                        hints
-                    }
-                }
-            } else {
-                unreachable!("permission_queue non-empty per outer guard")
-            }
-        } else if let Some(ref pav) = self.plan_approval_view {
-            self.plan_approval_shortcut_hints(pav)
-        } else if self.line_viewer.is_some() && self.is_plan_viewer() {
-            let suppress_shortcuts = self
-                .line_viewer
-                .as_ref()
-                .is_some_and(|v| v.fullscreen && v.list_state.input_mode().is_some());
-            if suppress_shortcuts {
-                vec![]
-            } else if self.is_casual_commenting() {
-                vec![
-                    HintItem::new(key!(Enter), "save comment"),
-                    HintItem::new(key!(Esc), "cancel"),
-                ]
-            } else {
-                let mut h = vec![
-                    HintItem::new(key!('c'), "comment"),
-                    HintItem::new(key!('y'), "copy plan"),
-                    HintItem::new(key!('f', CONTROL), "fullscreen"),
-                ];
-                if !self.plan_comments.is_empty() {
-                    h.push(HintItem::new(key!('s'), "send"));
-                }
-                h.push(HintItem::new(key!(Esc), "close"));
-                h
-            }
-        } else if let Some(ref qv) = self.question_view {
-            self.question_shortcut_hints(qv)
-        } else if self.cancel_turn_view.is_some() {
-            vec![
-                HintItem::paired(key!('1'), key!('4'), "select"),
-                HintItem::new(key!(Enter), "confirm"),
-                HintItem::new(key!(Esc), "keep running"),
-                HintItem::new(key!(Tab), "scrollback"),
-            ]
-        } else {
-            self.normal_pane_hints(registry, esc_owned_before_agent)
+        match self.shortcuts_bar_content(registry, esc_owned_before_agent) {
+            ShortcutsBarContent::Surface(hints) | ShortcutsBarContent::Pane(hints) => hints,
+            ShortcutsBarContent::Hidden => vec![],
         }
+    }
+    fn plan_approval_bar(
+        &self,
+        pav: &crate::views::plan_approval_view::PlanApprovalViewState,
+    ) -> ShortcutsBarContent {
+        let hints = self.plan_approval_shortcut_hints(pav);
+        if hints.is_empty() {
+            ShortcutsBarContent::Hidden
+        } else {
+            ShortcutsBarContent::Surface(hints)
+        }
+    }
+    /// The bar names the surface the keys actually reach, so it asks
+    /// [`AgentView::key_owner`] rather than keeping an order of its own.
+    fn shortcuts_bar_content(
+        &self,
+        registry: &ActionRegistry,
+        esc_owned_before_agent: bool,
+    ) -> ShortcutsBarContent {
+        use crate::views::shortcuts_bar::HintItem;
+        match self.key_owner() {
+            KeyOwner::LineViewer => self.line_viewer_bar(),
+            KeyOwner::BlockViewer => ShortcutsBarContent::Surface(
+                self.block_viewer
+                    .as_ref()
+                    .map(|viewer| viewer.shortcuts_hints())
+                    .unwrap_or_default(),
+            ),
+            KeyOwner::Card(BlockingCard::Permission) => ShortcutsBarContent::Surface(
+                self.focused_permission()
+                    .map(|perm| self.permission_shortcut_hints(perm))
+                    .unwrap_or_default(),
+            ),
+            KeyOwner::PlanApproval => self
+                .plan_approval_view
+                .as_ref()
+                .map_or(ShortcutsBarContent::Hidden, |pav| {
+                    self.plan_approval_bar(pav)
+                }),
+            KeyOwner::Card(BlockingCard::CancelTurn) => ShortcutsBarContent::Surface(vec![
+                HintItem::paired(key!('1'), key!('4'), "select"),
+                HintItem::new(key!(Tab), "next choice"),
+                HintItem::new(key!(Enter), "confirm"),
+                self.card_esc_hint(),
+            ]),
+            KeyOwner::Card(BlockingCard::Question) => ShortcutsBarContent::Surface(
+                self.focused_question()
+                    .map(|qv| self.question_shortcut_hints(qv))
+                    .unwrap_or_default(),
+            ),
+            KeyOwner::Pane => {
+                ShortcutsBarContent::Pane(self.normal_pane_hints(registry, esc_owned_before_agent))
+            }
+        }
+    }
+    /// An open line viewer paints its own hints over this row further down
+    /// `draw`, so the bar is silent — except in the two states where the
+    /// viewer defers: the plan-approval prompt, whose keys the viewer's
+    /// intercept forwards, and a casual comment draft.
+    fn line_viewer_bar(&self) -> ShortcutsBarContent {
+        use crate::views::shortcuts_bar::HintItem;
+        if let Some(pav) = self
+            .plan_approval_view
+            .as_ref()
+            .filter(|pav| pav.focus != PlanApprovalFocus::Preview)
+        {
+            return self.plan_approval_bar(pav);
+        }
+        if self.is_casual_commenting() {
+            return ShortcutsBarContent::Surface(vec![
+                HintItem::new(key!(Enter), "save comment"),
+                HintItem::new(key!(Esc), "cancel"),
+            ]);
+        }
+        ShortcutsBarContent::Hidden
     }
     /// Shared "normal pane" hints: flag computation + `build_hints` + queue hint.
     /// Single source of truth for the two former duplicated blocks in
@@ -385,6 +448,8 @@ impl AgentView {
         let selected_is_credit_limit = selected_entry.is_some_and(|e| e.block.is_credit_limit());
         let mut hints = agent::build_hints(
             self.active_pane,
+            self.parked_card()
+                .map_or_else(agent::prompt_focus_hint, BlockingCard::focus_hint),
             &self.prompt,
             registry,
             is_editing,
@@ -419,6 +484,25 @@ impl AgentView {
             && let Some(def) = registry.find(ActionId::ToggleQueue)
         {
             hints.push(def.hint());
+        }
+        if self.in_dashboard_overlay {
+            hints.insert(
+                0,
+                HintItem::new(
+                    registry
+                        .find(ActionId::DashboardOverlayStop)
+                        .map(|def| def.default_key)
+                        .unwrap_or(key!('x', CONTROL)),
+                    "stop",
+                ),
+            );
+            if self.overlay_can_cycle {
+                hints.insert(
+                    0,
+                    HintItem::paired(key!('[', CONTROL), key!(']', CONTROL), "prev/next agent"),
+                );
+            }
+            hints.insert(0, HintItem::new(key!('\\', CONTROL), "dashboard"));
         }
         hints
     }
@@ -721,6 +805,7 @@ impl AgentView {
         } = app_params;
         self.scrollback.begin_frame();
         self.in_dashboard_overlay = in_dashboard_overlay;
+        self.overlay_can_cycle = overlay_can_cycle;
         let super::BannerSlotParams {
             height: banner_height,
             announcements: banner_announcements,
@@ -3187,145 +3272,29 @@ impl AgentView {
             self.pane_areas = layout.pane_areas();
             return (None, crate::terminal::overlay::clear().map(Into::into));
         }
-        if let Some(ref viewer) = self.block_viewer {
-            let hints = viewer.shortcuts_hints();
-            ShortcutsBar::new(&hints)
-                .with_pending(pending_hint)
-                .render(layout.shortcuts, buf);
-        } else if !self.permission_queue.is_empty() {
-            use crate::views::permission_view::PermissionFocus;
-            use crate::views::shortcuts_bar::HintItem;
-            let hints = if let Some(perm) = self.permission_queue.front() {
-                match perm.focus {
-                    PermissionFocus::FollowupInput => {
-                        vec![
-                            HintItem::new(key!(Enter), "send"),
-                            HintItem::new(key!(Esc), "back"),
-                        ]
-                    }
-                    PermissionFocus::PatternEdit => {
-                        vec![
-                            HintItem::new(key!(Enter), "save"),
-                            HintItem::new(key!(Esc), "cancel"),
-                        ]
-                    }
-                    PermissionFocus::Options => {
-                        use crate::input::key::KeyShortcut;
-                        use crossterm::event::{KeyCode, KeyModifiers};
-                        let n = perm.options.len().min(9) as u8;
-                        let last_ch = char::from(b'0' + n.max(1));
-                        let last_key = KeyShortcut::new(KeyCode::Char(last_ch), KeyModifiers::NONE);
-                        let mut hints = vec![HintItem::paired(key!('1'), last_key, "select")];
-                        if perm.has_adjustable_scope() {
-                            hints.push(HintItem::paired(key!(Left), key!(Right), "scope"));
-                        }
-                        if perm.has_editable_bash_pattern() {
-                            hints.push(HintItem::new(key!('e'), "edit pattern"));
-                        }
-                        if !perm.description.is_empty() {
-                            let label = if perm.args_expanded {
-                                "collapse"
-                            } else {
-                                "expand"
-                            };
-                            hints.push(HintItem::new(key!('f', CONTROL), label));
-                        }
-                        hints.push(HintItem::new(key!('o', CONTROL), "always-approve"));
-                        hints.push(HintItem::new(key!('c', CONTROL), "cancel"));
-                        hints
-                    }
-                }
-            } else {
-                vec![]
-            };
-            ShortcutsBar::new(&hints)
-                .with_pending(pending_hint)
-                .render(layout.shortcuts, buf);
-        } else if let Some(ref pav) = self.plan_approval_view {
-            let hints = self.plan_approval_shortcut_hints(pav);
-            if !hints.is_empty() {
+        match self.shortcuts_bar_content(registry, esc_owned_before_agent) {
+            ShortcutsBarContent::Hidden => {}
+            ShortcutsBarContent::Surface(hints) => {
                 ShortcutsBar::new(&hints)
                     .with_pending(pending_hint)
                     .render(layout.shortcuts, buf);
             }
-        } else if self.line_viewer.is_some() && self.is_plan_viewer() {
-            let suppress_shortcuts = self
-                .line_viewer
-                .as_ref()
-                .is_some_and(|v| v.fullscreen && v.list_state.input_mode().is_some());
-            if !suppress_shortcuts {
-                use crate::views::shortcuts_bar::HintItem;
-                let hints = if self.is_casual_commenting() {
-                    vec![
-                        HintItem::new(key!(Enter), "save comment"),
-                        HintItem::new(key!(Esc), "cancel"),
-                    ]
-                } else {
-                    let mut h = vec![
-                        HintItem::new(key!('c'), "comment"),
-                        HintItem::new(key!('y'), "copy plan"),
-                        HintItem::new(key!('f', CONTROL), "fullscreen"),
-                    ];
-                    if !self.plan_comments.is_empty() {
-                        h.push(HintItem::new(key!('s'), "send"));
+            ShortcutsBarContent::Pane(hints) => {
+                let help_hint = registry.find(ActionId::ShortcutsHelp).map(|def| {
+                    let mut hint = def.hint();
+                    if in_dashboard_overlay
+                        && def.default_key == key!('x', CONTROL)
+                        && let Some(alt) = def.alt_keys.first()
+                    {
+                        hint.keys = vec![*alt];
                     }
-                    h.push(HintItem::new(key!(Esc), "close"));
-                    h
-                };
+                    hint
+                });
                 ShortcutsBar::new(&hints)
+                    .compact(5, help_hint)
                     .with_pending(pending_hint)
                     .render(layout.shortcuts, buf);
             }
-        } else if let Some(ref qv) = self.question_view {
-            let hints = self.question_shortcut_hints(qv);
-            ShortcutsBar::new(&hints).render(layout.shortcuts, buf);
-        } else if self.cancel_turn_view.is_some() {
-            use crate::views::shortcuts_bar::HintItem;
-            let hints = vec![
-                HintItem::paired(key!('1'), key!('4'), "select"),
-                HintItem::new(key!(Enter), "confirm"),
-                HintItem::new(key!(Esc), "keep running"),
-                HintItem::new(key!(Tab), "scrollback"),
-            ];
-            ShortcutsBar::new(&hints)
-                .with_pending(pending_hint)
-                .render(layout.shortcuts, buf);
-        } else {
-            let mut hints = self.normal_pane_hints(registry, esc_owned_before_agent);
-            if in_dashboard_overlay {
-                use crate::views::shortcuts_bar::HintItem;
-                hints.insert(
-                    0,
-                    HintItem::new(
-                        registry
-                            .find(ActionId::DashboardOverlayStop)
-                            .map(|def| def.default_key)
-                            .unwrap_or(key!('x', CONTROL)),
-                        "stop",
-                    ),
-                );
-                if overlay_can_cycle {
-                    hints.insert(
-                        0,
-                        HintItem::paired(key!('[', CONTROL), key!(']', CONTROL), "prev/next agent"),
-                    );
-                }
-                hints.insert(0, HintItem::new(key!('\\', CONTROL), "dashboard"));
-            }
-            let help_hint = registry.find(ActionId::ShortcutsHelp).map(|def| {
-                let mut hint = def.hint();
-                if in_dashboard_overlay
-                    && def.default_key == key!('x', CONTROL)
-                    && let Some(alt) = def.alt_keys.first()
-                {
-                    hint.keys = vec![*alt];
-                }
-                hint
-            });
-            ShortcutsBar::new(&hints)
-                .compact(5, help_hint)
-                .with_pending(pending_hint)
-                .render(layout.shortcuts, buf);
         }
         let line_viewer_toast = self.active_toast_message().map(|s| s.to_string());
         let is_plan_viewer = self.is_plan_viewer();
@@ -4489,8 +4458,8 @@ mod selection_state_tests {
 }
 #[cfg(test)]
 mod voice_recording_overlay_tests {
-    use super::super::paste::paste_key_tests::make_plan_approval_view_state;
     use super::super::test_fixtures::make_agent;
+    use super::super::test_fixtures::make_plan_approval_view_state;
     use super::AgentView;
     use crate::actions::ActionRegistry;
     use crate::app::bundle::BundleState;
@@ -4698,5 +4667,78 @@ mod overlay_post_flush_tests {
         post_flush.write_to(&mut Vec::new()).unwrap();
         let after_emit = crate::terminal::overlay::static_image(&png(), 20, 10, 0, 0, 42).unwrap();
         assert!(after_emit.as_str().contains("a=t"));
+    }
+}
+#[cfg(test)]
+mod permission_hint_tests {
+    use super::super::test_fixtures::{make_agent, make_followup_permission_state};
+    use crate::views::permission_view::PermissionFocus;
+    use agent_client_protocol as acp;
+    use ratatui::layout::Rect;
+    use std::sync::Arc;
+    const ALL_FOCUSES: [PermissionFocus; 3] = [
+        PermissionFocus::Options,
+        PermissionFocus::FollowupInput,
+        PermissionFocus::PatternEdit,
+    ];
+    /// The footer Ctrl-F hint must track the key exactly: shown in every
+    /// focus mode when something is collapsible (the key fires before the
+    /// focus match), absent for protected-edit warning descriptions.
+    #[test]
+    fn ctrl_f_hint_follows_the_key_in_every_focus_mode() {
+        let mut agent = make_agent();
+        agent.pane_areas.prompt = Rect::new(0, 20, 80, 10);
+        let mut perm = make_followup_permission_state();
+        perm.bash_command_raw = Some(
+            (0..12)
+                .map(|i| format!("echo line{i}"))
+                .collect::<Vec<_>>()
+                .join("\n"),
+        );
+        for focus in ALL_FOCUSES {
+            perm.focus = focus;
+            let hints = agent.permission_shortcut_hints(&perm);
+            assert!(
+                hints.iter().any(|h| h.label == "expand"),
+                "missing Ctrl-F hint in {focus:?}"
+            );
+        }
+        perm.args_expanded = true;
+        assert!(
+            agent
+                .permission_shortcut_hints(&perm)
+                .iter()
+                .any(|h| h.label == "collapse")
+        );
+        perm.args_expanded = false;
+        perm.bash_command_raw = None;
+        perm.description = vec!["Warning: this file is protected".into()];
+        perm.options = vec![acp::PermissionOption::new(
+            acp::PermissionOptionId::new(Arc::from(
+                xai_grok_workspace::permission::ALLOW_EDITS_SESSION_OPTION_ID,
+            )),
+            "Allow all edits this session".to_owned(),
+            acp::PermissionOptionKind::AllowAlways,
+        )];
+        for focus in ALL_FOCUSES {
+            perm.focus = focus;
+            let hints = agent.permission_shortcut_hints(&perm);
+            assert!(
+                !hints
+                    .iter()
+                    .any(|h| h.label == "expand" || h.label == "collapse"),
+                "protected-edit must not advertise Ctrl-F in {focus:?}"
+            );
+        }
+        perm.options.clear();
+        perm.description = vec!["{".into(), "  \"k\": 1".into(), "}".into()];
+        for focus in ALL_FOCUSES {
+            perm.focus = focus;
+            let hints = agent.permission_shortcut_hints(&perm);
+            assert!(
+                hints.iter().any(|h| h.label == "expand"),
+                "missing Ctrl-F hint for scope-less MCP args in {focus:?}"
+            );
+        }
     }
 }
