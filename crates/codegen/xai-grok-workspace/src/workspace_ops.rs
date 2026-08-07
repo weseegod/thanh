@@ -264,7 +264,7 @@ const REPOS_MANIFEST_MAX_ANCESTOR_HOPS: usize = 16;
 /// Directories to probe for [`REPOS_MANIFEST_RELATIVE_PATH`], starting at
 /// `root_cwd` (post-grove-rewrite agent cwd) and walking up.
 ///
-/// Does not escape the sandbox workspace or load `~/.grok/repos.json` /
+/// Does not escape the sandbox workspace or load `~/.thanh/repos.json` /
 /// `$GROK_HOME/repos.json` (user-global, not a provisioned workspace).
 fn repos_manifest_search_dirs(start: &std::path::Path) -> Vec<std::path::PathBuf> {
     let rel = xai_grok_workspace_types::rpc::repos::REPOS_MANIFEST_RELATIVE_PATH;
@@ -1849,7 +1849,7 @@ mod tests {
         let listed = rt.block_on(ops.repos_list()).expect("list");
         assert!(
             listed.repos.is_empty(),
-            "missing workspace manifest must not fall back to ~/.grok/repos.json: {:?}",
+            "missing workspace manifest must not fall back to ~/.thanh/repos.json: {:?}",
             listed.repos
         );
     }

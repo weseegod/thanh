@@ -11,7 +11,7 @@ const CLAUDE_MANAGED_SETTINGS_PATH: &str =
 #[cfg(target_os = "linux")]
 const CLAUDE_MANAGED_SETTINGS_PATH: &str = "/etc/claude-code/managed-settings.json";
 
-/// The default user grok directory (`~/.grok`, canonicalized) used when
+/// The default fork home directory (`~/.thanh`, canonicalized) used when
 /// `GROK_HOME` is unset. Exposed so callers (e.g. display helpers) can detect
 /// whether [`grok_home()`] is the default without duplicating the computation.
 ///
@@ -19,19 +19,23 @@ const CLAUDE_MANAGED_SETTINGS_PATH: &str = "/etc/claude-code/managed-settings.js
 /// Windows, std returns a verbatim path (`\\?\C:\Users\...`) which external
 /// tools choke on — e.g. `git clone` rejects `\\?\` destinations with
 /// "Invalid argument", breaking marketplace cache clones under
-/// `~/.grok/marketplace-cache`. `dunce` strips the prefix whenever the path
+/// `~/.thanh/marketplace-cache`. `dunce` strips the prefix whenever the path
 /// is safely representable in legacy form; on non-Windows it is identical to
 /// `std::fs::canonicalize`.
 ///
 /// Keep the dunce canonicalization in sync with the hand-rolled duplicate in
 /// `xai_fast_worktree::db::resolve_grok_home` (deliberately standalone crate).
+///
+/// Fork-specific: the home is `~/.thanh` (not upstream's `~/.grok`) so the
+/// fork keeps its own config, auth, sessions, binaries and caches completely
+/// separate from an official grok install running in parallel.
 pub fn default_grok_home() -> PathBuf {
     #[allow(deprecated)]
     let home = std::env::home_dir().unwrap_or_else(|| PathBuf::from("."));
-    dunce::canonicalize(&home).unwrap_or(home).join(".grok")
+    dunce::canonicalize(&home).unwrap_or(home).join(".thanh")
 }
 
-/// Per-user config directory: `$GROK_HOME` or `~/.grok`. Created if needed.
+/// Per-user config directory: `$GROK_HOME` or `~/.thanh`. Created if needed.
 pub fn grok_home() -> PathBuf {
     GROK_HOME
         .get_or_init(|| {
@@ -57,14 +61,19 @@ pub fn user_grok_home() -> Option<PathBuf> {
     resolvable.then(grok_home)
 }
 
-/// Canonical grok application path: `$GROK_HOME/bin/grok` (Unix) or `grok.exe` (Windows).
+/// Canonical fork application path: `$GROK_HOME/bin/thanh` (Unix) or
+/// `thanh.exe` (Windows).
+///
+/// Fork-specific: the managed binary is named `thanh` (not upstream's `grok`)
+/// so the fork never clobbers the official grok CLI's `bin/` entry point —
+/// the fork lives in its own `~/.thanh` home anyway.
 pub fn grok_application() -> PathBuf {
     grok_application_in(&grok_home())
 }
 
 /// [`grok_application`] under an explicit home instead of `$GROK_HOME`.
 pub fn grok_application_in(home: &std::path::Path) -> PathBuf {
-    let name = if cfg!(windows) { "grok.exe" } else { "grok" };
+    let name = if cfg!(windows) { "thanh.exe" } else { "thanh" };
     home.join("bin").join(name)
 }
 
@@ -312,7 +321,7 @@ mod tests {
         // canonicalization must yield a plain path. No-op assertion on Unix.
         let home = default_grok_home();
         assert!(!home.to_string_lossy().starts_with(r"\\?\"));
-        assert!(home.ends_with(".grok"));
+        assert!(home.ends_with(".thanh"));
     }
 
     #[test]

@@ -228,7 +228,7 @@ impl WorktreeDb {
             .with_context(|| format!("failed to set journal mode {}", mode.as_str()))
     }
 
-    /// Open the default DB at `~/.grok/worktrees.db`.
+    /// Open the default DB at `~/.thanh/worktrees.db`.
     ///
     /// Discovers grok home via `$GROK_HOME`, falling back to the canonicalized
     /// `$HOME/.grok` (matching `xai_grok_config::grok_home`).
@@ -471,11 +471,12 @@ pub fn resolve_grok_home() -> Result<PathBuf> {
         return Ok(PathBuf::from(v));
     }
     let home = PathBuf::from(std::env::var("HOME").context("neither $GROK_HOME nor $HOME is set")?);
-    // Canonicalize the home dir so worktree paths share the same physical .grok
-    // tree as trust/hooks even when it is symlinked. The dunce canonicalization
-    // must stay in sync with xai_grok_config::default_grok_home();
+    // Canonicalize the home dir so worktree paths share the same physical
+    // .thanh tree as trust/hooks even when it is symlinked. The dunce
+    // canonicalization must stay in sync with xai_grok_config::default_grok_home();
     // home resolution deliberately differs ($HOME here vs std::env::home_dir()).
-    Ok(dunce::canonicalize(&home).unwrap_or(home).join(".grok"))
+    // Fork-specific: `.thanh` (not upstream's `.grok`) — see paths.rs.
+    Ok(dunce::canonicalize(&home).unwrap_or(home).join(".thanh"))
 }
 
 /// Serializes tests that mutate the process-global `GROK_HOME` env var so they

@@ -2,7 +2,7 @@
 //! `workspace_server` binary: loopback `ws://` uses a plain bearer, otherwise
 //! an auto-refreshing OIDC provider that persists rotated tokens to disk.
 //!
-//! The in-leader `grok workspace` exposure does NOT use this path — it sources
+//! The in-leader `thanh workspace` exposure does NOT use this path — it sources
 //! an in-memory provider from the leader's `AuthManager` (see
 //! `LeaderAuthProvider`) to avoid racing the leader's own auth.json writer.
 
@@ -88,7 +88,7 @@ pub fn default_auth_path() -> anyhow::Result<PathBuf> {
 fn read_auth_entry(path: &Path) -> anyhow::Result<(String, AuthEntry)> {
     if !path.exists() {
         anyhow::bail!(
-            "No auth credentials found at {}. Run `grok login` first.",
+            "No auth credentials found at {}. Run `thanh login` first.",
             path.display()
         );
     }
@@ -110,7 +110,7 @@ fn read_auth_entry(path: &Path) -> anyhow::Result<(String, AuthEntry)> {
         })
         .ok_or_else(|| {
             anyhow::anyhow!(
-                "no OIDC auth entry found in {}. Run `grok login` first.",
+                "no OIDC auth entry found in {}. Run `thanh login` first.",
                 path.display()
             )
         })

@@ -154,7 +154,7 @@ pub async fn run_http_hook(
     let expanded_url = crate::env_expand::expand_env_vars_with_extra(raw_url, &spec.extra_env);
     let url: &str = &expanded_url;
     // Prefer the pre-expansion source for logs so resolved `env` secrets don't
-    // reach `~/.grok/logs`; threaded into the reqwest error format below so
+    // reach `~/.thanh/logs`; threaded into the reqwest error format below so
     // reqwest's default `Display` (which appends the URL) can't bypass it.
     let log_url: &str = spec.url_raw.as_deref().unwrap_or(url);
 

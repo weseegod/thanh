@@ -35,7 +35,7 @@ fn is_container_no_display() -> bool {
 
 /// Cached result of the "an upstream OSC 52 sink is capturing our output" check.
 ///
-/// `grok wrap` runs a command inside a local PTY, scans its output for OSC 52
+/// `thanh wrap` runs a command inside a local PTY, scans its output for OSC 52
 /// clipboard sequences, and writes their payload to the *real* (local) system
 /// clipboard (see `xai-grok-pager`'s `pty_wrap` module). It advertises this to
 /// the wrapped program via an environment variable so the
@@ -151,7 +151,7 @@ fn resolve_clipboard_route_with(ctx: &TerminalContext, no_osc52: bool) -> Clipbo
     // Linux: always emit OSC 52 as a safety net. This matches other
     // terminal agent CLIs which emit OSC 52 on every copy.
     // macOS/Windows: only in tmux/SSH/container contexts, or when an
-    // upstream `grok wrap` sink is capturing our output and will forward
+    // upstream `thanh wrap` sink is capturing our output and will forward
     // the sequence to the real clipboard.
     // `GROK_CLIPBOARD_NO_OSC52` wins over every automatic path.
     let osc52 = !no_osc52
@@ -362,7 +362,7 @@ impl ClipboardFeedback {
             Self::CopiedOscContainer => "Copied via OSC 52 from the container.",
             Self::CopiedOscRemote => "Copied via OSC 52.",
             Self::UnverifiedOscRemote | Self::UnverifiedOscContainer => {
-                "Copy sent. If paste fails, use grok wrap or /minimal."
+                "Copy sent. If paste fails, use thanh wrap or /minimal."
             }
             Self::VsCodeSshNonAscii => {
                 "Copied. VS Code over SSH may garble non-ASCII; use /minimal if needed."
@@ -507,7 +507,7 @@ impl CopyDelivery {
 /// Default path for the always-written copy backup file.
 ///
 /// Override with [`GROK_COPY_FILE_ENV`] (supports `~`). Otherwise
-/// `~/.grok/last-copy.txt` (grok's per-user home — short, stable, and
+/// `~/.thanh/last-copy.txt` (grok's per-user home — short, stable, and
 /// readable in a toast, unlike macOS's `/var/folders/...` temp dir).
 ///
 /// `None` when no grok home resolves and the env var is unset: rather than
@@ -527,7 +527,7 @@ pub fn default_copy_fallback_path() -> Option<std::path::PathBuf> {
 
 /// Render a backup-file path for user-facing messages using the codebase-wide
 /// abbreviation convention ([`crate::util::abbreviate_path`]): a grok-home
-/// prefix collapses to `~/.grok` (or `$GROK_HOME` when overridden), and a
+/// prefix collapses to `~/.thanh` (or `$GROK_HOME` when overridden), and a
 /// plain home prefix collapses to `~` — so toasts stay short.
 pub fn display_copy_path(path: &std::path::Path) -> String {
     crate::util::abbreviate_path(&path.to_string_lossy()).into_owned()
@@ -584,7 +584,7 @@ fn write_owner_only(path: &std::path::Path, text: &str) -> std::io::Result<()> {
 ///
 /// On Unix a missing parent directory is created `0700` (a custom
 /// `GROK_COPY_FILE` may point at a not-yet-created private directory;
-/// `~/.grok` normally already exists).
+/// `~/.thanh` normally already exists).
 pub fn write_copy_fallback(text: &str) -> std::io::Result<std::path::PathBuf> {
     let Some(path) = default_copy_fallback_path() else {
         return Err(std::io::Error::new(
@@ -631,7 +631,7 @@ fn resolve_delivery(
 /// (Claude Code parity: every copy lands in a file too).
 ///
 /// The file is the recovery path for terminals that cannot reach the local
-/// clipboard over SSH (notably Apple Terminal without `grok wrap`); a failed
+/// clipboard over SSH (notably Apple Terminal without `thanh wrap`); a failed
 /// file write never fails a copy whose clipboard leg succeeded.
 pub fn copy_text_or_file(text: &str) -> CopyDelivery {
     let clipboard = copy_text(text);
@@ -2041,14 +2041,14 @@ mod tests {
             (
                 ClipboardFeedback::UnverifiedOscRemote,
                 ClipboardDelivery::Unverified,
-                "Copy sent. If paste fails, use grok wrap or /minimal.",
+                "Copy sent. If paste fails, use thanh wrap or /minimal.",
                 "unverified_osc_remote",
                 120,
             ),
             (
                 ClipboardFeedback::UnverifiedOscContainer,
                 ClipboardDelivery::Unverified,
-                "Copy sent. If paste fails, use grok wrap or /minimal.",
+                "Copy sent. If paste fails, use thanh wrap or /minimal.",
                 "unverified_osc_container",
                 120,
             ),
@@ -2170,7 +2170,7 @@ mod tests {
         assert_eq!(std::fs::read_to_string(&custom).expect("read"), "payload");
     }
 
-    /// Without `GROK_COPY_FILE`, the default is `~/.grok/last-copy.txt`
+    /// Without `GROK_COPY_FILE`, the default is `~/.thanh/last-copy.txt`
     /// (grok home) — short and toast-friendly, unlike macOS's temp dir.
     #[test]
     #[serial_test::serial(grok_copy_file)]
@@ -2194,8 +2194,8 @@ mod tests {
         if std::env::var_os("GROK_HOME").is_none() {
             let home = dirs::home_dir().expect("home resolves in tests");
             assert_eq!(
-                display_copy_path(&home.join(".grok").join("last-copy.txt")),
-                "~/.grok/last-copy.txt"
+                display_copy_path(&home.join(".thanh").join("last-copy.txt")),
+                "~/.thanh/last-copy.txt"
             );
         }
         // Non-home paths pass through untouched — including multi-byte

@@ -50,7 +50,7 @@ async fn unknown_ssh_clipboard_delivery_is_unverified() {
         &[
             EnvOp::set("SSH_CONNECTION", "scripted-test 1 127.0.0.1 2"),
             // Model the no-wrap-sink path even when the parent test process was
-            // launched under `grok wrap`.
+            // launched under `thanh wrap`.
             EnvOp::remove("GROK_OSC52_SINK"),
             EnvOp::remove("LC_GROK_OSC52_SINK"),
         ],
@@ -102,7 +102,7 @@ async fn unknown_ssh_clipboard_delivery_is_unverified() {
         .wait_for_text("clipboard.delivery-unverified", Duration::from_secs(10))
         .expect("named clipboard finding");
     harness
-        .wait_for_text("grok wrap ssh <host>", Duration::from_secs(10))
+        .wait_for_text("thanh wrap ssh <host>", Duration::from_secs(10))
         .expect("doctor-owned wrapped SSH guidance");
     assert!(!harness.contains_text("Copy failed"));
     assert!(!harness.contains_text("panicked"));

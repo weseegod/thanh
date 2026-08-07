@@ -2264,9 +2264,9 @@ mod tests {
         assert!(!args.no_alt_screen);
     }
     #[test]
-    fn cli_command_name_is_grok() {
+    fn cli_command_name_is_thanh() {
         use clap::CommandFactory;
-        assert_eq!(PagerArgs::command().get_name(), "grok");
+        assert_eq!(PagerArgs::command().get_name(), "thanh");
     }
     #[test]
     fn cli_help_output_header() {
@@ -2276,9 +2276,9 @@ mod tests {
         assert_eq!(
             first_5,
             vec![
-                "Grok Build TUI",
+                "thanh (xgrok fork) — Grok Build TUI",
                 "",
-                "Usage: grok [OPTIONS] [PROMPT] [COMMAND]",
+                "Usage: thanh [OPTIONS] [PROMPT] [COMMAND]",
                 "",
                 "Arguments:",
             ]

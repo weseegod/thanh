@@ -1180,7 +1180,7 @@ pub enum RetryState {
 /// again. Drives the actionable re-auth banner.
 ///
 /// `legacy_auth` is intentionally excluded: those failures carry their own
-/// detailed migration guidance (`grok update` / `grok logout` / `grok login`)
+/// detailed migration guidance (`thanh update` / `thanh logout` / `thanh login`)
 /// in the message, so we surface that verbatim instead of the generic prompt.
 ///
 /// `auth_transient` is excluded for the opposite reason: the shell emits it

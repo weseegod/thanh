@@ -10,7 +10,7 @@ Settings resolve highest-priority first:
 
 1. **CLI flags** (e.g. `--yolo`, `--model`, `--sandbox`)
 2. **Environment variables** (e.g. `XAI_API_KEY`, `GROK_MEMORY`)
-3. **config.toml** (`~/.grok/config.toml`)
+3. **config.toml** (`~/.thanh/config.toml`)
 4. **Managed / requirements config** (files your org may deploy, e.g. `managed_config.toml` / `requirements.toml`)
 5. **Built-in defaults**
 
@@ -18,7 +18,7 @@ Settings resolve highest-priority first:
 
 ## config.toml (main configuration)
 
-Location: `~/.grok/config.toml`. If the file is missing, Grok uses its built-in defaults, so you only need to set the values you want to override.
+Location: `~/.thanh/config.toml`. If the file is missing, Grok uses its built-in defaults, so you only need to set the values you want to override.
 
 ### General settings
 
@@ -257,9 +257,9 @@ url = "https://mcp.example.com/api/mcp"  # HTTP/SSE transport
 headers = { "x-mcp-session-id" = "{{session_id}}" }
 ```
 
-MCP servers can also be set per-project in `.grok/config.toml`. Project-scoped config contributes `[mcp_servers]`, `[plugins]`, and `[permission]` rules; every other section loads only from `~/.grok/config.toml`.
+MCP servers can also be set per-project in `.grok/config.toml`. Project-scoped config contributes `[mcp_servers]`, `[plugins]`, and `[permission]` rules; every other section loads only from `~/.thanh/config.toml`.
 
-Priority for `[mcp_servers]` and `[plugins]`: `.grok/config.toml` (current dir) > `<repo-root>/.grok/config.toml` > `~/.grok/config.toml`. `[permission]` rules aren't overridden by priority — they merge across all files with `deny` > `ask` > `allow` (see [22-permissions-and-safety.md](22-permissions-and-safety.md)).
+Priority for `[mcp_servers]` and `[plugins]`: `.grok/config.toml` (current dir) > `<repo-root>/.grok/config.toml` > `~/.thanh/config.toml`. `[permission]` rules aren't overridden by priority — they merge across all files with `deny` > `ask` > `allow` (see [22-permissions-and-safety.md](22-permissions-and-safety.md)).
 
 ### Memory
 
@@ -330,7 +330,7 @@ Background workflows — the `workflow` tool, named `.grok/workflows/*.rhai` scr
 enabled = false                       # disable background workflows (or GROK_WORKFLOWS=0)
 ```
 
-Project workflows are discovered from `<repo-root>/.grok/workflows/`; user workflows from `~/.grok/workflows/`. Discovery and invocation key off the script's `meta.name`, so keep each filename aligned with its `meta.name`. Built-ins win over project names, and project names win over user names, so keep names unique across scopes.
+Project workflows are discovered from `<repo-root>/.grok/workflows/`; user workflows from `~/.thanh/workflows/`. Discovery and invocation key off the script's `meta.name`, so keep each filename aligned with its `meta.name`. Built-ins win over project names, and project names win over user names, so keep names unique across scopes.
 
 Each launch gets a session-unique display handle such as `deep-research-2`. That handle is what you see in the `/workflows` run dashboard and pass to `/workflow pause`, `resume`, or `stop` — the internal run IDs never surface in commands. A numbered handle isn't a reusable definition name, so the dashboard disables **save** until you pick a new unique `meta.name` and save the edited script yourself. See [Slash Commands](04-slash-commands.md) for examples.
 
@@ -388,7 +388,7 @@ disabled = ["user/a1b2c3d4/noisy-plugin"]
 
 `[hints]` holds small persisted UI preferences: remembered answers and modal layout. Grok writes these for you as you use the TUI, but you can edit or delete them by hand; removing a key restores the default.
 
-`[hints]` is read from the **effective config merge**, with the usual precedence: system managed → user `managed_config.toml` → user `config.toml` → user `requirements.toml` → system `requirements.toml`, higher layers winning. The TUI only ever **writes** these to your user `~/.grok/config.toml`.
+`[hints]` is read from the **effective config merge**, with the usual precedence: system managed → user `managed_config.toml` → user `config.toml` → user `requirements.toml` → system `requirements.toml`, higher layers winning. The TUI only ever **writes** these to your user `~/.thanh/config.toml`.
 
 ```toml
 [hints]
@@ -593,7 +593,7 @@ telemetry = false
 
 ## pager.toml (appearance configuration)
 
-Location: `~/.grok/pager.toml`. This controls the TUI's look and feel. Changes apply on restart.
+Location: `~/.thanh/pager.toml`. This controls the TUI's look and feel. Changes apply on restart.
 
 ### Terminal
 
@@ -752,7 +752,7 @@ The key ones. See the README for the complete list.
 
 | Variable | Description |
 |----------|-------------|
-| `GROK_HOME` | Override config directory (default: `~/.grok`) |
+| `GROK_HOME` | Override config directory (default: `~/.thanh`) |
 | `GROK_RESPECT_GITIGNORE` | Force gitignore filtering on (`1`) or off (`0`); overrides `[tools] respect_gitignore` |
 
 ### Telemetry
@@ -772,16 +772,16 @@ The key ones. See the README for the complete list.
 
 | Path | Description |
 |------|-------------|
-| `~/.grok/config.toml` | Main configuration file |
-| `~/.grok/pager.toml` | TUI appearance configuration |
-| `~/.grok/auth.json` | Authentication credentials (auto-managed) |
-| `~/.grok/sessions/` | Persisted sessions (organized by working directory) |
-| `~/.grok/memory/` | Cross-session memory files and index |
-| `~/.grok/skills/` | User-scoped skill definitions |
-| `~/.grok/plugins/` | User-scoped plugins |
-| `~/.grok/agents/` | User-scoped agent definitions |
-| `~/.grok/lsp.json` | LSP server configuration (user-scoped) |
-| `~/.grok/logs/` | Internal log files (e.g. `unified.jsonl`, MCP server logs) |
+| `~/.thanh/config.toml` | Main configuration file |
+| `~/.thanh/pager.toml` | TUI appearance configuration |
+| `~/.thanh/auth.json` | Authentication credentials (auto-managed) |
+| `~/.thanh/sessions/` | Persisted sessions (organized by working directory) |
+| `~/.thanh/memory/` | Cross-session memory files and index |
+| `~/.thanh/skills/` | User-scoped skill definitions |
+| `~/.thanh/plugins/` | User-scoped plugins |
+| `~/.thanh/agents/` | User-scoped agent definitions |
+| `~/.thanh/lsp.json` | LSP server configuration (user-scoped) |
+| `~/.thanh/logs/` | Internal log files (e.g. `unified.jsonl`, MCP server logs) |
 | `.grok/config.toml` | Project-scoped MCP servers, plugins, and permission rules |
 | `.grok/skills/` | Project-scoped skill definitions |
 | `.grok/plugins/` | Project-scoped plugins |
@@ -797,7 +797,7 @@ Some settings can be set per-project by placing files in `.grok/` inside your re
 
 | File | What it configures |
 |------|--------------------|
-| `.grok/config.toml` | MCP servers, plugins, permission rules, and the `[mcp] max_output_bytes` tool-result cap (other sections load only from `~/.grok/config.toml`) |
+| `.grok/config.toml` | MCP servers, plugins, permission rules, and the `[mcp] max_output_bytes` tool-result cap (other sections load only from `~/.thanh/config.toml`) |
 | `.grok/skills/` | Project-specific skills |
 | `.grok/hooks/` | Project-specific lifecycle hooks |
 | `.grok/agents/` | Project-specific agent definitions |
@@ -815,14 +815,14 @@ Language servers power passive diagnostics and the optional `lsp` tool (see the 
 
 | Source | Location | Scope |
 |--------|----------|-------|
-| User | `~/.grok/lsp.json` | All projects |
+| User | `~/.thanh/lsp.json` | All projects |
 | Project | `.grok/lsp.json` | Current repository |
 | Plugin | A trusted plugin's `.lsp.json` file, or an inline `lspServers` block in its `plugin.json` | Wherever the plugin is enabled |
 
 When the same server name comes from more than one source, it resolves highest-priority first:
 
 1. **Project** — `.grok/lsp.json`
-2. **User** — `~/.grok/lsp.json`
+2. **User** — `~/.thanh/lsp.json`
 3. **Plugins** — file-based `.lsp.json`, then inline `lspServers`, in plugin load order
 
 Project and user entries replace lower-priority ones of the same name. Plugin entries only add servers whose names aren't already defined by a local file, so a local `lsp.json` always wins over a plugin. Plugin LSP servers load only after the plugin is trusted (see [Plugins](09-plugins.md)).

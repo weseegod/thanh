@@ -710,7 +710,7 @@ pub struct AppView {
     /// dashboard); deny wins over all other visibility gates.
     pub tier_restricted_commands: Vec<String>,
     /// Whether the pager is connected via a leader (leader mode). The Agent
-    /// Dashboard entry points (`/dashboard`, `Ctrl+\`, `grok dashboard`, the
+    /// Dashboard entry points (`/dashboard`, `Ctrl+\`, `thanh dashboard`, the
     /// startup hook) are only meaningful when a leader is coordinating a
     /// fleet of sessions, so they are gated on this flag. Set in
     /// `event_loop::run` from `connection.leader_status_rx.is_some()`;
@@ -1017,7 +1017,7 @@ pub struct AppView {
     /// first evaluation at a stable agent-view draw (regardless of outcome),
     /// so later resizes can never re-trigger the tip within this run.
     pub small_screen_tip_evaluated: bool,
-    /// One-shot gate for the SSH `grok wrap` tip: set after the first
+    /// One-shot gate for the SSH `thanh wrap` tip: set after the first
     /// evaluation at a stable agent-view draw (the environment gates are
     /// process-constant, so one evaluation decides the run).
     pub ssh_wrap_tip_evaluated: bool,
@@ -5178,7 +5178,7 @@ impl AppView {
         self.small_screen_tip_evaluated = true;
         super::dispatch::show_small_screen_tip(self);
     }
-    /// One-shot SSH `grok wrap` tip trigger, run at the top of every `draw`
+    /// One-shot SSH `thanh wrap` tip trigger, run at the top of every `draw`
     /// right after [`Self::maybe_trigger_small_screen_tip`]. The welcome
     /// screen has no ephemeral-tip row, so the first stable agent-view draw
     /// is the earliest surface that can paint a session-load tip. Reads the

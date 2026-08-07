@@ -1762,7 +1762,7 @@ pub(crate) async fn run(
         }
     }
 
-    // `grok dashboard` startup: open the dashboard view immediately. The
+    // `thanh dashboard` startup: open the dashboard view immediately. The
     // CLI subcommand wrote a `GROK_OPEN_DASHBOARD_AT_STARTUP=1` env var
     // so we don't have to thread a flag through every arg struct.
     if std::env::var("GROK_OPEN_DASHBOARD_AT_STARTUP").as_deref() == Ok("1") {

@@ -76,7 +76,7 @@ Copy the most recent response to the clipboard. Pass a number to copy the Nth-la
 /copy 2 ~/exports/last-reply.md
 ```
 
-Every copy is also written to a backup file — `~/.grok/last-copy.txt` by default, or `GROK_COPY_FILE` if set. Confirmed copies toast briefly (e.g. `Copied!`). Unverified OSC 52 deliveries and clipboard-unreachable fallbacks name the backup path so you can recover the text.
+Every copy is also written to a backup file — `~/.thanh/last-copy.txt` by default, or `GROK_COPY_FILE` if set. Confirmed copies toast briefly (e.g. `Copied!`). Unverified OSC 52 deliveries and clipboard-unreachable fallbacks name the backup path so you can recover the text.
 
 ### `/export`
 
@@ -307,7 +307,7 @@ Launch a saved workflow, or manage a running one by the session-unique display n
 /workflow save review-changes
 ```
 
-Project workflows live in `.grok/workflows/*.rhai`; user workflows live in `~/.grok/workflows/*.rhai`. A same-process pause/resume continues the original immutable script, args, and `agent_budget` cap from committed host-call results — to iterate, edit the returned script copy and launch it as a new run.
+Project workflows live in `.grok/workflows/*.rhai`; user workflows live in `~/.thanh/workflows/*.rhai`. A same-process pause/resume continues the original immutable script, args, and `agent_budget` cap from committed host-call results — to iterate, edit the returned script copy and launch it as a new run.
 
 A budget-limited run is different: it only resumes through a model/tool resume request that supplies an `agent_budget` above the admitted agent count. A bare `/workflow resume <name>` can't raise the cap, so it rejects budget-limited runs. Runs interrupted by a process restart aren't resumed at all, because external effects have no stable cross-process identity. And resume is not exactly-once: an external effect whose result wasn't committed before a same-process pause can run again.
 
@@ -442,7 +442,7 @@ Toggle message timestamps on or off.
 
 ## Skills as Slash Commands
 
-Any enabled skill with `user-invocable: true` in its SKILL.md frontmatter shows up as a slash command. (Turn a skill off via `/skills` and it stops being advertised.) So a skill at `~/.grok/skills/commit/SKILL.md` runs as:
+Any enabled skill with `user-invocable: true` in its SKILL.md frontmatter shows up as a slash command. (Turn a skill off via `/skills` and it stops being advertised.) So a skill at `~/.thanh/skills/commit/SKILL.md` runs as:
 
 ```
 /commit fix typo in README

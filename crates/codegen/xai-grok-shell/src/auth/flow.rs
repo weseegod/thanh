@@ -655,7 +655,7 @@ async fn run_auth_flow_steps(
     // browser and won't work on headless devboxes), try minting OIDC
     // credentials via the remote devbox login helper.
     // preferred_method=api_key: never auto-mint OIDC (fail-closed). Explicit
-    // `grok login --devbox` uses run_devbox_login and is not gated here.
+    // `thanh login --devbox` uses run_devbox_login and is not gated here.
     if !grok_com_config.blocks_automatic_oidc()
         && crate::auth::devbox_login::is_devbox_environment()
     {
@@ -733,7 +733,7 @@ async fn run_auth_flow_steps(
         "auth: no OAuth2 configuration available (neither enterprise OIDC nor xAI OAuth2 configured)"
     );
     anyhow::bail!(
-        "No OAuth2 configuration available. Run `grok login` to authenticate, or contact your administrator if you use enterprise SSO."
+        "No OAuth2 configuration available. Run `thanh login` to authenticate, or contact your administrator if you use enterprise SSO."
     )
 }
 
@@ -955,7 +955,7 @@ pub async fn ensure_authenticated_or_noninteractive(
     }
 }
 
-/// Unified `grok login` handler for CLI entry points (tui, pager).
+/// Unified `thanh login` handler for CLI entry points (tui, pager).
 ///
 /// Precedence: `--oauth` forces loopback, `--device-auth` forces device,
 /// otherwise `GROK_LOGIN_DEVICE_FLOW` env / `[auth] login_device_flow` config /
@@ -976,7 +976,7 @@ pub async fn run_cli_login(
     }
 
     // Agent bootstrap is what normally initializes the product telemetry
-    // client, and `grok login` never boots an agent, so without this every
+    // client, and `thanh login` never boots an agent, so without this every
     // event this process emits is dropped before reaching a sink. One manager
     // serves both the identity it reads and the login flow below.
     let auth_manager = Arc::new(AuthManager::new(
@@ -1006,7 +1006,7 @@ async fn run_cli_login_steps(
 
     // Mirror `run_auth_flow_inner`'s precedence: enterprise OIDC (oidc=Some,
     // oauth2=None) always uses the loopback flow; only the xAI OAuth2 provider
-    // supports the device flow. Without this guard, `grok login` on an
+    // supports the device flow. Without this guard, `thanh login` on an
     // enterprise-OIDC deployment would wrongly enter the device branch (which
     // requires `oauth2`) and error.
     let authenticated = if cli_should_use_device(&config.grok_com_config, login_override).await {
@@ -1069,7 +1069,7 @@ async fn run_cli_login_steps(
 
 /// Sync this principal's config now rather than waiting for the background
 /// tick. Stay quiet about absence/failure during login — confirm only when
-/// config was actually applied; `grok setup` reports the no-config case.
+/// config was actually applied; `thanh setup` reports the no-config case.
 async fn apply_post_login_config(authenticated: GrokAuth) -> anyhow::Result<()> {
     let outcome = crate::managed_config::post_login_sync(Some(authenticated)).await;
     match outcome {
@@ -1148,7 +1148,7 @@ pub fn perform_logout(
     })
 }
 
-/// `grok logout` CLI handler. Calls [`perform_logout`] and formats
+/// `thanh logout` CLI handler. Calls [`perform_logout`] and formats
 /// the result to stderr.
 pub fn run_cli_logout(config: &crate::agent::config::Config) -> anyhow::Result<()> {
     let grok_home = grok_home::grok_home();
@@ -1604,7 +1604,7 @@ mod tests {
 
     #[tokio::test]
     async fn enterprise_oidc_never_uses_device_flow() {
-        // oidc=Some, oauth2=None: `grok login` must use loopback, not device —
+        // oidc=Some, oauth2=None: `thanh login` must use loopback, not device —
         // even when --device-auth forces device (which would otherwise be true).
         // ForceDevice short-circuits the remote settings fetch, so this stays hermetic.
         let cfg = GrokComConfig {
@@ -2111,7 +2111,7 @@ mod tests {
         assert_eq!(extract("some opaque output"), "some opaque output");
     }
 
-    /// CLI `grok login` passes `on_stderr=None`; stderr must be inherited so
+    /// CLI `thanh login` passes `on_stderr=None`; stderr must be inherited so
     /// sign-in URLs appear in real time. Piped stderr with no reader deadlocks
     /// once the child writes past the pipe buffer (~64 KiB).
     #[tokio::test]

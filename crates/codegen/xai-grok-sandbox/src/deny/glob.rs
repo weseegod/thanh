@@ -509,7 +509,7 @@ pub(crate) fn expand_deny_globs(
                              across their roots (stopped in {} at {}; gitignored and \
                              hidden files are included in the scan). Use narrower globs \
                              with a literal prefix, or deny exact paths; see the sandbox \
-                             guide (~/.grok/docs/user-guide/18-sandbox.md)",
+                             guide (~/.thanh/docs/user-guide/18-sandbox.md)",
                             caps.entries,
                             root.display(),
                             entry.path().display(),

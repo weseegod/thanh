@@ -1,7 +1,8 @@
 //! Agent definition file discovery.
 //!
 //! Searches `.grok/agents/` and `.claude/agents/` from cwd to repo root,
-//! then `~/.grok/agents/`, then `~/.claude/agents/`. Name-based dedup keeps
+//! then `~/.thanh/agents/` (fork home; the legacy literal `~/.grok/agents/`
+//! is also scanned), then `~/.claude/agents/`. Name-based dedup keeps
 //! highest priority.
 
 use std::collections::HashMap;
@@ -123,7 +124,7 @@ fn merge_subagents(
     // the runtime spawn precedence in by_name_in_cwd():
     //   project > built-in > user > bundled
     //
-    // A user-level ~/.grok/agents/explore.md does NOT shadow built-in explore
+    // A user-level ~/.thanh/agents/explore.md does NOT shadow built-in explore
     // at spawn time, so it must not shadow it in the visible list either.
     // Otherwise: visible != callable (the guarantee would be broken).
     for def in discovered {
@@ -184,9 +185,10 @@ fn merge_subagents(
 ///
 /// Search order (highest priority first):
 /// 1. `.grok/agents/` walking from `cwd` up to repo root
-/// 2. `~/.grok/agents/` (user-level)
+/// 2. `~/.thanh/agents/` (user-level; the legacy literal `~/.grok/agents/`
+///    is also scanned when it differs from the grok home)
 /// 3. `~/.claude/agents/` (compat user-level)
-/// 4. `~/.grok/bundled/agents/` (bundled, lowest priority)
+/// 4. `~/.thanh/bundled/agents/` (bundled, lowest priority)
 ///
 /// Deduplicates by name — higher-priority definitions win.
 /// User-level agent directories in priority order: user grok agents, `.claude`

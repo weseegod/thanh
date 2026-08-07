@@ -25,13 +25,15 @@ pub enum UpdateRunMode {
 
 const PROMPT_UPDATE_NOW: &str = "Update now? [Y/n/d]";
 const MSG_AUTO_UPDATE_BACKGROUND: &str = "Auto-update running in background.";
-const MSG_RUN_UPDATE_MANUAL: &str = "Run `grok update` to get the latest version.";
+const MSG_RUN_UPDATE_MANUAL: &str = "Run `thanh update` to get the latest version.";
 /// Manual-install one-liner for this platform's bootstrap installer.
 fn manual_install_cmd() -> &'static str {
     if cfg!(windows) {
-        "irm https://x.ai/cli/install.ps1 | iex"
+        "Download the latest 'thanh' asset from \
+         https://github.com/weseegod/xgrok/releases/latest and put it on your PATH"
     } else {
-        "curl -fsSL https://x.ai/cli/install.sh | bash"
+        "Download the latest 'thanh' binary for your platform from \
+         https://github.com/weseegod/xgrok/releases/latest and put it on your PATH"
     }
 }
 
@@ -39,7 +41,7 @@ fn manual_install_cmd() -> &'static str {
 fn reinstall_hint(installer: &str) -> String {
     match installer {
         "npm" => "Please reinstall via npm:\n  npm i -g @xai-official/grok".to_string(),
-        "gh-release" => "Please reinstall via GitHub Releases:\n  gh release download --repo xai-org-shared/grok-build --pattern 'grok-*' --output grok && chmod +x grok".to_string(),
+        "gh-release" => "Please reinstall via GitHub Releases:\n  gh release download --repo weseegod/xgrok --pattern 'thanh-*' --output thanh && chmod +x thanh".to_string(),
         _ => format!("Please reinstall via:\n  {}", manual_install_cmd()),
     }
 }
@@ -66,7 +68,7 @@ pub fn print_update_status(status: &UpdateStatus, json: bool) -> anyhow::Result<
 
     if let Some(error) = status.error.as_deref() {
         println!(
-            "Grok Build - v{} [{}]",
+            "thanh - v{} [{}]",
             status.current_version, status.channel
         );
         println!("Update check failed: {error}");
@@ -78,24 +80,24 @@ pub fn print_update_status(status: &UpdateStatus, json: bool) -> anyhow::Result<
     if status.update_available {
         if let Some(latest_version) = status.latest_version.as_deref() {
             println!(
-                "A new version of Grok Build is available: {} -> {}{}",
+                "A new version of thanh is available: {} -> {}{}",
                 status.current_version, latest_version, channel_label
             );
         } else {
-            println!("A new version of Grok Build is available.");
+            println!("A new version of thanh is available.");
         }
         return Ok(());
     }
 
     if let Some(latest_version) = status.latest_version.as_deref() {
         println!(
-            "Grok Build - v{} (latest: {}){}",
+            "thanh - v{} (latest: {}){}",
             status.current_version, latest_version, channel_label
         );
         return Ok(());
     }
 
-    println!("Grok Build - v{}{}", status.current_version, channel_label);
+    println!("thanh - v{}{}", status.current_version, channel_label);
     Ok(())
 }
 
@@ -265,7 +267,7 @@ pub struct EnsureLatestOutcome {
 ///
 /// Unlike [`run_update`] this never uses the compiled-in version for the
 /// download decision — a binary already installed by another process (TUI
-/// background download, explicit `grok update`) is reused as-is. This both
+/// background download, explicit `thanh update`) is reused as-is. This both
 /// removes the duplicate download in leader mode and stops the pre-fix
 /// hourly re-download while a busy leader keeps deferring its relaunch.
 ///
@@ -322,7 +324,7 @@ pub async fn ensure_latest_on_disk(update_config: &UpdateConfig) -> Result<Ensur
 }
 
 /// Disk-version probe gated on the installer actually maintaining the
-/// managed `~/.grok/bin/grok` symlink.
+/// managed `~/.thanh/bin/thanh` symlink.
 ///
 /// Only the internal (install.sh / CDN) and gh-release installers write that
 /// symlink. npm manages its own global install, so for npm a symlink left
@@ -428,7 +430,7 @@ pub struct BackgroundUpdateCheck {
     /// `Some` when the *running* binary is older than the channel pointer —
     /// drives the in-TUI restart hint regardless of who downloads the binary.
     pub update: Option<UpdateAvailable>,
-    /// Handle to the background `grok update` child, `Some` only when a
+    /// Handle to the background `thanh update` child, `Some` only when a
     /// download was actually started (the on-disk install was behind the
     /// pointer). The TUI parks this and `wait()`s on it at quit-for-update
     /// time instead of spawning a second downloader.
@@ -449,7 +451,7 @@ impl BackgroundUpdateCheck {
 /// Sets [`BackgroundUpdateCheck::update`] when the running binary is older
 /// than the channel pointer. If `auto_update` is enabled **and the on-disk
 /// install is also behind the pointer**, kicks off a non-blocking download
-/// (spawns `grok update` as a detached child process) so the new binary is
+/// (spawns `thanh update` as a detached child process) so the new binary is
 /// ready when the user quits and relaunches. When another process (an earlier
 /// TUI, the leader's hourly checker) already put the target version on disk,
 /// no download is started — only the restart hint is surfaced.
@@ -494,7 +496,7 @@ pub async fn check_update_background(update_config: &UpdateConfig) -> Background
 
     // Only download when the on-disk install is behind the pointer; the
     // running process being stale (checked above) just means "show the
-    // restart hint". The quit-for-update path's `grok update` child resolves
+    // restart hint". The quit-for-update path's `thanh update` child resolves
     // to "Already up to date" against the same disk state. Gated on the
     // installer maintaining the managed symlink — for npm a leftover symlink
     // would wrongly suppress the download (see `disk_version_for_installer`).
@@ -598,7 +600,7 @@ pub async fn run_update_if_available(
     let channel_label = format!(" [{}]", update_config.channel);
     if auto_update {
         eprintln!(
-            "A new version of Grok Build is available: {} -> {}{}",
+            "A new version of thanh is available: {} -> {}{}",
             current_version, latest_version, channel_label
         );
         if interactive {
@@ -626,7 +628,7 @@ pub async fn run_update_if_available(
             return Ok(false);
         }
         eprintln!(
-            "A new version of Grok Build is available: {} -> {}{}",
+            "A new version of thanh is available: {} -> {}{}",
             current_version, latest_version, channel_label
         );
         if interactive {
@@ -661,7 +663,7 @@ pub async fn run_update_if_available(
     Ok(false)
 }
 
-/// Launch "grok update" in blocking or non-blocking mode.
+/// Launch "thanh update" in blocking or non-blocking mode.
 ///
 /// In `NonBlocking` mode the spawned child's handle is returned so the caller
 /// can later `wait()` on the in-flight download (e.g. the TUI's
@@ -692,7 +694,7 @@ async fn run_update_subcommand(run_mode: UpdateRunMode) -> Result<Option<tokio::
             // No detach: the child must stay in the foreground process group so Ctrl+C cancels it with the parent; the atomic install protocol makes mid-download kills safe.
             let status = cmd.status().await?;
             if !status.success() {
-                anyhow::bail!("grok update failed with {}", status);
+                anyhow::bail!("thanh update failed with {}", status);
             }
             Ok(None)
         }
@@ -710,11 +712,11 @@ async fn run_update_subcommand(run_mode: UpdateRunMode) -> Result<Option<tokio::
     }
 }
 
-/// Resolve the grok binary path for re-execution after an update.
+/// Resolve the thanh binary path for re-execution after an update.
 ///
 /// `current_exe()` resolves symlinks via `/proc/self/exe` (see proc(5)),
 /// so it returns the old versioned target after a symlink swap.
-/// Prefer `~/.grok/bin/grok` which always points to the latest version.
+/// Prefer `~/.thanh/bin/thanh` which always points to the latest version.
 fn resolve_restart_exe() -> Result<std::path::PathBuf> {
     let canonical = grok_application();
     if canonical.exists() {
@@ -723,7 +725,7 @@ fn resolve_restart_exe() -> Result<std::path::PathBuf> {
     Ok(std::env::current_exe()?)
 }
 
-/// Restart grok with the original command-line arguments to pick up the update.
+/// Restart thanh with the original command-line arguments to pick up the update.
 pub fn restart_grok() -> Result<()> {
     let exe = resolve_restart_exe()?;
     let mut cmd = Command::new(exe);
@@ -732,7 +734,7 @@ pub fn restart_grok() -> Result<()> {
     }
     cmd.env_clear();
     cmd.envs(std::env::vars_os().filter(|(k, _)| k != "GROK_AUTO_UPDATE"));
-    eprintln!("Restarting Grok...");
+    eprintln!("Restarting thanh...");
 
     // Use exec on Unix to replace the current process, avoiding stdio issues
     // when the parent exits. On Windows, fall back to spawn + exit.
@@ -825,8 +827,8 @@ const DOWNLOAD_REQUEST_TIMEOUT: Duration = Duration::from_secs(20 * 60);
 ///
 /// Appends `.{pid}-{seq}.tmp` to the FULL file name instead of using
 /// `Path::with_extension`, which treats everything after the last dot of the
-/// versioned name as the extension (`grok-0.1.181-linux-x86_64` →
-/// `grok-0.1.tmp`) and therefore collides for every `0.1.x` version. The PID
+/// versioned name as the extension (`thanh-0.1.181-linux-x86_64` →
+/// `thanh-0.1.tmp`) and therefore collides for every `0.1.x` version. The PID
 /// plus a per-process counter makes the name unique per download attempt —
 /// across processes (two updaters racing in the same instant, the accepted
 /// lock-free residual race) and within one process — so no racer can ever
@@ -837,7 +839,7 @@ fn tmp_download_path(dest: &std::path::Path) -> std::path::PathBuf {
 }
 
 /// Unique temp path `<base>.{pid}-{seq}.{ext}`, appended to the full name so a
-/// versioned base like `grok-0.1.181` doesn't collide via `with_extension`.
+/// versioned base like `thanh-0.1.181` doesn't collide via `with_extension`.
 /// PID + per-process counter keep racing updaters from clobbering each other.
 fn unique_temp_sibling(base: &std::path::Path, ext: &str) -> std::path::PathBuf {
     use std::sync::atomic::{AtomicU64, Ordering};
@@ -1106,7 +1108,7 @@ pub async fn download_silent(url: &str, dest: &std::path::Path) -> Result<()> {
     Ok(())
 }
 
-/// Delete `~/.grok/models_cache.json` after a successful update.
+/// Delete `~/.thanh/models_cache.json` after a successful update.
 ///
 /// The cache embeds the binary version and will be treated as a miss by the
 /// new binary anyway, but removing it eagerly avoids a wasted disk read +
@@ -1120,7 +1122,7 @@ async fn remove_stale_models_cache() {
     }
 }
 
-/// Remove the stale `grok-pager` symlink/binary from `~/.grok/bin/` left by
+/// Remove the stale `grok-pager` symlink/binary from `~/.thanh/bin/` left by
 /// older installations that shipped a separate pager binary.
 async fn remove_stale_pager(bin_dir: &std::path::Path) {
     let name = if cfg!(windows) {
@@ -1134,15 +1136,17 @@ async fn remove_stale_pager(bin_dir: &std::path::Path) {
     }
 }
 
-/// Fetch a CLI object from GCS. On Windows the public bucket may use a `.exe`
-/// suffix; try that first, then the extensionless name used on macOS/Linux.
-async fn download_cli_artifact_from_gcs(
-    gcs_base_url: &str,
+/// Fetch a CLI object from the fork's release base (GitHub Releases
+/// `releases/latest/download`). On Windows the published asset may use a
+/// `.exe` suffix; try that first, then the extensionless name used on
+/// macOS/Linux.
+async fn download_cli_artifact(
+    base_url: &str,
     object_name: &str,
     dest: &std::path::Path,
     with_progress: bool,
 ) -> Result<()> {
-    let base = gcs_base_url.trim_end_matches('/');
+    let base = base_url.trim_end_matches('/');
     #[cfg(windows)]
     {
         let with_exe = format!("{}/{}.exe", base, object_name);
@@ -1170,9 +1174,9 @@ async fn install_internal(target: Option<&str>, update_config: &UpdateConfig) ->
 
 /// Try the base-dependent install phase ([`download_verified_from_base`]:
 /// version resolution, download, smoke test) against each base URL in turn,
-/// falling through to the next on any failure. Used to keep installs working
-/// when the primary CDN endpoint (Cloudflare) is unreachable but the fallback
-/// (direct GCS) still resolves.
+/// falling through to the next on any failure. The fork publishes to a single
+/// GitHub Releases base, so the fallback path is exercised only when a caller
+/// passes multiple bases (tests).
 ///
 /// Download-phase side effects (download dir creation, binary fetch) are
 /// idempotent, so retrying with a different base after a partial failure is
@@ -1245,8 +1249,8 @@ async fn smoke_test_binary(binary_path: &std::path::Path) -> bool {
 }
 
 /// Test-only entry point: same as [`install_internal`] but reads from
-/// `gcs_base_url` instead of the hardcoded GCS bucket. Persists installer
-/// config and writes to `~/.grok/bin/`, so callers must isolate
+/// `gcs_base_url` instead of the hardcoded release base. Persists installer
+/// config and writes to `~/.thanh/bin/`, so callers must isolate
 /// `GROK_HOME`.
 #[doc(hidden)]
 pub async fn install_internal_from_base(
@@ -1258,8 +1262,8 @@ pub async fn install_internal_from_base(
     activate_verified_download(&download).await
 }
 
-/// A downloaded and smoke-tested binary in `~/.grok/downloads/`, not yet
-/// activated as the managed `grok`/`agent`.
+/// A downloaded and smoke-tested binary in `~/.thanh/downloads/`, not yet
+/// activated as the managed `thanh`.
 struct VerifiedDownload {
     version: String,
     binary_path: std::path::PathBuf,
@@ -1292,13 +1296,13 @@ async fn download_verified_from_base(
     let download_dir = grok_home.join("downloads");
     tokio::fs::create_dir_all(&download_dir).await?;
 
-    let binary_name = format!("grok-{}-{}", version, platform);
+    let binary_name = format!("thanh-{}-{}", version, platform);
     let binary_path = download_dir.join(&binary_name);
 
-    eprintln!("  Downloading grok v{} ({})...", version, platform);
+    eprintln!("  Downloading thanh v{} ({})...", version, platform);
 
     // Published already +x (see `publish_downloaded_artifact`).
-    download_cli_artifact_from_gcs(gcs_base_url, &binary_name, &binary_path, true).await?;
+    download_cli_artifact(gcs_base_url, &binary_name, &binary_path, true).await?;
 
     // Smoke-test: run the binary before activating it. A truncated or
     // corrupt download is caught here and never becomes the active grok.
@@ -1328,7 +1332,7 @@ async fn activate_verified_download(download: &VerifiedDownload) -> Result<()> {
     let bin_dir = grok_home.join("bin");
     tokio::fs::create_dir_all(&bin_dir).await?;
 
-    // Atomic swap of ~/.grok/bin/{grok,agent} -> downloaded binary.
+    // Atomic swap of ~/.thanh/bin/thanh -> downloaded binary.
     let link_path = swap_managed_bin_links(&download.binary_path, &bin_dir).await?;
 
     remove_stale_pager(&bin_dir).await;
@@ -1336,7 +1340,9 @@ async fn activate_verified_download(download: &VerifiedDownload) -> Result<()> {
     eprintln!();
 
     // Clean up old versioned binaries (keeps current + 1 previous).
-    cleanup_old_downloads(&download_dir, "grok", &download.version).await;
+    cleanup_old_downloads(&download_dir, "thanh", &download.version).await;
+    // Also sweep upstream's legacy grok-pager downloads (harmless no-op for
+    // the fork's `thanh-*` naming, keeps pre-fork leftovers tidy).
     cleanup_old_downloads(&download_dir, "grok-pager", &download.version).await;
 
     // Persist installer to config.toml so future runs auto-detect internal.
@@ -1365,9 +1371,9 @@ async fn regenerate_completions(binary: &std::path::Path, grok_home: &std::path:
     let user_home = std::env::home_dir().unwrap_or_default();
 
     let completions: &[(&str, std::path::PathBuf)] = &[
-        ("bash", grok_home.join("completions/bash/grok.bash")),
-        ("zsh", grok_home.join("completions/zsh/_grok")),
-        ("fish", user_home.join(".config/fish/completions/grok.fish")),
+        ("bash", grok_home.join("completions/bash/thanh.bash")),
+        ("zsh", grok_home.join("completions/zsh/_thanh")),
+        ("fish", user_home.join(".config/fish/completions/thanh.fish")),
     ];
 
     for (shell, dest) in completions {
@@ -1391,13 +1397,13 @@ async fn regenerate_completions(binary: &std::path::Path, grok_home: &std::path:
 
 /// Compute a relative symlink target from `link` to `target`.
 ///
-/// When both paths share a grandparent (e.g. `~/.grok/bin/grok` and
-/// `~/.grok/downloads/grok-0.1.203-linux-x86_64`), returns a relative path
-/// like `../downloads/grok-0.1.203-linux-x86_64`.  When they share the same
+/// When both paths share a grandparent (e.g. `~/.thanh/bin/thanh` and
+/// `~/.thanh/downloads/thanh-0.1.203-linux-x86_64`), returns a relative path
+/// like `../downloads/thanh-0.1.203-linux-x86_64`.  When they share the same
 /// parent directory, returns just the filename.  Falls back to the absolute
 /// `target` path for any other layout.
 ///
-/// Relative symlinks survive Docker bind-mounts where `~/.grok/` is mapped
+/// Relative symlinks survive Docker bind-mounts where `~/.thanh/` is mapped
 /// into a container with a different `$HOME` (and thus a different absolute
 /// prefix).
 #[cfg(unix)]
@@ -1405,13 +1411,13 @@ fn relative_symlink_target(target: &std::path::Path, link: &std::path::Path) -> 
     let (Some(target_parent), Some(link_parent)) = (target.parent(), link.parent()) else {
         return target.to_path_buf();
     };
-    // Same directory — just the filename (e.g. grok-latest -> grok-0.1.203-…)
+    // Same directory — just the filename (e.g. thanh-latest -> thanh-0.1.203-…)
     if target_parent == link_parent
         && let Some(name) = target.file_name()
     {
         return std::path::PathBuf::from(name);
     }
-    // Sibling directories — ../target_dir/filename (e.g. bin/grok -> ../downloads/grok-…)
+    // Sibling directories — ../target_dir/filename (e.g. bin/thanh -> ../downloads/thanh-…)
     if let (Some(tp), Some(lp)) = (target_parent.parent(), link_parent.parent())
         && tp == lp
         && let (Some(dir_name), Some(file_name)) = (target_parent.file_name(), target.file_name())
@@ -1421,16 +1427,17 @@ fn relative_symlink_target(target: &std::path::Path, link: &std::path::Path) -> 
     target.to_path_buf()
 }
 
-/// Swap `~/.grok/bin/{grok,agent}` to point at `binary_path`. Returns the
-/// `grok` link path (for [`regenerate_completions`]).
+/// Swap `~/.thanh/bin/thanh` to point at `binary_path`. Returns the `thanh`
+/// link path (for [`regenerate_completions`]).
 ///
-/// `grok` and `agent` are first-class entry points that the bootstrap
-/// installers (`install.sh`, `install.ps1`, `install-enterprise.sh`)
-/// maintain in lockstep, and so must the updater — otherwise `grok update`
-/// leaves `agent` pinned at the previous version.
+/// Fork-specific: the updater maintains a single managed entry point named
+/// `thanh` — it deliberately never touches `bin/grok` / `bin/agent`, which
+/// belong to the official grok CLI. Combined with the fork's own home
+/// (`~/.thanh` vs grok's `~/.grok`), both can run side by side without ever
+/// clobbering each other.
 ///
 /// Unix: atomic symlink swap with relative target (survives Docker
-/// bind-mounts of `~/.grok/`). Windows: [`windows_replace_exe`].
+/// bind-mounts of `~/.thanh/`). Windows: [`windows_replace_exe`].
 ///
 /// **All-or-nothing.** Each link's prior state is captured (Unix: prior
 /// symlink target; Windows: `.rollback.bak`; or `Absent` marker via
@@ -1443,11 +1450,9 @@ async fn swap_managed_bin_links(
     binary_path: &std::path::Path,
     bin_dir: &std::path::Path,
 ) -> Result<std::path::PathBuf> {
-    let grok_name = if cfg!(windows) { "grok.exe" } else { "grok" };
-    let agent_name = if cfg!(windows) { "agent.exe" } else { "agent" };
-    let grok_link = bin_dir.join(grok_name);
-    let agent_link = bin_dir.join(agent_name);
-    let link_paths: [std::path::PathBuf; 2] = [grok_link.clone(), agent_link];
+    let thanh_name = if cfg!(windows) { "thanh.exe" } else { "thanh" };
+    let thanh_link = bin_dir.join(thanh_name);
+    let link_paths: [std::path::PathBuf; 1] = [thanh_link.clone()];
 
     // Capture every link up-front so a 2nd-link capture failure can't
     // strand the 1st mid-swap.
@@ -1516,7 +1521,7 @@ async fn swap_managed_bin_links(
     for cap in &captured {
         cap.cleanup().await;
     }
-    Ok(grok_link)
+    Ok(thanh_link)
 }
 
 /// Snapshot of a managed-bin link's prior state for rollback in
@@ -1842,9 +1847,9 @@ async fn sweep_old_exe_backups(old: &std::path::Path) {
 /// and hasn't fully loaded all pages yet — deleting it on macOS causes SIGKILL
 /// because the kernel can no longer verify the code signature).
 ///
-/// `bin_prefix` is the binary name prefix, e.g. `"grok"` or `"grok-pager"`.
+/// `bin_prefix` is the binary name prefix, e.g. `"thanh"` or `"grok-pager"`.
 /// Files must match `{bin_prefix}-{digit}*` to be considered versioned binaries
-/// (this avoids `grok-*` matching `grok-pager-*` or `grok-latest`).
+/// (this avoids `thanh-*` matching `thanh-latest` or upstream's `grok-*`).
 ///
 /// Temporary/partial files (containing `.tmp`) are deleted only once they
 /// are **stale** (mtime older than [`STALE_TMP_AGE`]). A fresh `.tmp` may be
@@ -2100,7 +2105,7 @@ async fn gh_release_download(tag: &str, pattern: &str, dest: &std::path::Path) -
     Ok(())
 }
 
-/// Download and install grok from GitHub Releases (xai-org-shared/grok-build).
+/// Download and install thanh from the fork's GitHub Releases (weseegod/xgrok).
 ///
 /// Uses `gh release download` to fetch the binary matching the current platform.
 /// This works anywhere the `gh` CLI is authenticated, without needing npm or
@@ -2120,12 +2125,12 @@ async fn install_gh_release(target: Option<&str>) -> Result<()> {
     tokio::fs::create_dir_all(&download_dir).await?;
     tokio::fs::create_dir_all(&bin_dir).await?;
 
-    let binary_name = format!("grok-{}-{}", version, platform);
+    let binary_name = format!("thanh-{}-{}", version, platform);
     let binary_path = download_dir.join(&binary_name);
     let tag = format!("v{}", version);
 
     eprintln!(
-        "  Downloading grok v{} ({}) from GitHub Releases...",
+        "  Downloading thanh v{} ({}) from GitHub Releases...",
         version, platform
     );
 
@@ -2138,30 +2143,30 @@ async fn install_gh_release(target: Option<&str>) -> Result<()> {
         tokio::fs::set_permissions(&binary_path, std::fs::Permissions::from_mode(0o755)).await?;
     }
 
-    // Atomic swap of ~/.grok/bin/{grok,agent} -> downloaded binary.
+    // Atomic swap of ~/.thanh/bin/thanh -> downloaded binary.
     swap_managed_bin_links(&binary_path, &bin_dir).await?;
 
-    // Update grok-latest -> versioned binary so any existing symlinks that route
-    // through it (e.g. /usr/local/bin/grok -> ~/.grok/downloads/grok-latest)
-    // resolve to the newly installed version.
+    // Update thanh-latest -> versioned binary so any existing symlinks that
+    // route through it (e.g. /usr/local/bin/thanh ->
+    // ~/.thanh/downloads/thanh-latest) resolve to the newly installed version.
     #[cfg(unix)]
     {
-        let latest_path = download_dir.join("grok-latest");
+        let latest_path = download_dir.join("thanh-latest");
         let rel_target = relative_symlink_target(&binary_path, &latest_path);
         if let Err(e) = atomic_symlink_swap(&rel_target, &latest_path).await {
-            tracing::warn!("Failed to update grok-latest symlink: {e}");
+            tracing::warn!("Failed to update thanh-latest symlink: {e}");
         }
     }
 
-    // Also update /usr/local/bin/{grok,agent} if either points directly into
-    // ~/.grok/downloads/ (legacy layout — skips the grok-latest indirection).
-    // Permission errors ignored.
+    // Also update /usr/local/bin/thanh if it points directly into
+    // ~/.thanh/downloads/ (legacy layout — skips the thanh-latest indirection).
+    // Permission errors ignored. Never touches upstream's grok/agent links.
     #[cfg(unix)]
-    for name in ["grok", "agent"] {
+    for name in ["thanh"] {
         let system_link = std::path::PathBuf::from(format!("/usr/local/bin/{name}"));
         if let Ok(existing_target) = tokio::fs::read_link(&system_link).await {
             let target_str = existing_target.to_string_lossy();
-            if target_str.contains(".grok/downloads/") && !target_str.ends_with("grok-latest") {
+            if target_str.contains(".grok/downloads/") && !target_str.ends_with("thanh-latest") {
                 // Try to update; ignore permission errors
                 let _ = atomic_symlink_swap(&binary_path, &system_link).await;
             }
@@ -2173,7 +2178,7 @@ async fn install_gh_release(target: Option<&str>) -> Result<()> {
     eprintln!();
 
     // Clean up old versioned binaries (keeps current + 1 previous).
-    cleanup_old_downloads(&download_dir, "grok", &version).await;
+    cleanup_old_downloads(&download_dir, "thanh", &version).await;
     cleanup_old_downloads(&download_dir, "grok-pager", &version).await;
 
     // Persist installer to config.toml so future runs auto-detect gh-release.
@@ -2222,7 +2227,7 @@ fn create_temp_npmrc(npm_registry: Option<&str>) -> Result<Option<std::path::Pat
 /// the code signature of the mmap'd executable pages once the backing file
 /// inode is unlinked.
 ///
-/// While our postinstall.js now uses versioned binaries under ~/.grok/bin/
+/// While our postinstall.js now uses versioned binaries under ~/.thanh/bin/
 /// (so processes launched from there are safe), older installations or npx
 /// invocations may still be running the vendored binary directly.
 #[cfg(target_os = "macos")]
@@ -2347,7 +2352,7 @@ pub async fn apply_channel_switch(channel_switch: Option<&str>, update_config: &
     }
 }
 
-/// Run the `grok update` command. Returns `Ok(Some(version))` when the target
+/// Run the `thanh update` command. Returns `Ok(Some(version))` when the target
 /// version is present on disk afterwards — either installed by this call or
 /// found already installed (e.g. by a concurrent background download); returns
 /// `Ok(None)` when there is no installer or no applicable target. Callers use
@@ -2420,7 +2425,7 @@ pub async fn run_update(
 
     let (latest_version, install_target) = match plan {
         UpdatePlan::Skip { latest } => {
-            // Cache so an explicit `grok update` doesn't re-prompt every run.
+            // Cache so an explicit `thanh update` doesn't re-prompt every run.
             let stable_ptr = try_fetch_stable_pointer().await;
             write_version_cache(&latest, stable_ptr.as_deref()).await;
             eprintln!(
@@ -2560,11 +2565,11 @@ async fn refresh_deployment_config() {
     match xai_grok_shell::managed_config::sync().await {
         Ok(true) => eprintln!("  Applied managed configuration."),
         Ok(false) => tracing::debug!("no managed configuration to apply"),
-        // Auth issues aren't actionable mid-update: quiet here, loud on `grok setup`.
+        // Auth issues aren't actionable mid-update: quiet here, loud on `thanh setup`.
         Err(e) if e.is_auth_rejection() => tracing::debug!("managed config not applied: {e}"),
         Err(e) if e.is_retryable() => {
             tracing::debug!("managed config refresh failed: {e}");
-            eprintln!("  Couldn't apply managed configuration. Run `grok setup` to retry.");
+            eprintln!("  Couldn't apply managed configuration. Run `thanh setup` to retry.");
         }
         Err(e) => eprintln!("  Couldn't apply managed configuration. {e}"),
     }
@@ -3063,7 +3068,7 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn test_relative_symlink_survives_directory_move() {
-        // Simulates Docker bind-mount: create ~/.grok/ layout at path A,
+        // Simulates Docker bind-mount: create ~/.thanh/ layout at path A,
         // then move it to path B and verify the symlink still resolves.
         let dir = tempfile::tempdir().unwrap();
 
@@ -3576,27 +3581,20 @@ mod tests {
             "should suggest gh release download: {hint}"
         );
         assert!(
-            hint.contains("xai-org-shared/grok-build"),
-            "should name the repo: {hint}"
+            hint.contains("weseegod/xgrok"),
+            "should name the fork repo: {hint}"
         );
+        assert!(hint.contains("thanh-*"), "should name thanh assets: {hint}");
     }
 
     #[test]
-    fn test_reinstall_hint_internal_mentions_platform_installer() {
+    fn test_reinstall_hint_internal_mentions_fork_release_page() {
         let hint = reinstall_hint("internal");
-        if cfg!(windows) {
-            assert!(hint.contains("irm"), "should suggest irm install: {hint}");
-            assert!(
-                hint.contains("install.ps1"),
-                "should reference install.ps1: {hint}"
-            );
-        } else {
-            assert!(hint.contains("curl"), "should suggest curl install: {hint}");
-            assert!(
-                hint.contains("install.sh"),
-                "should reference install.sh: {hint}"
-            );
-        }
+        assert!(
+            hint.contains("github.com/weseegod/xgrok/releases"),
+            "should point at the fork release page: {hint}"
+        );
+        assert!(hint.contains("thanh"), "should name the thanh binary: {hint}");
     }
 
     #[test]
@@ -4316,7 +4314,7 @@ mod tests {
         );
         assert_eq!(
             MSG_RUN_UPDATE_MANUAL,
-            "Run `grok update` to get the latest version."
+            "Run `thanh update` to get the latest version."
         );
     }
 

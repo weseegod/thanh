@@ -166,7 +166,7 @@ Environment:
   XAI_API_KEY     required
   RUST_LOG        optional (default info,xai_grok_voice=debug)
 
-Reads [voice] from ~/.grok/config.toml unless --config PATH is set.
+Reads [voice] from ~/.thanh/config.toml unless --config PATH is set.
 "#
     );
 }

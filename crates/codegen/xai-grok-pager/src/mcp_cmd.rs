@@ -23,7 +23,7 @@ Examples:
   # Add a remote server with an authentication header
   grok mcp add --transport http api https://mcp.example.com/mcp --header \"Authorization: Bearer YOUR_TOKEN\"
 
-  # Add to the project config (./.grok/config.toml) instead of ~/.grok/config.toml
+  # Add to the project config (./.grok/config.toml) instead of ~/.thanh/config.toml
   grok mcp add --scope project github -- npx -y @modelcontextprotocol/server-github";
 
 #[derive(Debug, clap::Args, Clone)]
@@ -46,7 +46,7 @@ pub enum McpTransport {
 /// Which config file an MCP server definition is written to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub enum McpScope {
-    /// `~/.grok/config.toml`, available in all your projects
+    /// `~/.thanh/config.toml`, available in all your projects
     User,
     /// `./.grok/config.toml`, shared with everyone working in this directory
     Project,
@@ -121,7 +121,7 @@ pub struct AddArgs {
     #[arg(short = 't', long, value_enum)]
     transport: Option<McpTransport>,
 
-    /// Config to write to: user (~/.grok/config.toml) or project (./.grok/config.toml)
+    /// Config to write to: user (~/.thanh/config.toml) or project (./.grok/config.toml)
     #[arg(short = 's', long, value_enum, default_value = "user")]
     scope: McpScope,
 

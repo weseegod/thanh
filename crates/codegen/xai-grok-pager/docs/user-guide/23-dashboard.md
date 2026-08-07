@@ -259,7 +259,7 @@ Prefixes (only inside search mode):
 
 ## Persistence
 
-Per-user preferences under `[dashboard]` in `~/.grok/config.toml`:
+Per-user preferences under `[dashboard]` in `~/.thanh/config.toml`:
 
 ```toml
 [dashboard]

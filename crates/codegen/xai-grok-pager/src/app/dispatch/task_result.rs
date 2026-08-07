@@ -103,14 +103,14 @@ pub(super) fn maybe_show_x11_primary_paste_hint(
     }
     show_clipboard_toast(target, X11_PRIMARY_PASTE_HINT, app);
 }
-/// Whether a completed clipboard probe should fall through to the `grok wrap`
+/// Whether a completed clipboard probe should fall through to the `thanh wrap`
 /// host-image request. A clean `FullMiss` always qualifies; a remote read
-/// *error* (`AttachmentRead`) also qualifies because inside `grok wrap` the
+/// *error* (`AttachmentRead`) also qualifies because inside `thanh wrap` the
 /// authoritative pasteboard is the local host's, not the (absent) remote one, so
 /// the error is recoverable over the wrap OSC path. Every other failure
 /// (`TextRead`, `TargetInsertion`, `AlreadyReported`) is a real dead end and
 /// must keep toasting. The request itself still self-gates on
-/// `osc52_sink_active()`, so this is inert outside `grok wrap`.
+/// `osc52_sink_active()`, so this is inert outside `thanh wrap`.
 pub(super) fn wrap_host_image_request_eligible(completion: ClipboardPasteCompletion) -> bool {
     matches!(
         completion,

@@ -626,7 +626,7 @@ fn apply_child_env(cmd: &mut CommandBuilder, sandbox: Option<&TestSandbox>, env:
     for ssh_var in ["SSH_CONNECTION", "SSH_CLIENT", "SSH_TTY", "SSH_AUTH_SOCK"] {
         cmd.env_remove(ssh_var);
     }
-    // A harness launched under `grok wrap` must not silently confirm clipboard
+    // A harness launched under `thanh wrap` must not silently confirm clipboard
     // delivery for no-sink scenarios. Explicit sink tests re-inject a marker
     // through `env` after this hygiene pass.
     for sink_var in CLIPBOARD_SINK_ENV_VARS {

@@ -3,10 +3,18 @@ set -euo pipefail
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BIN_NAME="xai-grok-pager"   # binary do cargo build ra
-APP_NAME="xgrok"            # tên lệnh bạn muốn gõ
+APP_NAME="thanh"            # tên lệnh bạn muốn gõ
 
 # Thư mục cài: mặc định ~/.local/bin, ghi đè bằng $1 hoặc biến INSTALL_DIR
 INSTALL_DIR="${1:-${INSTALL_DIR:-$HOME/.local/bin}}"
+
+# Managed layout: binary cài vào $GROK_HOME/bin/thanh (mặc định ~/.thanh/bin/thanh)
+# — đúng chỗ updater (Ctrl+U / `thanh update`) thay thế — rồi symlink
+# $INSTALL_DIR/thanh -> $GROK_HOME/bin/thanh để lệnh `thanh` luôn trỏ bản mới nhất.
+# Home riêng ~/.thanh (không dùng ~/.grok) để config/auth/sessions/bin tách hoàn
+# toàn khỏi grok chính thức — chạy song song không đụng nhau.
+GROK_HOME_DIR="${GROK_HOME:-$HOME/.thanh}"
+MANAGED_BIN_DIR="$GROK_HOME_DIR/bin"
 
 cd "$REPO_DIR"
 
@@ -49,13 +57,18 @@ fi
 echo "==> Building $APP_NAME (release)..."
 cargo build -p xai-grok-pager-bin --release
 
-mkdir -p "$INSTALL_DIR"
+mkdir -p "$MANAGED_BIN_DIR" "$INSTALL_DIR"
+install_thanh() {
+  install -m 755 "target/release/$BIN_NAME" "$MANAGED_BIN_DIR/$APP_NAME"
+  ln -sf "$MANAGED_BIN_DIR/$APP_NAME" "$INSTALL_DIR/$APP_NAME"
+}
+
 if [ -w "$INSTALL_DIR" ]; then
-  install -m 755 "target/release/$BIN_NAME" "$INSTALL_DIR/$APP_NAME"
+  install_thanh
 else
   echo "==> $INSTALL_DIR không ghi được (cần quyền root), thử với sudo..."
-  sudo install -m 755 "target/release/$BIN_NAME" "$INSTALL_DIR/$APP_NAME"
+  sudo sh -c "install -m 755 'target/release/$BIN_NAME' '$MANAGED_BIN_DIR/$APP_NAME' && ln -sf '$MANAGED_BIN_DIR/$APP_NAME' '$INSTALL_DIR/$APP_NAME'"
 fi
 
-echo "==> Đã cài: $INSTALL_DIR/$APP_NAME"
+echo "==> Đã cài: $MANAGED_BIN_DIR/$APP_NAME (symlink: $INSTALL_DIR/$APP_NAME)"
 "$INSTALL_DIR/$APP_NAME" --version

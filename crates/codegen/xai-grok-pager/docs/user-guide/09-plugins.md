@@ -57,7 +57,7 @@ Add sources under `extraKnownMarketplaces`, keyed by name. Each entry's `source`
 }
 ```
 
-Place this file at `~/.grok/settings.json` or `~/.claude/settings.json`.
+Place this file at `~/.thanh/settings.json` or `~/.claude/settings.json`.
 
 ---
 
@@ -124,7 +124,7 @@ Component summaries in the Marketplace tab appear only for marketplaces that pub
 
 ### Turn plugins on or off in config
 
-Set these in `~/.grok/config.toml`:
+Set these in `~/.thanh/config.toml`:
 
 ```toml
 [plugins]
@@ -135,7 +135,7 @@ enabled = ["project/9f8e7d6c/team-tools"]    # names or IDs to force on
 
 Plugins are off by default, so list one in `enabled` to turn it on, or in `disabled` to discover it but skip loading it. Each entry is a plain plugin name (from `grok plugin list`) or a full ID (`<scope>/<hash>/<name>`).
 
-To hide the plugins and hooks interface entirely, set `disable_plugins = true` in `~/.grok/pager.toml`.
+To hide the plugins and hooks interface entirely, set `disable_plugins = true` in `~/.thanh/pager.toml`.
 
 ---
 
@@ -143,13 +143,13 @@ To hide the plugins and hooks interface entirely, set `disable_plugins = true` i
 
 Plugins run with your privileges, so treat them like any software you install: only add marketplaces and install plugins from sources you trust.
 
-Enabling a plugin loads its skills, commands, and agents. Trust is separate and controls whether a plugin's code runs: even when enabled, its hooks, MCP servers, and LSP servers stay inactive until you trust it. Grok trusts plugins in `~/.grok/plugins/` automatically; project plugins in `.grok/plugins/` require trust. Install with `--trust` to grant it:
+Enabling a plugin loads its skills, commands, and agents. Trust is separate and controls whether a plugin's code runs: even when enabled, its hooks, MCP servers, and LSP servers stay inactive until you trust it. Grok trusts plugins in `~/.thanh/plugins/` automatically; project plugins in `.grok/plugins/` require trust. Install with `--trust` to grant it:
 
 ```bash
 grok plugin install <source> --trust
 ```
 
-Trusted plugin `.mcp.json` servers attach to the session like other MCP config, and child agents inherit them. Plugin agents (`plugin-name:agent-name`) use the parent session's MCP servers by default, the same as user agents under `~/.grok/agents/`; restrict that with the `mcpInheritance` frontmatter (see [Subagents](16-subagents.md#mcp-inheritance)). For safety, plugin agent frontmatter cannot declare `mcpServers` or hooks, or set `permissionMode: bypassPermissions`.
+Trusted plugin `.mcp.json` servers attach to the session like other MCP config, and child agents inherit them. Plugin agents (`plugin-name:agent-name`) use the parent session's MCP servers by default, the same as user agents under `~/.thanh/agents/`; restrict that with the `mcpInheritance` frontmatter (see [Subagents](16-subagents.md#mcp-inheritance)). For safety, plugin agent frontmatter cannot declare `mcpServers` or hooks, or set `permissionMode: bypassPermissions`.
 
 ---
 
@@ -261,7 +261,7 @@ git = "https://github.com/my-org/my-org-plugins.git"
 enabled = ["gdrive"]
 ```
 
-For a hands-off install with no per-person step, also place the plugin's files where Grok discovers and trusts them automatically: `~/.grok/plugins/`, or a directory your device-management tool manages that you point to with `[plugins].paths`. Then enable them with `[plugins].enabled`.
+For a hands-off install with no per-person step, also place the plugin's files where Grok discovers and trusts them automatically: `~/.thanh/plugins/`, or a directory your device-management tool manages that you point to with `[plugins].paths`. Then enable them with `[plugins].enabled`.
 
 A managed workspace can also sync skills to users directly, without a plugin. Synced skills appear with the `server` scope and are administered by the workspace; a user's own skill of the same name shadows the synced one. See [Skills](08-skills.md).
 
@@ -321,7 +321,7 @@ Marketplaces distribute Grok content: skills, commands, agents, hooks, and MCP s
 
 **A plugin you installed isn't showing up.** Plugins are off until enabled. Check `grok plugin list`, then add the plugin's name or ID to `[plugins].enabled`, or press `Space` on it in the Plugins tab. Reload with `r` in the Plugins tab or start a new session.
 
-**A plugin's hooks or MCP servers don't run.** They stay inactive until the plugin is trusted. Reinstall with `--trust`, or place the plugin under `~/.grok/plugins/` (auto-trusted). See [Trust and security](#trust-and-security).
+**A plugin's hooks or MCP servers don't run.** They stay inactive until the plugin is trusted. Reinstall with `--trust`, or place the plugin under `~/.thanh/plugins/` (auto-trusted). See [Trust and security](#trust-and-security).
 
 **A skill or MCP server from a marketplace is missing.** Refresh the source with `grok plugin marketplace update`, confirm the plugin is installed and enabled, and, if your organization restricts sources, check that the marketplace is still allowed (see [Distribute across an organization](#distribute-across-an-organization)). Some MCP servers require a sign-in and will not appear until you authenticate.
 
@@ -357,7 +357,7 @@ Grok discovers plugins from these locations, in priority order. The `.claude/plu
 | `_meta.pluginDirs` (`session/new` / `session/load`) | Session, that session only | Trusted automatically |
 | `--plugin-dir` (the `grok agent … stdio` flag) | Process, that agent process only | Trusted automatically |
 | `.grok/plugins/` | Project, shared through version control | Requires trust |
-| `~/.grok/plugins/` | User, every project | Trusted automatically |
+| `~/.thanh/plugins/` | User, every project | Trusted automatically |
 | `[plugins].paths` (config) | Custom directories you add | Depends on location |
 
 The `_meta.pluginDirs` field on the `session/new` and `session/load` requests loads plugins for a single session; because the caller supplies the directory, those plugins are trusted automatically and do not persist after the session. `--plugin-dir` is the process-wide equivalent for a dedicated `grok agent … stdio` process, repeatable (`grok agent --no-leader --plugin-dir A --plugin-dir B stdio`), and ignored in leader mode, where the shared leader discovers its own plugins.

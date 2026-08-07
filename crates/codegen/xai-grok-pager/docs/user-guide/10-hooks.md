@@ -31,10 +31,10 @@ A hook is a shell command or HTTP endpoint that Grok calls when a specific lifec
 1. Create the hooks directory:
 
    ```sh
-   mkdir -p ~/.grok/hooks
+   mkdir -p ~/.thanh/hooks
    ```
 
-2. Create a hook file, e.g. `~/.grok/hooks/session-start.json`:
+2. Create a hook file, e.g. `~/.thanh/hooks/session-start.json`:
 
    ```json
    {
@@ -62,20 +62,20 @@ Hooks are discovered from several places (all are merged):
 
 | Scope | Path | Trusted? | Notes |
 |-------|------|----------|-------|
-| Global | `~/.grok/hooks/*.json` | Always | Personal hooks |
+| Global | `~/.thanh/hooks/*.json` | Always | Personal hooks |
 | Global | `~/.claude/settings.json` (and `settings.local.json`) | Always | Claude Code compatibility (configurable) |
 | Global | `~/.cursor/hooks.json` | Always | Cursor compatibility (configurable) |
 | Project | `<project>/.grok/hooks/*.json` | Requires trust | Per-repo automation |
 | Project | `<project>/.claude/settings.json` (and `settings.local.json`) | Requires trust | Claude compatibility (configurable) |
 | Project | `<project>/.cursor/hooks.json` | Requires trust | Cursor compatibility (configurable) |
-| Config | `~/.grok/config.toml` | Always | Your hooks alongside the rest of your config |
+| Config | `~/.thanh/config.toml` | Always | Your hooks alongside the rest of your config |
 | Config | `managed_config.toml` (`$GROK_HOME` and `/etc/grok`) | Always | Organization-distributed hooks (server-synced and on-device) |
 | Config | `requirements.toml` (user and system) | Always | Organization-distributed hooks in the requirements layer |
 | Plugin | Bundled inside installed plugins | Per-plugin | Shared team hooks |
 
-Config-file hooks live in the same TOML your organization already controls; see [Hooks in Config Files](#hooks-in-config-files) for the format. The compatible vendor hook sources are scanned by default. To disable scanning for a specific vendor, set `[compat.<vendor>] hooks = false` in `~/.grok/config.toml` or the corresponding environment variable. See [Configuration](05-configuration.md#harness-compatibility) for details.
+Config-file hooks live in the same TOML your organization already controls; see [Hooks in Config Files](#hooks-in-config-files) for the format. The compatible vendor hook sources are scanned by default. To disable scanning for a specific vendor, set `[compat.<vendor>] hooks = false` in `~/.thanh/config.toml` or the corresponding environment variable. See [Configuration](05-configuration.md#harness-compatibility) for details.
 
-**Trusting a project**: The first time you open a project with hooks, you must trust it before its project hooks will run -- until then they are silently skipped. Grant trust by running `/hooks-trust` (or launching with `--trust`); the decision is recorded in the unified folder-trust store (`~/.grok/trusted_folders.toml`), the same gate that governs repo-local MCP/LSP servers. Global hooks in `~/.grok/hooks/` are always trusted and need no entry. This prevents untrusted repos from running arbitrary code.
+**Trusting a project**: The first time you open a project with hooks, you must trust it before its project hooks will run -- until then they are silently skipped. Grant trust by running `/hooks-trust` (or launching with `--trust`); the decision is recorded in the unified folder-trust store (`~/.thanh/trusted_folders.toml`), the same gate that governs repo-local MCP/LSP servers. Global hooks in `~/.thanh/hooks/` are always trusted and need no entry. This prevents untrusted repos from running arbitrary code.
 
 Because hooks are unified under folder-trust, a `--trust` / `/hooks-trust` grant trusts the whole folder for **MCP, LSP, and hooks** together, and cascades to subdirectories. Conversely, disabling folder-trust (`GROK_FOLDER_TRUST=0` or `[folder_trust] enabled = false`) ungates project hooks along with MCP/LSP.
 
@@ -177,7 +177,7 @@ Hooks can also live directly in your Grok config, so a team can distribute them 
 
 | File | Tier | Who sets it |
 |------|------|-------------|
-| `~/.grok/config.toml` | User | You |
+| `~/.thanh/config.toml` | User | You |
 | `managed_config.toml` (`$GROK_HOME`, `/etc/grok`) | Managed / system | Your organization |
 | `requirements.toml` (user and system) | Requirements | Your organization |
 
@@ -456,7 +456,7 @@ echo '{"decision": "allow"}'
 
 ## Security Notes
 
-- Global hooks (`~/.grok/hooks/`) run with your user permissions -- treat them like shell scripts.
+- Global hooks (`~/.thanh/hooks/`) run with your user permissions -- treat them like shell scripts.
 - Project hooks require folder trust (`/hooks-trust` or `--trust`, the same gate as repo-local MCP/LSP) to prevent supply-chain attacks from malicious repos.
 - HTTP hooks send session data -- only use trusted endpoints.
 

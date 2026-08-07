@@ -2,7 +2,7 @@
 //! truncation / corruption / cancel at every point, and after every iteration
 //! assert the single invariant that makes the brick impossible:
 //!
-//! > `~/.grok/bin/grok` resolves to a binary that passes the smoke-test, OR it
+//! > `~/.thanh/bin/thanh` resolves to a binary that passes the smoke-test, OR it
 //! > is still the previous-good binary. It is never a broken/partial binary,
 //! > and a `.tmp` never masquerades as the active binary.
 //!
@@ -44,21 +44,21 @@ fn large_good_artifact() -> Vec<u8> {
     v
 }
 
-/// Seed a previous-good versioned binary + both managed symlinks
-/// (`grok` and `agent` — see `swap_managed_bin_links`). Returns the
-/// absolute path of the seeded binary.
+/// Seed a previous-good versioned binary + the managed symlink (`thanh` —
+/// see `swap_managed_bin_links`). Returns the absolute path of the seeded
+/// binary.
 fn seed_previous_good(home: &Path, version: &str, platform: &str) -> PathBuf {
     let downloads = home.join("downloads");
     let bin = home.join("bin");
     std::fs::create_dir_all(&downloads).unwrap();
     std::fs::create_dir_all(&bin).unwrap();
 
-    let prev = downloads.join(format!("grok-{version}-{platform}"));
+    let prev = downloads.join(format!("thanh-{version}-{platform}"));
     std::fs::write(&prev, small_good_artifact()).unwrap();
     std::fs::set_permissions(&prev, std::fs::Permissions::from_mode(0o755)).unwrap();
 
-    let rel = format!("../downloads/grok-{version}-{platform}");
-    for name in ["grok", "agent"] {
+    let rel = format!("../downloads/thanh-{version}-{platform}");
+    for name in ["thanh"] {
         let link = bin.join(name);
         let _ = std::fs::remove_file(&link);
         std::os::unix::fs::symlink(&rel, &link).unwrap();
@@ -66,7 +66,7 @@ fn seed_previous_good(home: &Path, version: &str, platform: &str) -> PathBuf {
     dunce::canonicalize(&prev).unwrap()
 }
 
-/// What the active `grok` should resolve to after an install attempt.
+/// What the active `thanh` should resolve to after an install attempt.
 #[derive(Clone, Copy, PartialEq)]
 enum Expect {
     /// The new version was installed and activated.
@@ -77,10 +77,10 @@ enum Expect {
 
 /// THE invariant. Re-resolves the on-disk symlink and RE-EXECUTES the resolved
 /// binary; never inspects a harness-held value. Guarantees the active managed
-/// link is always runnable and is never a `.tmp` or a partial file. Applied
-/// to both `grok` and `agent` — `swap_managed_bin_links` moves them together.
+/// link is always runnable and is never a `.tmp` or a partial file. The fork
+/// manages a single `thanh` link.
 fn assert_invariant(home: &Path, prev_good: &Path, new_binary: &Path, expect: Expect) {
-    for name in ["grok", "agent"] {
+    for name in ["thanh"] {
         assert_link_invariant(home, name, prev_good, new_binary, expect);
     }
 }
@@ -149,7 +149,7 @@ async fn run_one(
     let prev_good = seed_previous_good(home, "0.1.100", &platform);
     let new_binary = home
         .join("downloads")
-        .join(format!("grok-{version}-{platform}"));
+        .join(format!("thanh-{version}-{platform}"));
     let cfg = make_update_config("stable");
 
     server.set_mode(mode);
@@ -293,7 +293,7 @@ async fn smoke_test_rejects_garbage_and_keeps_previous_good() {
 
     let new_binary = home
         .join("downloads")
-        .join(format!("grok-0.1.181-{platform}"));
+        .join(format!("thanh-0.1.181-{platform}"));
     assert_invariant(home, &prev_good, &new_binary, Expect::PreviousGood);
 
     // A subsequent clean serve must succeed.

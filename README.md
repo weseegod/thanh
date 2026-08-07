@@ -45,26 +45,59 @@ This repository is a **BYOK-focused fork** of upstream
 the upstream agent/TUI core unchanged and customize only what third-party
 models need — for example DeepSeek, OpenRouter, or any OpenAI-compatible API.
 
+The fork ships as a command named **`thanh`** (not `grok`) and keeps its own
+home directory **`~/.thanh`** (config, auth, sessions, binaries, caches) —
+completely separate from the official grok CLI's `~/.grok`, so both can run
+side by side without ever clobbering each other.
+
 | Topic | Link |
 |-------|------|
 | BYOK model setup | [`docs/byok-models.md`](docs/byok-models.md) |
 | Syncing upstream | [`UPSTREAM-MERGE.md`](UPSTREAM-MERGE.md) |
-| Build & install | [`build.sh`](build.sh) → installs `xgrok` to `~/.local/bin` |
+| Build from source | [`build.sh`](build.sh) → installs `thanh` into `~/.thanh/bin/thanh` (+ symlink in `~/.local/bin`) |
+| Publish a release | [`scripts/publish_release.sh`](scripts/publish_release.sh) |
 
 ---
 
-## Installing the released binary
+## Installing & updating `thanh`
 
-Prebuilt binaries are published for macOS, Linux, and Windows:
+Prebuilt binaries are published on this fork's
+[GitHub Releases](https://github.com/weseegod/xgrok/releases) for **macOS
+(Apple Silicon)** and **Linux (x86_64)** — built by CI, so you never need to
+compile on your own machine (handy on memory-constrained Macs).
+
+**Install the latest release:**
 
 ```sh
-curl -fsSL https://x.ai/cli/install.sh | bash   # macOS / Linux / Git Bash
-irm https://x.ai/cli/install.ps1 | iex          # Windows PowerShell
-grok --version
+# macOS (Apple Silicon / M1):
+curl -fsSL -o ~/.local/bin/thanh \
+  https://github.com/weseegod/xgrok/releases/latest/download/thanh-0.2.122-macos-aarch64
+chmod +x ~/.local/bin/thanh
+# Linux (x86_64): replace the asset name with thanh-0.2.122-linux-x86_64
 ```
 
-See the [changelog](https://x.ai/build/changelog) for the latest fixes,
-features, and improvements in each release.
+> [!NOTE]
+> Assets are named `thanh-<version>-<os>-<arch>`. Check the latest version on
+> the [releases page](https://github.com/weseegod/xgrok/releases).
+
+**Auto-update (the easy path):** once installed via the managed layout
+(`./build.sh` or the first update), the TUI checks for new versions in the
+background. When one is available the welcome screen shows
+`Update: vX available — press ctrl+u to restart` — press **Ctrl+U** to
+download and restart onto the new binary. You can also run `thanh update`
+manually. Official grok is unaffected: the updater manages
+`~/.thanh/bin/thanh` and never touches grok's `~/.grok` tree.
+
+> [!NOTE]
+> Migrating from an earlier `xgrok` setup? Everything lived in `~/.grok`
+> before; the fork now reads `~/.thanh`. Copy what you need across, e.g.:
+> `mkdir -p ~/.thanh && cp ~/.grok/config.toml ~/.grok/auth.json ~/.thanh/`
+
+**Build from source** (only if you want a local dev build):
+
+```sh
+./build.sh              # needs Rust + dotslash (see "Building from source" below)
+```
 
 ## Building from source
 

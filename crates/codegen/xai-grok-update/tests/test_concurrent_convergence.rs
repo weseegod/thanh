@@ -7,9 +7,9 @@
 //! Production has three independent downloader paths that can race around a
 //! release:
 //!
-//! 1. TUI startup: `check_update_background` spawns a detached `grok update`
+//! 1. TUI startup: `check_update_background` spawns a detached `thanh update`
 //!    (the Ctrl+U path now adopts this child instead of spawning a second).
-//! 2. Explicit `grok update` (incl. the Ctrl+U fallback when there is no
+//! 2. Explicit `thanh update` (incl. the Ctrl+U fallback when there is no
 //!    live child).
 //! 3. Leader mode: the hourly checker runs `ensure_latest_on_disk`
 //!    in-process.
@@ -24,7 +24,7 @@
 //!   same-instant race is accepted as rare; these tests pin the property
 //!   that makes it acceptable — concurrent installs (same or *different*
 //!   versions) never corrupt the active binary. Before the per-attempt
-//!   temp-name fix, every `0.1.x` download shared one `grok-0.1.tmp`
+//!   temp-name fix, every `0.1.x` download shared one `thanh-0.1.tmp`
 //!   (`with_extension("tmp")` eats everything after the last dot), so racer
 //!   A could atomically rename racer B's half-written file into place.
 
@@ -45,18 +45,18 @@ use common::{
 use xai_grok_update::auto_update::{ensure_latest_on_disk, install_internal_from_base, run_update};
 use xai_grok_update::version::installed_on_disk_version;
 
-/// Assert the active `~/.grok/bin/grok` resolves to the expected versioned
+/// Assert the active `~/.thanh/bin/thanh` resolves to the expected versioned
 /// binary, actually runs, and has exactly the expected content (the content
 /// check is what catches a cross-racer temp-file corruption).
 fn assert_active_binary(home: &Path, version: &str, platform: &str, expected_content: &[u8]) {
-    let link = home.join("bin").join("grok");
-    assert!(link.is_symlink(), "grok must be a symlink");
+    let link = home.join("bin").join("thanh");
+    assert!(link.is_symlink(), "thanh must be a symlink");
     let resolved = dunce::canonicalize(&link)
-        .unwrap_or_else(|e| panic!("active grok symlink does not resolve: {e}"));
+        .unwrap_or_else(|e| panic!("active thanh symlink does not resolve: {e}"));
     assert_eq!(
         resolved.file_name().unwrap().to_string_lossy(),
-        format!("grok-{version}-{platform}"),
-        "active grok must be the expected version"
+        format!("thanh-{version}-{platform}"),
+        "active thanh must be the expected version"
     );
     assert_eq!(
         std::fs::read(&resolved).unwrap(),
@@ -72,11 +72,11 @@ fn assert_active_binary(home: &Path, version: &str, platform: &str, expected_con
         .status()
         .map(|s| s.success())
         .unwrap_or(false);
-    assert!(ran_ok, "active grok must pass the smoke-test");
+    assert!(ran_ok, "active thanh must pass the smoke-test");
 }
 
 /// Lay down a managed-install layout in the test GROK_HOME:
-/// `bin/grok -> ../downloads/grok-<version>-<platform>` (what
+/// `bin/thanh -> ../downloads/thanh-<version>-<platform>` (what
 /// `install_internal_from_base` produces).
 fn fake_managed_install(version: &str) {
     let home = test_home();
@@ -84,7 +84,7 @@ fn fake_managed_install(version: &str) {
     let bin = home.join("bin");
     std::fs::create_dir_all(&downloads).unwrap();
     std::fs::create_dir_all(&bin).unwrap();
-    let name = format!("grok-{version}-{}", host_platform());
+    let name = format!("thanh-{version}-{}", host_platform());
     std::fs::write(downloads.join(&name), small_good_artifact()).unwrap();
     std::fs::set_permissions(
         downloads.join(&name),
@@ -93,7 +93,7 @@ fn fake_managed_install(version: &str) {
     .unwrap();
     std::os::unix::fs::symlink(
         std::path::Path::new("../downloads").join(&name),
-        bin.join("grok"),
+        bin.join("thanh"),
     )
     .unwrap();
 }
@@ -185,7 +185,7 @@ async fn ensure_latest_downloads_once_then_converges_without_redownload() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Convergence: explicit `grok update` (the Ctrl+U fallback path) finds the
+// Convergence: explicit `thanh update` (the Ctrl+U fallback path) finds the
 // binary another process already installed and skips the download — while
 // still returning the target version so stale leaders get signalled.
 // ─────────────────────────────────────────────────────────────────────────────
@@ -242,7 +242,7 @@ async fn run_update_force_still_redownloads_when_disk_current() {
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Installer gating: the disk-version probe must only be trusted for
-// installers that actually maintain the managed `~/.grok/bin/grok` symlink
+// installers that actually maintain the managed `~/.thanh/bin/thanh` symlink
 // (internal, gh-release). For npm, a symlink left over from a previous
 // internal install LIES about the npm install's version — and in the worst
 // direction (leftover "newer" than the registry) it would silently suppress
@@ -335,7 +335,7 @@ async fn disk_probe_preserves_prerelease_versions() {
 #[serial]
 async fn disk_probe_rejects_dangling_symlink() {
     // If the symlink survives but its target binary was deleted (manual
-    // ~/.grok/downloads cleanup), the probe must report None — otherwise
+    // ~/.thanh/downloads cleanup), the probe must report None — otherwise
     // every updater would claim "already up to date" forever while no
     // runnable binary exists, and nothing would ever repair the install.
     let home = test_home();
@@ -346,7 +346,7 @@ async fn disk_probe_rejects_dangling_symlink() {
 
     std::fs::remove_file(
         home.join("downloads")
-            .join(format!("grok-0.2.7-{platform}")),
+            .join(format!("thanh-0.2.7-{platform}")),
     )
     .unwrap();
 
@@ -374,7 +374,7 @@ async fn ensure_latest_repairs_dangling_symlink_by_downloading() {
     fake_managed_install("0.2.7");
     std::fs::remove_file(
         home.join("downloads")
-            .join(format!("grok-0.2.7-{platform}")),
+            .join(format!("thanh-0.2.7-{platform}")),
     )
     .unwrap();
     let cfg = make_update_config("stable");
@@ -398,7 +398,7 @@ async fn ensure_latest_repairs_dangling_symlink_by_downloading() {
 // Race integrity: the accepted same-instant race must stay harmless. Two (or
 // three) installers running concurrently — even for DIFFERENT versions —
 // must never leave a corrupt active binary. Pre-fix, all 0.1.x downloads
-// shared one `grok-0.1.tmp`, so a concurrent racer could atomically rename a
+// shared one `thanh-0.1.tmp`, so a concurrent racer could atomically rename a
 // half-written file into place.
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -463,7 +463,7 @@ async fn concurrent_different_version_installs_do_not_corrupt_each_other() {
     let server = ArtifactServer::start(artifact.clone());
     server.set_slow(true);
 
-    // Pre-fix, BOTH of these wrote to downloads/grok-0.1.tmp concurrently
+    // Pre-fix, BOTH of these wrote to downloads/thanh-0.1.tmp concurrently
     // (with_extension("tmp") truncates at the last dot), so one racer could
     // rename the other's partial file into its own versioned path.
     let results = run_concurrent_installs(&server, &["0.1.181", "0.1.182"]).await;
@@ -475,7 +475,7 @@ async fn concurrent_different_version_installs_do_not_corrupt_each_other() {
     for version in ["0.1.181", "0.1.182"] {
         let path = home
             .join("downloads")
-            .join(format!("grok-{version}-{platform}"));
+            .join(format!("thanh-{version}-{platform}"));
         assert_eq!(
             std::fs::read(&path).unwrap(),
             artifact,
@@ -485,17 +485,17 @@ async fn concurrent_different_version_installs_do_not_corrupt_each_other() {
 
     // The active symlink points at whichever racer swapped last; it must
     // resolve and run regardless.
-    let resolved = dunce::canonicalize(home.join("bin").join("grok")).unwrap();
+    let resolved = dunce::canonicalize(home.join("bin").join("thanh")).unwrap();
     assert_eq!(std::fs::read(&resolved).unwrap(), artifact);
     let name = resolved.file_name().unwrap().to_string_lossy().to_string();
     assert!(
         !name.contains(".tmp"),
-        "active grok must never be a temp file: {name}"
+        "active thanh must never be a temp file: {name}"
     );
 
     // No stray shared temp file left behind (the pre-fix collision name).
     assert!(
-        !home.join("downloads").join("grok-0.1.tmp").exists(),
+        !home.join("downloads").join("thanh-0.1.tmp").exists(),
         "the pre-fix shared temp name must not exist"
     );
 }

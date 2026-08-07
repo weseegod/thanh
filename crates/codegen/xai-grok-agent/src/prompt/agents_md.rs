@@ -1,10 +1,10 @@
 //! AGENTS.md / Claude.md / rules directory discovery and loading.
 //!
-//! Searches from cwd to repo root, plus `~/.grok/`. Also discovers
+//! Searches from cwd to repo root, plus `~/.thanh/`. Also discovers
 //! `*.md` files in rules directories: vendor-prefixed `.grok/rules/`,
 //! `.claude/rules/`, and `.cursor/rules/` in project directories, and a
 //! plain `rules/` directly under the vendor-qualified home-scope roots
-//! (`~/.grok/rules/`, `~/.claude/rules/`, `~/.cursor/rules/`).
+//! (`~/.thanh/rules/`, `~/.claude/rules/`, `~/.cursor/rules/`).
 
 use std::path::{Path, PathBuf};
 
@@ -141,7 +141,7 @@ fn add_discovered_candidate(
     });
 }
 
-/// Read Agents.md from ~/.grok/, git repo root, and session cwd.
+/// Read Agents.md from ~/.thanh/, git repo root, and session cwd.
 /// Returns a list of AgentConfigFile with their file names, full paths, and contents.
 ///
 /// `compat` gates which vendor (`.claude`/`.cursor`) surfaces are scanned for

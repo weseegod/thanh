@@ -1,4 +1,4 @@
-//! Parse marketplace sources from `~/.grok/config.toml`.
+//! Parse marketplace sources from `~/.thanh/config.toml`.
 //!
 //! Expected format:
 //! ```toml
@@ -182,7 +182,7 @@ fn extract_marketplace_entries(
     }
 }
 /// Loads additional marketplace sources from `settings.json` (`extraKnownMarketplaces`)
-/// and `known_marketplaces.json` files under `~/.grok/` and `~/.claude/`.
+/// and `known_marketplaces.json` files under `~/.thanh/` and `~/.claude/`.
 pub fn load_extra_sources_from_settings(existing: &[MarketplaceSource]) -> Vec<MarketplaceSource> {
     let roots: Vec<PathBuf> = [
         xai_grok_config::user_grok_home(),
@@ -195,7 +195,7 @@ pub fn load_extra_sources_from_settings(existing: &[MarketplaceSource]) -> Vec<M
 }
 
 /// Like [`load_extra_sources_from_settings`] but reads from explicit `roots`
-/// instead of `~/.grok`/`~/.claude`. Each root is checked for
+/// instead of `~/.thanh`/`~/.claude`. Each root is checked for
 /// `settings.local.json`, `settings.json` (`extraKnownMarketplaces` key), and
 /// `plugins/known_marketplaces.json`. Lets callers (e.g. first-run auto-register
 /// tests) stay isolated from the developer's real home dir.

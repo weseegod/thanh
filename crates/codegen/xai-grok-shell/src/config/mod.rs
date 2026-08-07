@@ -9,7 +9,7 @@ pub use xai_grok_config_types::{
 };
 /// Full configuration for the memory system.
 ///
-/// Parsed from the `[memory]` section of `~/.grok/config.toml` or
+/// Parsed from the `[memory]` section of `~/.thanh/config.toml` or
 /// `.grok/config.toml`. Disabled by default; enabled via
 /// `--experimental-memory` CLI flag or `GROK_MEMORY=1` env var.
 /// Force-disabled via `GROK_MEMORY=0` (overrides TOML and remote settings).
@@ -50,7 +50,7 @@ pub struct MemoryConfig {
     /// not under `[memory]`. Pruning is a compaction behavior.
     #[serde(skip)]
     pub pruning: PruningConfig,
-    /// Per-agent memory root override (e.g. `~/.grok/agent-memory/<name>/`).
+    /// Per-agent memory root override (e.g. `~/.thanh/agent-memory/<name>/`).
     #[serde(skip)]
     pub root_dir_override: Option<std::path::PathBuf>,
     /// When true, the root is already project-scoped so MemoryStorage should
@@ -215,7 +215,7 @@ impl MemoryConfig {
 }
 /// Configuration for subagent (task tool) support.
 ///
-/// Parsed from the `[subagents]` section of `~/.grok/config.toml` or
+/// Parsed from the `[subagents]` section of `~/.thanh/config.toml` or
 /// `.grok/config.toml`. Enabled by default; can be disabled via
 /// `GROK_SUBAGENTS=0` env var or `[subagents] enabled = false`
 /// in config.toml.
@@ -877,7 +877,7 @@ pub struct ToolsConfig {
     pub respect_gitignore: bool,
     /// Drop tools whose xAI API requires server-side artifact storage
     /// (currently just `video_gen`). Intended for ZDR-bound teams via
-    /// `~/.grok/managed_config.toml`. Defaults to `false`.
+    /// `~/.thanh/managed_config.toml`. Defaults to `false`.
     pub disable_zdr_incompatible_tools: bool,
     /// Optional S3 bucket config for ZDR video output. When present (and
     /// valid), video tools presign an upload URL and pass it to the API so
@@ -1613,7 +1613,7 @@ pub(crate) fn resolve_effective_plugins_config(
     plugins_cfg
 }
 pub use xai_grok_config::{deep_merge_toml, expand_env_vars_in_string, expand_env_vars_in_toml};
-/// Add a plugin path to `[plugins].paths` in `~/.grok/config.toml`.
+/// Add a plugin path to `[plugins].paths` in `~/.thanh/config.toml`.
 ///
 /// Creates the `[plugins]` section and `paths` array if they don't exist.
 /// Deduplicates: if the path is already present, this is a no-op.
@@ -1655,7 +1655,7 @@ pub(crate) fn add_plugin_path(path: &str) -> Result<(), Box<dyn std::error::Erro
     std::fs::write(&config_path, toml::to_string_pretty(&config)?)?;
     Ok(())
 }
-/// Remove a plugin path from `[plugins].paths` in `~/.grok/config.toml`.
+/// Remove a plugin path from `[plugins].paths` in `~/.thanh/config.toml`.
 ///
 /// If the path is not found, this is a no-op (returns Ok).
 pub(crate) fn remove_plugin_path(path: &str) -> Result<(), Box<dyn std::error::Error>> {
@@ -1678,7 +1678,7 @@ pub(crate) fn remove_plugin_path(path: &str) -> Result<(), Box<dyn std::error::E
     std::fs::write(&config_path, toml::to_string_pretty(&config)?)?;
     Ok(())
 }
-/// Add a plugin to `[plugins].disabled` in `~/.grok/config.toml`.
+/// Add a plugin to `[plugins].disabled` in `~/.thanh/config.toml`.
 ///
 /// Creates the `[plugins]` section and `disabled` array if they don't exist.
 /// Deduplicates: if already present, this is a no-op.
@@ -1722,7 +1722,7 @@ pub fn add_disabled_plugin(plugin_id: &str) -> Result<(), Box<dyn std::error::Er
     std::fs::write(&config_path, toml::to_string_pretty(&config)?)?;
     Ok(())
 }
-/// Remove a plugin from `[plugins].disabled` in `~/.grok/config.toml`.
+/// Remove a plugin from `[plugins].disabled` in `~/.thanh/config.toml`.
 ///
 /// If the plugin is not in the disabled list, this is a no-op.
 pub fn remove_disabled_plugin(plugin_id: &str) -> Result<(), Box<dyn std::error::Error>> {
@@ -1745,7 +1745,7 @@ pub fn remove_disabled_plugin(plugin_id: &str) -> Result<(), Box<dyn std::error:
     std::fs::write(&config_path, toml::to_string_pretty(&config)?)?;
     Ok(())
 }
-/// Add a plugin to `[plugin_cta].dismissed` in `~/.grok/config.toml`.
+/// Add a plugin to `[plugin_cta].dismissed` in `~/.thanh/config.toml`.
 ///
 /// Creates the `[plugin_cta]` section and `dismissed` array if they don't exist.
 /// Deduplicates: if already present, this is a no-op.
@@ -1797,7 +1797,7 @@ pub fn add_dismissed_plugin_cta_to_file(
     std::fs::write(config_path, toml::to_string_pretty(&config)?)?;
     Ok(())
 }
-/// All plugin ids listed in `[plugin_cta].dismissed` in `~/.grok/config.toml`.
+/// All plugin ids listed in `[plugin_cta].dismissed` in `~/.thanh/config.toml`.
 ///
 /// Read once (e.g. on catalog load) and cached so the matched-debounce recompute
 /// doesn't parse the config from disk on the UI thread.
@@ -1829,9 +1829,9 @@ pub fn dismissed_plugin_ctas_in_file(
         })
         .unwrap_or_default()
 }
-/// Validate that a hook path is safe to add to `~/.grok/hooks-paths`.
+/// Validate that a hook path is safe to add to `~/.thanh/hooks-paths`.
 ///
-/// CWE-427: Only paths under `~/.grok/` are allowed to prevent
+/// CWE-427: Only paths under `~/.thanh/` are allowed to prevent
 /// arbitrary hook path injection that bypasses the project trust gate.
 /// Paths are canonicalized (resolving symlinks and `..`) before checking.
 pub(crate) fn validate_hooks_path(path: &str) -> Result<(), Box<dyn std::error::Error>> {
@@ -1862,7 +1862,7 @@ pub(crate) fn validate_hooks_path(path: &str) -> Result<(), Box<dyn std::error::
     let canonical_home = dunce::canonicalize(&grok_home).unwrap_or_else(|_| grok_home.clone());
     if !canonical.starts_with(&canonical_home) {
         return Err(format!(
-            "Hook path must be under ~/.grok/ ({}). Got: {}",
+            "Hook path must be under ~/.thanh/ ({}). Got: {}",
             canonical_home.display(),
             canonical.display()
         )
@@ -1891,7 +1891,7 @@ pub(crate) fn post_install_plugin(repo_key: &str) -> (Vec<String>, Vec<String>) 
     }
     (names, warnings)
 }
-/// Add a plugin to `[plugins].enabled` in `~/.grok/config.toml`.
+/// Add a plugin to `[plugins].enabled` in `~/.thanh/config.toml`.
 ///
 /// Used for project-scope plugins that are disabled by default.
 /// Deduplicates: if already present, this is a no-op.
@@ -1935,7 +1935,7 @@ pub fn add_enabled_plugin(plugin_id: &str) -> Result<(), Box<dyn std::error::Err
     std::fs::write(&config_path, toml::to_string_pretty(&config)?)?;
     Ok(())
 }
-/// Remove a plugin from `[plugins].enabled` in `~/.grok/config.toml`.
+/// Remove a plugin from `[plugins].enabled` in `~/.thanh/config.toml`.
 pub fn remove_enabled_plugin(plugin_id: &str) -> Result<(), Box<dyn std::error::Error>> {
     let config_path = crate::util::grok_home::grok_home().join("config.toml");
     let content = match std::fs::read_to_string(&config_path) {
@@ -1956,10 +1956,10 @@ pub fn remove_enabled_plugin(plugin_id: &str) -> Result<(), Box<dyn std::error::
     std::fs::write(&config_path, toml::to_string_pretty(&config)?)?;
     Ok(())
 }
-/// Add a hook path to `~/.grok/hooks-paths` (one path per line).
+/// Add a hook path to `~/.thanh/hooks-paths` (one path per line).
 ///
 /// If the path is already present (exact string match), this is a no-op.
-/// CWE-427: The path is validated to be under `~/.grok/` before writing.
+/// CWE-427: The path is validated to be under `~/.thanh/` before writing.
 pub(crate) fn add_hooks_path(path: &str) -> Result<(), Box<dyn std::error::Error>> {
     validate_hooks_path(path)?;
     add_hooks_path_to_file(
@@ -1987,7 +1987,7 @@ pub(crate) fn add_hooks_path_to_file(
     writeln!(file, "{}", path)?;
     Ok(())
 }
-/// Remove a hook path from `~/.grok/hooks-paths`.
+/// Remove a hook path from `~/.thanh/hooks-paths`.
 ///
 /// If the path is not found (exact string match), this is a no-op.
 /// Matches the same exact-string behavior as `add_hooks_path`.

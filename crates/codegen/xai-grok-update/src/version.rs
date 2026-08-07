@@ -11,20 +11,26 @@ use xai_grok_shell::util::grok_home::grok_home;
 
 const TTL_SECONDS_BEFORE_AUTO_UPDATE: Duration = Duration::from_secs(60 * 30);
 const NPM_PACKAGE: &str = "@xai-official/grok";
-pub const GH_RELEASE_REPO: &str = "xai-org-shared/grok-build";
+/// Fork's own GitHub repo. All release feed lookups (gh-release installer,
+/// channel pointers, binary downloads) resolve against this repo instead of
+/// upstream's `xai-org-shared/grok-build`.
+pub const GH_RELEASE_REPO: &str = "weseegod/xgrok";
 
-/// Primary CLI base URL: Cloudflare-fronted x.ai endpoint with edge caching
-/// for binaries and origin-respecting no-cache for channel pointers.
-pub(crate) const CLI_BASE_URL_PRIMARY: &str = "https://x.ai/cli";
+/// Primary CLI base URL: the fork's GitHub Releases "latest" download
+/// endpoint. Assets on each release are published as `stable` / `alpha`
+/// channel pointers (plain-text semver) plus `thanh-<version>-<os>-<arch>`
+/// binaries, so the existing channel-pointer fetch (`{base}/{channel}`) and
+/// binary download (`{base}/{object}`) keep working unchanged against
+/// `releases/latest/download/...` (GitHub redirects to the asset CDN, which
+/// reqwest follows).
+pub(crate) const CLI_BASE_URL_PRIMARY: &str =
+    "https://github.com/weseegod/xgrok/releases/latest/download";
 
-/// Fallback CLI base URL: direct GCS, used when the primary is unreachable
-/// (Cloudflare outage, regional CF egress issue, DNS hijack, etc.).
-pub(crate) const CLI_BASE_URL_FALLBACK: &str =
-    "https://storage.googleapis.com/grok-build-public-artifacts/cli";
-
-/// CLI base URLs in preference order. Callers (channel-pointer fetch, binary
-/// download, in-app updater) try each in turn and stop at the first success.
-pub(crate) const CLI_BASE_URLS: &[&str] = &[CLI_BASE_URL_PRIMARY, CLI_BASE_URL_FALLBACK];
+/// CLI base URLs in preference order. The fork publishes to a single GitHub
+/// Releases feed, so there is no separate fallback mirror; callers
+/// (channel-pointer fetch, binary download, in-app updater) try each in turn
+/// and stop at the first success.
+pub(crate) const CLI_BASE_URLS: &[&str] = &[CLI_BASE_URL_PRIMARY];
 
 /// Minimal configuration the update system needs from the environment.
 ///
@@ -35,7 +41,7 @@ pub(crate) const CLI_BASE_URLS: &[&str] = &[CLI_BASE_URL_PRIMARY, CLI_BASE_URL_F
 pub struct UpdateConfig {
     /// Chat API proxy base URL (versioned `https://cli-chat-proxy.grok.com/v1` endpoint).
     pub proxy_base_url: String,
-    /// Auth scope key for `~/.grok/auth.json`.
+    /// Auth scope key for `~/.thanh/auth.json`.
     pub auth_scope: String,
     /// Enterprise deployment key (GROK_DEPLOYMENT_KEY).
     pub deployment_key: Option<String>,
@@ -227,7 +233,8 @@ async fn fetch_gh_release_latest(exclude_pre: bool) -> Result<String> {
 /// Fetch the latest version from a public CLI channel pointer.
 ///
 /// Reads `{base}/{channel}` which contains a plain-text semver string
-/// (e.g. `0.1.181`). No auth required — the upstream bucket is public.
+/// (e.g. `0.1.181`). No auth required — the fork's release assets are
+/// public on GitHub Releases (`releases/latest/download/{channel}`).
 ///
 /// For the alpha channel, fetches both `alpha` and `stable` pointers and
 /// returns the semver-greater, matching the behavior of the npm and
@@ -258,7 +265,7 @@ pub(crate) async fn fetch_gcs_version(channel: &str) -> Result<String> {
 }
 
 /// Test-only entry point: same as [`fetch_gcs_version`] but reads from
-/// `base_url` instead of the hardcoded GCS bucket.
+/// `base_url` instead of the hardcoded release base.
 #[doc(hidden)]
 pub async fn fetch_gcs_version_from_base(channel: &str, base_url: &str) -> Result<String> {
     if channel == "alpha" {
@@ -357,7 +364,7 @@ pub async fn fetch_latest_version(installer: &str, config: &UpdateConfig) -> Res
 /// `stable_version` records the current stable channel pointer so that
 /// `channel_label()` can derive `[alpha]` vs `[stable]` without network I/O.
 pub async fn write_version_cache(version: &str, stable_version: Option<&str>) {
-    let version_path = grok_home().join("version.json");
+    let version_path = grok_home().join("version-thanh.json");
     let now = time::OffsetDateTime::now_utc();
     let json = GrokVersion::new(
         version.to_string(),
@@ -401,9 +408,9 @@ pub async fn get_latest_version(installer: &str, config: &UpdateConfig) -> Resul
     Ok(version)
 }
 
-/// True if `version.json` exists and is within TTL.
+/// True if `version-thanh.json` exists and is within TTL.
 pub async fn is_version_cache_fresh() -> bool {
-    let version_path = grok_home().join("version.json");
+    let version_path = grok_home().join("version-thanh.json");
     let now = time::OffsetDateTime::now_utc();
     if let Ok(version_str) = fs::read_to_string(&version_path).await
         && let Ok(version) = serde_json::from_str::<GrokVersion>(&version_str)
@@ -416,18 +423,18 @@ pub async fn is_version_cache_fresh() -> bool {
 
 pub use xai_grok_version::installed as get_installed_grok_version;
 
-/// Version of the managed grok binary currently on disk, read from the
-/// `~/.grok/bin/grok` symlink target (`../downloads/grok-<version>-<platform>`)
+/// Version of the managed thanh binary currently on disk, read from the
+/// `~/.thanh/bin/thanh` symlink target (`../downloads/thanh-<version>-<platform>`)
 /// without exec'ing anything.
 ///
 /// Concurrent updaters (TUI background download, leader hourly checker,
-/// explicit `grok update`) decide staleness from this instead of their own
+/// explicit `thanh update`) decide staleness from this instead of their own
 /// compiled-in version, so a binary another process already installed is
 /// never downloaded a second time.
 ///
 /// Returns `None` when there is no parseable managed symlink (Windows
 /// copy-based installs, dev builds) or when the symlink is DANGLING — a
-/// link whose target binary was deleted (e.g. manual `~/.grok/downloads`
+/// link whose target binary was deleted (e.g. manual `~/.thanh/downloads`
 /// cleanup) must not report an installed version, or every updater would
 /// claim "already up to date" forever while no runnable binary exists.
 /// NOTE: the symlink existing does not prove the *active installer*
@@ -443,7 +450,7 @@ pub fn installed_on_disk_version() -> Option<String> {
         // metadata() follows the symlink: Err means the target is gone
         // (dangling link) and the version it names is not actually on disk.
         std::fs::metadata(&app).ok()?;
-        version_from_versioned_binary_name(target.file_name()?.to_str()?, "grok")
+        version_from_versioned_binary_name(target.file_name()?.to_str()?, "thanh")
     }
     #[cfg(not(unix))]
     {
@@ -458,8 +465,8 @@ pub fn installed_on_disk_version() -> Option<String> {
 /// and the npm layout without a platform suffix (`grok-0.1.150`,
 /// `grok-0.1.150-alpha.1`): everything between the `{bin_prefix}-` prefix
 /// and the first platform-OS component is the version, validated as semver
-/// so unknown layouts (`grok-latest`, `grok-pager-*` when `bin_prefix` is
-/// `grok`) return `None` instead of garbage.
+/// so unknown layouts (`thanh-latest`, `grok-pager-*` when `bin_prefix` is
+/// `thanh`) return `None` instead of garbage.
 ///
 /// Shared by the disk-version probe above and `cleanup_old_downloads` in
 /// `auto_update` — keep it the single place that understands this naming.
@@ -501,12 +508,12 @@ pub(crate) async fn try_fetch_stable_pointer() -> Option<String> {
     .unwrap_or(None)
 }
 
-/// Read the cached stable version from `~/.grok/version.json` (sync, for display).
+/// Read the cached stable version from `~/.thanh/version-thanh.json` (sync, for display).
 ///
 /// Returns `None` if the file doesn't exist, can't be parsed, or has no
 /// `stable_version` field (e.g. written by an older binary).
 pub fn cached_stable_version() -> Option<String> {
-    let version_path = grok_home().join("version.json");
+    let version_path = grok_home().join("version-thanh.json");
     let content = std::fs::read_to_string(&version_path).ok()?;
     let gv: GrokVersion = serde_json::from_str(&content).ok()?;
     gv.stable_version
@@ -545,7 +552,7 @@ pub fn channel_name() -> Option<&'static str> {
 /// Channel label derived from the cached stable pointer.
 ///
 /// Compares the compiled-in `VERSION` against the stable pointer stored in
-/// `~/.grok/version.json` (written by the auto-updater):
+/// `~/.thanh/version-thanh.json` (written by the auto-updater):
 /// - `" [alpha]"` when the current version is ahead of stable,
 /// - `" [stable]"` when at or behind stable,
 /// - `""` when no cached pointer is available (first launch, old cache format).
@@ -590,36 +597,41 @@ mod tests {
     #[test]
     fn test_version_from_versioned_binary_name() {
         let cases: &[(&str, Option<&str>)] = &[
-            ("grok-0.2.46-darwin-arm64", Some("0.2.46")),
-            ("grok-0.1.220-linux-x86_64", Some("0.1.220")),
-            ("grok-0.2.5-windows-x86_64.exe", Some("0.2.5")),
+            ("thanh-0.2.46-darwin-arm64", Some("0.2.46")),
+            ("thanh-0.1.220-linux-x86_64", Some("0.1.220")),
+            ("thanh-0.2.5-windows-x86_64.exe", Some("0.2.5")),
             // Pre-releases must round-trip whole — truncating to "0.1.220"
             // would make an alpha install masquerade as the release and
             // mask alpha → stable updates.
-            ("grok-0.1.220-alpha.4-linux-x86_64", Some("0.1.220-alpha.4")),
-            ("grok-0.1.220-alpha.4", Some("0.1.220-alpha.4")), // npm layout
-            ("grok-pager-0.1.5-darwin-arm64", None),           // "pager" is not a version
-            ("grok-garbage-darwin-arm64", None),               // unparseable version
-            ("grok-0.2.46", Some("0.2.46")),                   // no platform suffix
-            ("other-0.2.46-darwin-arm64", None),               // wrong prefix
-            ("grok-latest", None),                             // symlink alias, not a version
-            ("grok", None),                                    // bare name
+            ("thanh-0.1.220-alpha.4-linux-x86_64", Some("0.1.220-alpha.4")),
+            ("thanh-0.1.220-alpha.4", Some("0.1.220-alpha.4")), // npm layout
+            ("thanh-pager-0.1.5-darwin-arm64", None),           // "pager" is not a version
+            ("thanh-garbage-darwin-arm64", None),               // unparseable version
+            ("thanh-0.2.46", Some("0.2.46")),                   // no platform suffix
+            ("grok-0.2.46-darwin-arm64", None),                 // wrong prefix (official grok)
+            ("other-0.2.46-darwin-arm64", None),                // wrong prefix
+            ("thanh-latest", None),                             // symlink alias, not a version
+            ("thanh", None),                                    // bare name
             ("", None),
         ];
         for (name, expected) in cases {
             assert_eq!(
-                version_from_versioned_binary_name(name, "grok").as_deref(),
+                version_from_versioned_binary_name(name, "thanh").as_deref(),
                 *expected,
                 "version_from_versioned_binary_name({name:?})"
             );
         }
 
-        // bin_prefix discrimination: the pager binary parses under its own
-        // prefix but not under "grok".
+        // bin_prefix discrimination: a "grok-pager"-style binary parses under
+        // its own prefix but never under "thanh" (the fork's managed prefix).
         assert_eq!(
             version_from_versioned_binary_name("grok-pager-0.1.5-darwin-arm64", "grok-pager")
                 .as_deref(),
             Some("0.1.5")
+        );
+        assert_eq!(
+            version_from_versioned_binary_name("grok-pager-0.1.5-darwin-arm64", "thanh").as_deref(),
+            None
         );
     }
 

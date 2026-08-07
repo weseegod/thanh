@@ -1113,6 +1113,8 @@ mod tests {
                 flat_background: false,
                 held_queue: 0,
                 held_queue_top_sendable: false,
+                expanded: false,
+                detail_lines: &[],
             },
         );
         assert!(

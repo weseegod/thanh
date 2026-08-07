@@ -86,6 +86,18 @@ git fetch --all
    git push origin main
    ```
 
+8. **Bump the fork version and publish a release** (see
+   [Release & versioning](#release--versioning)) — only when the user wants
+   new binaries shipped:
+
+   ```bash
+   scripts/publish_release.sh
+   ```
+
+   The script bumps `xai-grok-version` + `xai-grok-pager-bin`, tags `vX.Y.Z`,
+   and pushes — CI builds `thanh` for macOS arm64 + Linux x86_64 and publishes
+   the GitHub Release.
+
 **Strategy:** always **merge** `upstream/main` into a branch off fork `main`.
 Do **not** rebase fork commits onto upstream — that drops fork history and
 makes BYOK customizations harder to track.
@@ -109,6 +121,9 @@ These paths contain fork customizations. Preserve them during merges.
 | Category | Paths | Rule |
 |----------|-------|------|
 | Fork-only files | `build.sh`, `docs/byok-models.md` | Never delete; keep fork version |
+| Fork release pipeline | `.github/workflows/release.yml`, `scripts/publish_release.sh` | Never delete; keep fork-owned |
+| Self-update feed (`thanh`) | `crates/codegen/xai-grok-update/src/version.rs`, `auto_update.rs`, `crates/codegen/xai-grok-config/src/paths.rs`, `crates/codegen/xai-fast-worktree/src/db/mod.rs` (`resolve_grok_home`) | Keep fork feed (`weseegod/xgrok` releases), fork home `~/.thanh` (default in `default_grok_home()`/`resolve_grok_home()`, never upstream's `~/.grok`), `thanh` managed binary name (`~/.thanh/bin/thanh`, assets `thanh-<ver>-<os>-<arch>`), `version-thanh.json` cache, single-link swap (never touch `bin/grok`/`bin/agent`) |
+| Version lockstep | `crates/codegen/xai-grok-version/Cargo.toml`, `crates/codegen/xai-grok-pager-bin/Cargo.toml` | Keep fork version; bump after every sync (see [Release & versioning](#release--versioning)) |
 | BYOK model config | `crates/codegen/xai-grok-shell/src/agent/config.rs`, `config_model_override_parse.rs`, `models.rs` | Keep fork `input` / `input_modalities` parsing and text-only capability checks |
 | Image stripping | `crates/codegen/xai-grok-sampling-types/src/conversation.rs`, `types.rs`, `crates/codegen/xai-grok-shell/src/session/compaction.rs`, `acp_session_impl/turn.rs`, `helpers/full_replace_compaction.rs` | Keep `strip_image_parts_for_text_only` and all call sites |
 | BYOK auth/sampling | `crates/codegen/xai-grok-shell/src/session/acp_session.rs`, `acp_session_impl/sampler_turn.rs`, `acp_session_impl/spawn.rs`, `crates/codegen/xai-grok-sampler/src/client.rs`, `crates/codegen/xai-grok-shell/src/remote/client.rs` | Keep BYOK auth memo; do not refresh session tokens against third-party endpoints |
@@ -125,6 +140,30 @@ diff in [Post-merge verification](#post-merge-verification) is the source of tru
 When both sides touch a hot file in non-overlapping hunks, git auto-merges
 without a conflict — the fork hunks still need checking. In the Aug 2026
 sync #2, 7 inventory files merged that way; the marker diff caught no loss.
+
+## Release & versioning
+
+The fork ships binaries as **`thanh`** (not `grok`) with its own home
+**`~/.thanh`** (config, auth, sessions, `bin/`, `downloads/`, caches) so it
+runs fully isolated from an official grok install that keeps `~/.grok`.
+Release assets on `weseegod/xgrok` GitHub Releases are named
+`thanh-<version>-<os>-<arch>` (e.g. `thanh-0.2.122-macos-aarch64`), plus
+plain-text `stable` / `alpha` channel pointers that the built-in updater
+(Ctrl+U / `thanh update`) reads from `releases/latest/download/`.
+
+Rules:
+
+- **Version** is plain 3-part semver, strictly increasing per release — the
+  stable channel rejects pre-release targets (`0.2.121-xgrok.1` would never
+  be considered an update). Keep `xai-grok-version` and `xai-grok-pager-bin`
+  lockstepped (they already are, both synced to upstream's current version).
+- **After every upstream sync**, bump the version (typically patch
+  `0.2.121 → 0.2.122`) and publish: `scripts/publish_release.sh`. The CI
+  workflow builds on `ubuntu-latest` (linux-x86_64) and `macos-14`
+  (macos-aarch64, Apple Silicon) — no local macOS build needed.
+- The updater's default installer is `internal` (pure HTTP against the fork's
+  GitHub Releases); `gh-release` (needs `gh`) is also supported. It manages
+  `~/.thanh/bin/thanh` only and never touches grok's `~/.grok` tree.
 
 ### Fork commit map
 
@@ -203,7 +242,8 @@ Manual checks:
 
 - [ ] `docs/byok-models.md` exists
 - [ ] `build.sh` exists and is executable
-- [ ] `./build.sh` prints a version (e.g. `xgrok 0.2.x`)
+- [ ] `./build.sh` prints a version (e.g. `thanh 0.2.x`)
+- [ ] Fork markers preserved: `strip_image_parts_for_text_only|input_modalities|ModelByok|byok`, plus `weseegod/xgrok`, `version-thanh.json`, `~/.thanh`, `bin/thanh`
 - [ ] No conflict markers left in source (`rg -n '^(<<<<<<<|=======|>>>>>>>)'` — match at line start only; mid-line matches in string literals are false positives)
 
 ## Anti-patterns
@@ -211,7 +251,7 @@ Manual checks:
 - Do **not** force-push `main`
 - Do **not** rebase fork commits onto upstream
 - Do **not** delete `build.sh` or `docs/byok-models.md`
-- Do **not** commit API keys or real credentials from `~/.grok/config.toml`
+- Do **not** commit API keys or real credentials from `~/.thanh/config.toml`
 
 ## Reference: Aug 2026 syncs
 

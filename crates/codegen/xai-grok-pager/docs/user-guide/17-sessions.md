@@ -15,7 +15,7 @@ A session is a persistent conversation with full history. It includes:
 - Token usage and turn counts
 - Subagent sessions (when enabled)
 
-Sessions are identified by a unique session ID (a UUIDv7 when Grok generates it; a client may supply its own ID with `-s`) and stored on disk under `~/.grok/sessions/`. Set `GROK_HOME` to override the base directory; when it is unset, Grok uses `~/.grok`.
+Sessions are identified by a unique session ID (a UUIDv7 when Grok generates it; a client may supply its own ID with `-s`) and stored on disk under `~/.thanh/sessions/`. Set `GROK_HOME` to override the base directory; when it is unset, Grok uses `~/.thanh`.
 
 ---
 
@@ -24,7 +24,7 @@ Sessions are identified by a unique session ID (a UUIDv7 when Grok generates it;
 Grok stores each session in its own directory, grouped by working directory. It URL-encodes the working directory to name the group. When the encoded name exceeds 255 bytes, it instead uses a slug plus a hash and records the original path in a `.cwd` file inside the group.
 
 ```
-~/.grok/sessions/<encoded-cwd>/<session-id>/
+~/.thanh/sessions/<encoded-cwd>/<session-id>/
   summary.json            # metadata: summary/title, timestamps, model ID, message counts
   updates.jsonl           # ACP session update stream (conversation + tool calls)
   chat_history.jsonl      # raw chat messages sent to the model
@@ -272,10 +272,10 @@ Resume a session in a fresh worktree with `grok -w -r <session-id>`.
 
 ### Checking Disk Usage
 
-`grok du` (alias: `grok disk-usage`) reports what the grok home (`~/.grok`) uses on disk. It lists each top-level directory, largest first, then each worktree with its size, type, age, label, and path. Worktrees the registry does not track appear as `untracked`. Pass `--json` for the same report as machine-readable output.
+`grok du` (alias: `grok disk-usage`) reports what the grok home (`~/.thanh`) uses on disk. It lists each top-level directory, largest first, then each worktree with its size, type, age, label, and path. Worktrees the registry does not track appear as `untracked`. Pass `--json` for the same report as machine-readable output.
 
 ```text
-Disk usage for ~/.grok
+Disk usage for ~/.thanh
     412.3 GB  worktrees
       1.2 GB  sessions
     412.0 MB  (top-level files)
@@ -284,8 +284,8 @@ Disk usage for ~/.grok
 
 Worktrees
         SIZE  TYPE                AGE        LABEL  PATH
-    380.0 GB  session             12d ago    my-fix ~/.grok/worktrees/xai/worktree-abc
-     32.3 GB  untracked (session) 40d ago           ~/.grok/worktrees/xai/worktree-old
+    380.0 GB  session             12d ago    my-fix ~/.thanh/worktrees/xai/worktree-abc
+     32.3 GB  untracked (session) 40d ago           ~/.thanh/worktrees/xai/worktree-old
 
 To reclaim space, run `grok worktree gc --max-age 7d --dry-run`, then the same command without `--dry-run`. Without `--max-age`, gc expires nothing.
 Untracked rows are not in the registry, so gc never visits them. Remove one with `grok worktree rm --dry-run <path>`, then without `--dry-run`.

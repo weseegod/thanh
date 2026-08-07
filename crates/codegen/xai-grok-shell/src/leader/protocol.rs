@@ -184,7 +184,7 @@ pub struct LeaderCapabilities {
     pub workspace_exposure: bool,
     /// Whether the leader supports [`ControlCommand::RelaunchForUpdate`] — a
     /// disruptive, bounded-grace relaunch onto a freshly-installed binary
-    /// (driven by `grok update`). Old leaders default to `false`, so a new
+    /// (driven by `thanh update`). Old leaders default to `false`, so a new
     /// client falls back to advising a manual restart (graceful degradation).
     #[serde(default)]
     pub relaunch_v1: bool,
@@ -212,12 +212,12 @@ pub enum ControlCommand {
     WorkspaceStop,
     WorkspaceStatus,
     /// Ask the leader to relaunch onto a freshly-installed binary (driven by
-    /// `grok update`). The leader stops admitting new turns, waits a bounded
+    /// `thanh update`). The leader stops admitting new turns, waits a bounded
     /// grace period for in-flight turns to finish, flushes session state, then
     /// exits with [`ShutdownReason::AutoUpdate`] so connected clients reconnect
     /// onto the new binary and restore their sessions via `session/load`.
     ///
-    /// `to_version` is the version `grok update` just installed; the leader uses
+    /// `to_version` is the version `thanh update` just installed; the leader uses
     /// it to decline if it is already running that version or newer.
     RelaunchForUpdate {
         to_version: String,

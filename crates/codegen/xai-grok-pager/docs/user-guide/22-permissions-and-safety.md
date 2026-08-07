@@ -103,7 +103,7 @@ For automation that must run tools without interactive approval, use always-appr
 
 ### Disable always-approve (administrators)
 
-Organizations can prevent always-approve from being enabled via CLI, TUI, or `/always-approve`. Set this in `requirements.toml` (user-level under `~/.grok/`, or system-wide under `/etc/grok/` for enforcement users cannot remove):
+Organizations can prevent always-approve from being enabled via CLI, TUI, or `/always-approve`. Set this in `requirements.toml` (user-level under `~/.thanh/`, or system-wide under `/etc/grok/` for enforcement users cannot remove):
 
 ```toml
 [ui]
@@ -188,7 +188,7 @@ Permission rules can be global (all projects), project-scoped (one repository), 
 
 | Scope | File | Shared with teammates |
 |-------|------|-----------------------|
-| Global (all projects) | `~/.grok/config.toml` | No |
+| Global (all projects) | `~/.thanh/config.toml` | No |
 | Project (committed) | `<project>/.grok/config.toml` | Yes (commit it) |
 | Project (personal) | `<project>/.claude/settings.local.json` | No (gitignore it) |
 | Interactive grants | Stored internally by Grok, per project | No |
@@ -233,7 +233,7 @@ Rule syntax examples:
 
 See [Rule Matching Reference](#rule-matching-reference) for the exact matching semantics, including how chained commands and wildcards are evaluated.
 
-### 2. Native Configuration (`~/.grok/config.toml` and `.grok/config.toml`)
+### 2. Native Configuration (`~/.thanh/config.toml` and `.grok/config.toml`)
 
 ```toml
 [permission]
@@ -251,9 +251,9 @@ The structured `tool` field accepts the lowercase names `bash`, `read`, `edit`, 
 
 Because `deny` always wins, you cannot combine these `allow` rules with a catch-all `deny` on `bash` to mean "only allow git/gh"; a `deny tool = "bash"` rule would block `git` and `gh` too. For deny-by-default, use `defaultMode: "dontAsk"` in `.claude/settings.json` or a `PreToolUse` hook (below).
 
-Rules from the global `~/.grok/config.toml` and every project `.grok/config.toml` (from the repo root down to your working directory) are merged into one rule set, alongside any `.claude/settings.json` rules.
+Rules from the global `~/.thanh/config.toml` and every project `.grok/config.toml` (from the repo root down to your working directory) are merged into one rule set, alongside any `.claude/settings.json` rules.
 
-Managed configuration deployed by your organization also contributes `[permission]` rules: the system `/etc/grok/managed_config.toml`, and a user-level copy that Grok maintains automatically at `~/.grok/managed_config.toml`. Managed rules merge like rules from any other source, with two properties specific to managed `allow` rules: your own `deny` and `ask` rules win over a managed `allow` (severity ordering), and a catch-all managed `allow` is ignored when always-approve is locked off. For rules that users cannot edit away, use the root-owned system `/etc/grok/requirements.toml`.
+Managed configuration deployed by your organization also contributes `[permission]` rules: the system `/etc/grok/managed_config.toml`, and a user-level copy that Grok maintains automatically at `~/.thanh/managed_config.toml`. Managed rules merge like rules from any other source, with two properties specific to managed `allow` rules: your own `deny` and `ask` rules win over a managed `allow` (severity ordering), and a catch-all managed `allow` is ignored when always-approve is locked off. For rules that users cannot edit away, use the root-owned system `/etc/grok/requirements.toml`.
 
 Permission rules from every source are read once, when a session starts. Changes apply to the next session.
 
@@ -384,7 +384,7 @@ When a tool call requires approval, the permission prompt offers these choices:
 A narrower set of options remembers just the specific command, MCP tool, or web-fetch domain being prompted, for example "Always allow `cargo test`". These rows are off by default. Enable them with:
 
 ```toml
-# ~/.grok/config.toml
+# ~/.thanh/config.toml
 [ui]
 remember_tool_approvals = true
 ```
@@ -413,7 +413,7 @@ A `PreToolUse` hook can enforce an allow list on the `Bash` tool that applies in
 
 ### Example: Allow Only `git` and `gh`
 
-**`~/.grok/hooks/git-gh-only.json`**
+**`~/.thanh/hooks/git-gh-only.json`**
 
 ```json
 {
@@ -434,7 +434,7 @@ A `PreToolUse` hook can enforce an allow list on the `Bash` tool that applies in
 }
 ```
 
-**`~/.grok/hooks/git-gh-only.sh`**
+**`~/.thanh/hooks/git-gh-only.sh`**
 
 ```bash
 #!/bin/sh
@@ -471,7 +471,7 @@ done
 ```
 
 ```bash
-chmod +x ~/.grok/hooks/git-gh-only.sh
+chmod +x ~/.thanh/hooks/git-gh-only.sh
 ```
 
 This hook denies every `Bash` command unless each chained segment starts with `git` or `gh`, and rejects command substitution, backgrounding, and redirection outright because it cannot verify what they execute. It works in every permission mode.

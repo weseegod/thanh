@@ -109,7 +109,7 @@ pub struct PtyHarness {
 
 impl PtyHarness {
     /// Inherit the parent environment for terminal/shell behavior tests
-    /// (XTVERSION probes and grok wrap). Content-backed launches must use
+    /// (XTVERSION probes and thanh wrap). Content-backed launches must use
     /// [`Self::new_in_sandbox`].
     pub fn new_inherited_env(
         binary: &Path,

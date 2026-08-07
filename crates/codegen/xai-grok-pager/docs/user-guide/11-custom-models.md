@@ -44,7 +44,7 @@ Press `Ctrl+M` from the scrollback pane to open the model picker. It lists all a
 
 ### Config Default
 
-Set a persistent default in `~/.grok/config.toml`:
+Set a persistent default in `~/.thanh/config.toml`:
 
 ```toml
 [models]
@@ -71,7 +71,7 @@ To send provider-specific authentication or version headers -- for example, Anth
 
 ## Configuring Custom Models
 
-Add custom model endpoints in `~/.grok/config.toml` under `[model.<name>]` sections:
+Add custom model endpoints in `~/.thanh/config.toml` under `[model.<name>]` sections:
 
 ```toml
 [model.my-model]

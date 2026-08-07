@@ -45,7 +45,7 @@ pub use model::{
 };
 pub use view::{DiagnosticSnapshot, view};
 
-/// Passive input-device probe for `grok doctor` / `/doctor`.
+/// Passive input-device probe for `thanh doctor` / `/doctor`.
 ///
 /// Does not open a capture stream (no macOS mic-permission prompt). When
 /// `emit_missing_issue` is true and no device exists, appends an issue finding.
@@ -86,7 +86,7 @@ fn voice_missing_finding(error: String) -> DiagnosticFinding {
         automatic_remediation: None,
         note: Some(
             "Connect or select a microphone in your system sound settings. On Linux, install a \
-             supported audio recorder if none was found on PATH. Then run `/doctor` or `grok \
+             supported audio recorder if none was found on PATH. Then run `/doctor` or `thanh \
              doctor` again. Doctor can't detect denied macOS microphone access when the system \
              returns silence; follow the message shown when dictation fails."
                 .to_owned(),
@@ -135,7 +135,7 @@ pub enum WarningCategory {
     /// it rewrites every truecolor cell to the client terminfo's palette.
     TmuxColorReduced,
     SandboxProfileConflict,
-    /// The session runs over SSH without `grok wrap` on the local end, so
+    /// The session runs over SSH without `thanh wrap` on the local end, so
     /// clipboard forwarding and terminal-mode restore on dropped connections
     /// are not guaranteed. Informational recommendation, not a breakage.
     SshWithoutWrap,
@@ -253,7 +253,7 @@ pub(crate) fn collect_startup_warnings_from(
         );
         warning.note = Some(
             "Grok also saves each copy to the backup file shown in the copy message. To copy \
-             directly, run `grok wrap ssh <host>` on your local computer or use a terminal that \
+             directly, run `thanh wrap ssh <host>` on your local computer or use a terminal that \
              supports OSC 52. You can also use `/copy <file>` or `/minimal`."
                 .to_owned(),
         );
@@ -450,8 +450,8 @@ fn sandbox_profile_conflict_warning_from(conflicts: Vec<String>) -> Option<Termi
     })
 }
 
-/// Pure SSH `grok wrap` recommendation — suggests launching the session
-/// through `grok wrap ssh <host>` on the user's local machine, which gives a
+/// Pure SSH `thanh wrap` recommendation — suggests launching the session
+/// through `thanh wrap ssh <host>` on the user's local machine, which gives a
 /// remote session reliable clipboard forwarding plus terminal-mode restore
 /// when the connection drops.
 ///
@@ -485,7 +485,7 @@ pub fn ssh_wrap_hint(
     let mut warning = TerminalWarning::new(
         WarningCategory::SshWithoutWrap,
         "Use local SSH wrapping for more reliable clipboard copy and terminal recovery",
-        Some("grok wrap ssh <host>"),
+        Some("thanh wrap ssh <host>"),
         None,
     );
     warning.note = Some(
@@ -975,7 +975,7 @@ pub fn color_support_warning(
     // Checked before the detected level is consulted at all: the level says
     // what Grok emits, which is a different question from what survives tmux.
     // A truecolor detection is not evidence that truecolor reaches the
-    // terminal, and a session with no color evidence (piped `grok doctor`)
+    // terminal, and a session with no color evidence (piped `thanh doctor`)
     // still has a clamping client worth reporting.
     if color_passthrough == TmuxColorPassthrough::Reduced {
         let mut warning = TerminalWarning::new(
@@ -2220,14 +2220,14 @@ mod tests {
         assert!(out[1].message.contains("sandbox settings"));
     }
 
-    // -- ssh_wrap_hint: `grok wrap ssh` recommendation --------------------------
+    // -- ssh_wrap_hint: `thanh wrap ssh` recommendation --------------------------
 
     #[test]
     fn ssh_wrap_hint_fires_over_plain_ssh() {
         // is_ssh, no sink, not VS Code remote → recommend wrap.
         let w = ssh_wrap_hint(true, false, false).expect("hint must fire");
         assert_eq!(w.category, WarningCategory::SshWithoutWrap);
-        assert_eq!(w.fix.as_deref(), Some("grok wrap ssh <host>"));
+        assert_eq!(w.fix.as_deref(), Some("thanh wrap ssh <host>"));
         assert!(
             w.config_path.is_none(),
             "fix is a command, not a config line"
@@ -2249,7 +2249,7 @@ mod tests {
     #[test]
     fn ssh_wrap_hint_suppressed_when_sink_active() {
         // An active OSC 52 sink means the session already runs under
-        // `grok wrap` — adoption silences the hint by itself.
+        // `thanh wrap` — adoption silences the hint by itself.
         assert!(ssh_wrap_hint(true, true, false).is_none());
     }
 
@@ -2618,7 +2618,7 @@ mod tests {
         assert!(finding.automatic_remediation.is_none());
         assert!(finding.note.as_deref().is_some_and(|note| {
             note.contains("install a supported audio recorder")
-                && note.contains("grok doctor")
+                && note.contains("thanh doctor")
                 && note.contains("can't detect denied macOS microphone access")
         }));
     }
@@ -3089,7 +3089,7 @@ mod tests {
         );
     }
 
-    /// Piped `grok doctor` has no color evidence, but the tmux client is still
+    /// Piped `thanh doctor` has no color evidence, but the tmux client is still
     /// measurable, and `doctor fix` needs the finding to plan against.
     #[test]
     fn color_support_warning_reports_tmux_clamp_without_color_evidence() {

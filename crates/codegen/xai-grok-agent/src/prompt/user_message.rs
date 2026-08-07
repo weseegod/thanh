@@ -192,7 +192,7 @@ pub struct UserMessageContext {
     pub terminals_folder: Option<PathBuf>,
     /// Workspace-scoped rule files (cwd / repo root / optional workspace user dir).
     pub workspace_rules: Vec<RuleEntry>,
-    /// User-scoped rule files (~/.grok/, ~/.claude/).
+    /// User-scoped rule files (~/.thanh/, ~/.claude/).
     pub user_rules: Vec<RuleEntry>,
     /// Skill registry snapshot (already deduped). Rendered through the
     /// shared budget-tier renderer.
@@ -203,7 +203,7 @@ pub struct UserMessageContext {
     /// Connected MCP servers (alphabetical).
     pub mcp_servers: Vec<McpServerEntry>,
     /// Absolute path to the per-workspace MCP descriptor root
-    /// (`~/.grok/projects/<encoded-cwd>/mcps`). Surfaced in
+    /// (`~/.thanh/projects/<encoded-cwd>/mcps`). Surfaced in
     /// the `<mcp_file_system>` instructions so the model knows where
     /// to discover tool/resource schemas. Required when `mcp_servers` is
     /// non-empty; ignored otherwise.

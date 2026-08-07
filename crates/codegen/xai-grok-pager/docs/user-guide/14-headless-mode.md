@@ -543,7 +543,7 @@ Key environment variables that affect headless mode:
 | Variable                        | Description                                                   |
 | ------------------------------- | ------------------------------------------------------------- |
 | `XAI_API_KEY`        | API key for authentication (required when no browser login)   |
-| `GROK_HOME`                    | Override config directory (default: `~/.grok`)                |
+| `GROK_HOME`                    | Override config directory (default: `~/.thanh`)                |
 | `GROK_LOG_FILE`                | Path to a log file (used verbatim as the path; works in headless and TUI, honors `RUST_LOG`) |
 | `RUST_LOG`                     | Log level filter (e.g. `debug`). Headless logs to stderr.     |
 
@@ -603,7 +603,7 @@ the scope small.
 
 ## File Locations
 
-Grok stores data in `~/.grok` (override with `GROK_HOME`; see [Environment Variables for Headless](#environment-variables-for-headless)):
+Grok stores data in `~/.thanh` (override with `GROK_HOME`; see [Environment Variables for Headless](#environment-variables-for-headless)):
 
 | Path                     | Contents                              |
 | ------------------------ | ------------------------------------- |
@@ -620,9 +620,9 @@ Grok stores data in `~/.grok` (override with `GROK_HOME`; see [Environment Varia
 | `trace-exports/`         | Session trace exports                 |
 | `worktrees/`             | Git worktree metadata                 |
 
-### Read-Only `~/.grok`
+### Read-Only `~/.thanh`
 
-For containers or CI, mount `~/.grok` read-only:
+For containers or CI, mount `~/.thanh` read-only:
 
 - Pre-populate `auth.json` or use `XAI_API_KEY`
 - Session persistence fails silently (ephemeral)

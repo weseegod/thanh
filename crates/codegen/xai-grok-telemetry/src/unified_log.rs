@@ -173,7 +173,7 @@ static TEST_REDIRECT: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicB
 /// Redirect all subsequent unified-log writes **and** snapshot reads to a
 /// per-process file under the system temp directory, so test binaries stop
 /// writing synthetic events into the developer's real
-/// `~/.grok/logs/unified.jsonl` (those bursts inflate exactly the counters
+/// `~/.thanh/logs/unified.jsonl` (those bursts inflate exactly the counters
 /// an incident responder greps for). Runtime-activated rather than a cargo
 /// feature: Bazel compiles production and test targets with one shared
 /// feature set, so a feature gate would leak into production builds.
@@ -581,7 +581,7 @@ mod tests {
     use super::*;
 
     /// Pre-main, so no test in this binary can race the lazily-opened
-    /// writer onto the developer's real `~/.grok/logs/unified.jsonl`.
+    /// writer onto the developer's real `~/.thanh/logs/unified.jsonl`.
     #[ctor::ctor]
     fn redirect_for_tests() {
         redirect_to_temp_for_tests();

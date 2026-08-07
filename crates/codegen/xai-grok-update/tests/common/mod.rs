@@ -67,8 +67,8 @@ pub fn test_home() -> &'static PathBuf {
 pub fn reset_home() {
     let home = test_home();
     let _ = std::fs::remove_file(home.join("config.toml"));
-    let _ = std::fs::remove_file(home.join("version.json"));
-    let _ = std::fs::remove_file(home.join("version.json.tmp"));
+    let _ = std::fs::remove_file(home.join("version-thanh.json"));
+    let _ = std::fs::remove_file(home.join("version-thanh.json.tmp"));
     let _ = std::fs::remove_dir_all(home.join("bin"));
     let _ = std::fs::remove_dir_all(home.join("downloads"));
     // SAFETY: tests using this helper must be `#[serial]`.
@@ -91,7 +91,7 @@ pub fn set_test_version(v: &str) {
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// Host `{os}-{arch}` string matching the versioned binary naming scheme
-/// (`grok-{version}-{platform}`).
+/// (`thanh-{version}-{platform}`).
 pub fn host_platform() -> String {
     let os = if cfg!(target_os = "macos") {
         "macos"

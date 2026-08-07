@@ -39,7 +39,7 @@ Grok also scans home-level rules, regardless of where it starts. These roots are
 
 | Location | Notes |
 |----------|-------|
-| `$GROK_HOME/rules/` (default `~/.grok/rules/`) | Always scanned; applies to all projects |
+| `$GROK_HOME/rules/` (default `~/.thanh/rules/`) | Always scanned; applies to all projects |
 | `~/.claude/rules/` | Controlled by `compat.claude.rules` |
 | `~/.cursor/rules/` | Controlled by `compat.cursor.rules` |
 
@@ -197,7 +197,7 @@ Beyond AGENTS.md files, the `.grok/` directory in your project root can contain 
 
 | Path | Purpose |
 |------|---------|
-| `.grok/config.toml` | Project-scoped MCP servers, plugins, and permission rules (other settings load only from `~/.grok/config.toml`) |
+| `.grok/config.toml` | Project-scoped MCP servers, plugins, and permission rules (other settings load only from `~/.thanh/config.toml`) |
 | `.grok/skills/` | Project-scoped skill definitions |
 | `.grok/plugins/` | Project-scoped plugins |
 | `.grok/agents/` | Project-scoped agent definitions |
@@ -230,7 +230,7 @@ This shows each project instruction file it finds, with its path and approximate
 
 4. **Use subdirectory scoping for large repos.** Different parts of a monorepo may have different conventions. Use per-directory AGENTS.md to scope rules appropriately.
 
-5. **Version control your rules.** Commit AGENTS.md to the repository so the whole team benefits. User-specific overrides belong in `~/.grok/` (global rules).
+5. **Version control your rules.** Commit AGENTS.md to the repository so the whole team benefits. User-specific overrides belong in `~/.thanh/` (global rules).
 
 6. **Do not duplicate documentation.** AGENTS.md should contain actionable instructions, not a copy of your project's README. Link to external docs if needed.
 

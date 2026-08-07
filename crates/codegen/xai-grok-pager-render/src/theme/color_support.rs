@@ -123,7 +123,7 @@ fn detect_raw() -> ColorLevel {
 
 /// Standalone diagnostic color evidence.
 ///
-/// This never consults stdout, because `grok doctor --json` is commonly piped.
+/// This never consults stdout, because `thanh doctor --json` is commonly piped.
 /// Stderr or an independently opened controlling terminal is sufficient
 /// evidence that the process is diagnosing that terminal; a fully headless
 /// invocation is honest about having no color evidence.

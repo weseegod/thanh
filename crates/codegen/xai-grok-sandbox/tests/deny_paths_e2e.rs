@@ -684,7 +684,7 @@ fn fixture_homes(
     let grok = unique_temp_dir(&format!("{tag}-grok"));
     let workspace = unique_temp_dir(&format!("{tag}-ws"));
     // Empty global sandbox config under fixture GROK_HOME so generic tests do
-    // not inherit the developer/runner's ~/.grok/sandbox.toml.
+    // not inherit the developer/runner's ~/.thanh/sandbox.toml.
     fs::write(grok.join("sandbox.toml"), "").expect("empty global sandbox.toml");
     (
         home.clone(),

@@ -9,13 +9,13 @@ Sandbox mode is off by default.
 ## Quick Start
 
 ```bash
-# Run with workspace sandbox (read everywhere, write to CWD + temp dirs + ~/.grok/)
+# Run with workspace sandbox (read everywhere, write to CWD + temp dirs + ~/.thanh/)
 grok --sandbox workspace
 
-# Read-only mode (read everywhere, write only to ~/.grok/ + temp dirs)
+# Read-only mode (read everywhere, write only to ~/.thanh/ + temp dirs)
 grok --sandbox read-only
 
-# Most restrictive profile (read CWD + system paths, write CWD + temp dirs + ~/.grok/, no child network)
+# Most restrictive profile (read CWD + system paths, write CWD + temp dirs + ~/.thanh/, no child network)
 grok --sandbox strict
 ```
 
@@ -26,10 +26,10 @@ grok --sandbox strict
 | Profile               | FS Read            | FS Write                                       | Child Network | Use Case                          |
 | --------------------- | ------------------ | ---------------------------------------------- | ------------- | --------------------------------- |
 | `off` (default)       | Unrestricted       | Unrestricted                                   | Unrestricted  | No sandbox                        |
-| `workspace`           | Everywhere         | CWD + `~/.grok/` + `/tmp` + `/var/tmp`         | Allowed       | Normal development                |
+| `workspace`           | Everywhere         | CWD + `~/.thanh/` + `/tmp` + `/var/tmp`         | Allowed       | Normal development                |
 | `devbox`              | Everywhere         | All top-level dirs except `/data`              | Allowed       | Disposable dev VMs                |
-| `read-only`           | Everywhere         | `~/.grok/` + `/tmp` + `/var/tmp`               | Blocked¹      | Exploration, code review          |
-| `strict`              | CWD + system paths | CWD + `~/.grok/` + `/tmp` + `/var/tmp`         | Blocked¹      | Untrusted code                    |
+| `read-only`           | Everywhere         | `~/.thanh/` + `/tmp` + `/var/tmp`               | Blocked¹      | Exploration, code review          |
+| `strict`              | CWD + system paths | CWD + `~/.thanh/` + `/tmp` + `/var/tmp`         | Blocked¹      | Untrusted code                    |
 
 ¹ Child-network blocking is enforced on **Linux only** (via seccomp). On macOS it is a no-op — these profiles do not restrict child-process network there.
 
@@ -37,20 +37,20 @@ To block specific files (e.g. `.env` or credential paths) on top of a profile, d
 
 ### Profile Details
 
-**workspace** -- The recommended profile for everyday development. The agent can read any file on the system (for understanding dependencies, system libraries, etc.) but can only write to the current working directory, `~/.grok/`, and temp directories (`/tmp`, `/var/tmp`, plus the macOS temp dirs). Network access is allowed for tools like `web_search` and MCP servers.
+**workspace** -- The recommended profile for everyday development. The agent can read any file on the system (for understanding dependencies, system libraries, etc.) but can only write to the current working directory, `~/.thanh/`, and temp directories (`/tmp`, `/var/tmp`, plus the macOS temp dirs). Network access is allowed for tools like `web_search` and MCP servers.
 
 **devbox** -- A reserved built-in profile for disposable development VMs. The agent can read everywhere and write to every top-level directory except `/data` and the virtual filesystems (`/proc`, `/sys`, `/dev`), including the home directory. Network access is allowed. `--sandbox devbox` runs the built-in profile, which shadows any `[profiles.devbox]` you define in `sandbox.toml`.
 
-**read-only** -- Use when you want the agent to analyze code without modifying your project files. The agent can read everything but can only write to `~/.grok/` (needed for session persistence) and temp directories. Child-process network access is blocked on Linux (no-op on macOS).
+**read-only** -- Use when you want the agent to analyze code without modifying your project files. The agent can read everything but can only write to `~/.thanh/` (needed for session persistence) and temp directories. Child-process network access is blocked on Linux (no-op on macOS).
 
-**strict** -- The most restrictive profile, for reviewing untrusted code. The agent can only read files within the current working directory and essential system paths. Writes are limited to CWD, `~/.grok/`, and temp directories. Child-process network access is blocked on Linux (no-op on macOS).
+**strict** -- The most restrictive profile, for reviewing untrusted code. The agent can only read files within the current working directory and essential system paths. Writes are limited to CWD, `~/.thanh/`, and temp directories. Child-process network access is blocked on Linux (no-op on macOS).
 
 ### Direct global hook write protection
 
 Under `workspace`, `read-only`, and `strict` (and custom profiles that extend those bases), the Grok state directory remains writable for session/runtime files, but the kernel **write-denies** the Grok-owned direct disk paths used as user-global hook sources (they stay readable):
 
-- `~/.grok/hooks/` (hook directory)
-- `~/.grok/hooks-paths` (registry file; not loaded as hook JSON — only its absolute targets are)
+- `~/.thanh/hooks/` (hook directory)
+- `~/.thanh/hooks-paths` (registry file; not loaded as hook JSON — only its absolute targets are)
 - Absolute targets listed in `hooks-paths` (relative lines are ignored; missing targets refuse sandbox start)
 
 On first launch under these profiles, Grok creates a real empty `hooks/` directory and empty `hooks-paths` file when they are missing (never symlinks or wrong types). Claude/Cursor global settings are **not** covered by this write-deny; discovery of those vendors remains separately gated by compatibility settings.
@@ -61,7 +61,7 @@ A symlinked `$GROK_HOME` or a `hooks-paths` entry with a symlink component is re
 
 ## Custom Profiles
 
-Create custom sandbox profiles in `~/.grok/sandbox.toml` (global) or `.grok/sandbox.toml` (per-project):
+Create custom sandbox profiles in `~/.thanh/sandbox.toml` (global) or `.grok/sandbox.toml` (per-project):
 
 ```toml
 [profiles.project]
@@ -241,7 +241,7 @@ The default (`inherit = "all"`, `ignore_default_excludes = true`) leaves the env
 
 ## Event Logging
 
-Sandbox events are logged to `~/.grok/sandbox-events.jsonl` for debugging. Events include:
+Sandbox events are logged to `~/.thanh/sandbox-events.jsonl` for debugging. Events include:
 
 - Profile applied (which profile, timestamp)
 - Violations (attempted access to denied paths)
