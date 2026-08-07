@@ -112,6 +112,7 @@ These paths contain fork customizations. Preserve them during merges.
 | BYOK model config | `crates/codegen/xai-grok-shell/src/agent/config.rs`, `config_model_override_parse.rs`, `models.rs` | Keep fork `input` / `input_modalities` parsing and text-only capability checks |
 | Image stripping | `crates/codegen/xai-grok-sampling-types/src/conversation.rs`, `types.rs`, `crates/codegen/xai-grok-shell/src/session/compaction.rs`, `acp_session_impl/turn.rs`, `helpers/full_replace_compaction.rs` | Keep `strip_image_parts_for_text_only` and all call sites |
 | BYOK auth/sampling | `crates/codegen/xai-grok-shell/src/session/acp_session.rs`, `acp_session_impl/sampler_turn.rs`, `acp_session_impl/spawn.rs`, `crates/codegen/xai-grok-sampler/src/client.rs`, `crates/codegen/xai-grok-shell/src/remote/client.rs` | Keep BYOK auth memo; do not refresh session tokens against third-party endpoints |
+| BYOK goal evaluator | `crates/codegen/xai-grok-shell/src/session/acp_session_impl/goal.rs`, `goal_evaluator.rs` | Keep preferred-model goal-evaluator logic (`effective_suggest_model` from pin, fallback to active) and `GOAL_EVALUATOR_TIMEOUT` guard (re-add const if upstream removes it) |
 | Fork TUI UX | `crates/codegen/xai-grok-pager/src/slash/commands/clear.rs`, `new.rs`, `views/turn_status.rs`, `views/tasks_pane.rs`, related `agent_view/` and `dispatch/` changes | Keep fork UX; merge upstream structural refactors around them |
 | Fork docs edits | `crates/codegen/xai-grok-pager/docs/user-guide/04-slash-commands.md`, `05-configuration.md`, `11-custom-models.md`, `17-sessions.md`, `20-background-tasks.md` | Prefer upstream wording, then re-apply fork additions |
 
@@ -226,3 +227,13 @@ Sync #2 (merge `45939f6`, [PR #1](https://github.com/weseegod/xgrok/pull/1)):
 - `cargo check` passed; full `./build.sh` waived by user
 - Delivered via **PR** (`merge/upstream-main` → `main`) instead of local merge + push
 - Fork had 12 commits ahead of upstream at merge time
+
+Sync #3 (merge `6f2d9d5`, direct local merge + push):
+- 1 upstream commit (`393430e`, "Synced from monorepo"); 262 files, ~21.1k insertions, ~6.3k deletions
+- **2 conflicts**, both resolved by combining:
+  - `agent_view/render.rs`: fork keeps `turn_status::row_count` (expanded watching-cue detail rows) while adopting upstream's `wake_display_state` refactor (`wake_display_state.unwrap_or(&self.session.state)` as the state arg)
+  - `acp_session_impl/goal.rs`: fork keeps preferred-model goal-evaluator logic (`effective_suggest_model` from `prompt_suggest_model_pin`, fallback to active model via `prepare_chat_completion`); upstream removed the whole preferred-model branch and the 30s timeout, so re-added `GOAL_EVALUATOR_TIMEOUT` const to `goal_evaluator.rs`
+- Fork markers: 110/110 lines preserved (content identical; line numbers shifted by upstream insertions/reorderings — e.g. one `ModelByok` use line moved within `auth_error_no_retry_tests.rs` as upstream reordered tests)
+- `cargo check` passed; full `./build.sh` waived by user
+- Delivered via **direct merge** into `main` + push (per user request)
+- Fork had 14 commits ahead of upstream at merge time
