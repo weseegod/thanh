@@ -87,8 +87,9 @@ git fetch --all
    ```
 
 8. **Bump the fork version and publish a release** (see
-   [Release & versioning](#release--versioning)) — only when the user wants
-   new binaries shipped:
+   [Release & versioning](#release--versioning)) — **do this after every
+   sync** so `thanh update` (Ctrl+U) on all machines picks up the new
+   binaries (only skip if the user explicitly says no release):
 
    ```bash
    scripts/publish_release.sh
@@ -96,7 +97,9 @@ git fetch --all
 
    The script bumps `xai-grok-version` + `xai-grok-pager-bin`, tags `vX.Y.Z`,
    and pushes — CI builds `thanh` for macOS arm64 + Linux x86_64 and publishes
-   the GitHub Release.
+   the GitHub Release. Before closing out the sync, confirm CI went green and
+   the release + `stable` pointer are live (`gh run watch`, then
+   `gh release view vX.Y.Z`).
 
 **Strategy:** always **merge** `upstream/main` into a branch off fork `main`.
 Do **not** rebase fork commits onto upstream — that drops fork history and
@@ -161,6 +164,10 @@ Rules:
   `0.2.121 → 0.2.122`) and publish: `scripts/publish_release.sh`. The CI
   workflow builds on `ubuntu-latest` (linux-x86_64) and `macos-14`
   (macos-aarch64, Apple Silicon) — no local macOS build needed.
+- **Verify the release after publishing**: the `stable`/`alpha` pointers and
+  the `thanh-<ver>-<os>-<arch>` assets must exist on the GitHub Release
+  before `thanh update` can serve them — check `gh run watch` (release
+  workflow) and `gh release view vX.Y.Z`.
 - The updater's default installer is `internal` (pure HTTP against the fork's
   GitHub Releases); `gh-release` (needs `gh`) is also supported. It manages
   `~/.thanh/bin/thanh` only and never touches grok's `~/.grok` tree.
@@ -245,6 +252,7 @@ Manual checks:
 - [ ] `./build.sh` prints a version (e.g. `thanh 0.2.x`)
 - [ ] Fork markers preserved: `strip_image_parts_for_text_only|input_modalities|ModelByok|byok`, plus `weseegod/thanh`, `version-thanh.json`, `~/.thanh`, `bin/thanh`
 - [ ] No conflict markers left in source (`rg -n '^(<<<<<<<|=======|>>>>>>>)'` — match at line start only; mid-line matches in string literals are false positives)
+- [ ] Release published after the sync (when binaries are shipped): `gh release view vX.Y.Z` shows the `stable` pointer + `thanh-<ver>-<os>-<arch>` assets
 
 ## Anti-patterns
 
