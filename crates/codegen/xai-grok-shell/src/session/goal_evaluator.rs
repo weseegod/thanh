@@ -1,5 +1,7 @@
 use crate::sampling::{ConversationItem, ConversationRequest};
 
+/// Timeout for a single goal-evaluator round-trip. Fork keeps this guard so a
+/// hung third-party (BYOK) endpoint cannot stall the goal loop indefinitely.
 pub(crate) const GOAL_EVALUATOR_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 
 const TRANSCRIPT_MAX_BYTES: usize = 32 * 1024;
