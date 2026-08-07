@@ -38,7 +38,7 @@ for the version of the code present in this tree.
 
 ---
 
-## About this fork (xgrok)
+## About this fork (thanh)
 
 This repository is a **BYOK-focused fork** of upstream
 [Grok Build](https://github.com/xai-org/grok-build). The goal is to leverage
@@ -89,7 +89,7 @@ manually. Official grok is unaffected: the updater manages
 `~/.thanh/bin/thanh` and never touches grok's `~/.grok` tree.
 
 > [!NOTE]
-> Migrating from an earlier `xgrok` setup? Everything lived in `~/.grok`
+> Migrating from an earlier `thanh` setup? Everything lived in `~/.grok`
 > before; the fork now reads `~/.thanh`. Copy what you need across, e.g.:
 > `mkdir -p ~/.thanh && cp ~/.grok/config.toml ~/.grok/auth.json ~/.thanh/`
 

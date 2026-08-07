@@ -403,7 +403,7 @@ pub struct LeaderArgs {
 #[command(
     name = "thanh",
     version = env!("VERSION_WITH_COMMIT"),
-    about = "thanh (xgrok fork) — Grok Build TUI",
+    about = "thanh (fork) — Grok Build TUI",
     disable_version_flag = true,
     next_display_order = None,
     help_template = "\

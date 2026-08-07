@@ -157,7 +157,7 @@ plain-text `stable` / `alpha` channel pointers that the built-in updater
 Rules:
 
 - **Version** is plain 3-part semver, strictly increasing per release — the
-  stable channel rejects pre-release targets (`0.2.121-xgrok.1` would never
+  stable channel rejects pre-release targets (`0.2.121-thanh.1` would never
   be considered an update). Keep `xai-grok-version` and `xai-grok-pager-bin`
   lockstepped (they already are, both synced to upstream's current version).
 - **After every upstream sync**, bump the version (typically patch
@@ -185,7 +185,7 @@ Historical fork commits (reference):
 | `aa7516d` | `/clear` command clears TUI texts |
 | `5202d9d` | `/new` command keeps same model |
 | `641974a` | Click still-running status to expand inline task list |
-| `e61c126` | Add `build.sh` to build and install xgrok binary |
+| `e61c126` | Add `build.sh` to build and install thanh binary |
 | `2c0193f` | Fix `build.sh` to auto-install dotslash for `bin/protoc` |
 | `b9b61ba` | Add UPSTREAM-MERGE.md playbook + document fork BYOK goal |
 | `c2b4b6f` | Stop subagent child sessions when workflow cancel lands |
@@ -265,7 +265,7 @@ Manual checks:
 
 Sync #1 (merge `1e99e1e`):
 - 3 upstream commits ("Synced from monorepo") merged with **zero conflicts**
-- Build verified: `xgrok 0.2.120` via `./build.sh`
+- Build verified: `thanh 0.2.120` via `./build.sh`
 - Fork had 8 commits ahead of upstream at merge time
 
 Sync #2 (merge `45939f6`, [PR #1](https://github.com/weseegod/thanh/pull/1)):

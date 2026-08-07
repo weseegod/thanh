@@ -2276,7 +2276,7 @@ mod tests {
         assert_eq!(
             first_5,
             vec![
-                "thanh (xgrok fork) — Grok Build TUI",
+                "thanh (fork) — Grok Build TUI",
                 "",
                 "Usage: thanh [OPTIONS] [PROMPT] [COMMAND]",
                 "",
