@@ -14,7 +14,7 @@ const NPM_PACKAGE: &str = "@xai-official/grok";
 /// Fork's own GitHub repo. All release feed lookups (gh-release installer,
 /// channel pointers, binary downloads) resolve against this repo instead of
 /// upstream's `xai-org-shared/grok-build`.
-pub const GH_RELEASE_REPO: &str = "weseegod/xgrok";
+pub const GH_RELEASE_REPO: &str = "weseegod/thanh";
 
 /// Primary CLI base URL: the fork's GitHub Releases "latest" download
 /// endpoint. Assets on each release are published as `stable` / `alpha`
@@ -24,7 +24,7 @@ pub const GH_RELEASE_REPO: &str = "weseegod/xgrok";
 /// `releases/latest/download/...` (GitHub redirects to the asset CDN, which
 /// reqwest follows).
 pub(crate) const CLI_BASE_URL_PRIMARY: &str =
-    "https://github.com/weseegod/xgrok/releases/latest/download";
+    "https://github.com/weseegod/thanh/releases/latest/download";
 
 /// CLI base URLs in preference order. The fork publishes to a single GitHub
 /// Releases feed, so there is no separate fallback mirror; callers

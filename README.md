@@ -62,7 +62,7 @@ side by side without ever clobbering each other.
 ## Installing & updating `thanh`
 
 Prebuilt binaries are published on this fork's
-[GitHub Releases](https://github.com/weseegod/xgrok/releases) for **macOS
+[GitHub Releases](https://github.com/weseegod/thanh/releases) for **macOS
 (Apple Silicon)** and **Linux (x86_64)** — built by CI, so you never need to
 compile on your own machine (handy on memory-constrained Macs).
 
@@ -71,14 +71,14 @@ compile on your own machine (handy on memory-constrained Macs).
 ```sh
 # macOS (Apple Silicon / M1):
 curl -fsSL -o ~/.local/bin/thanh \
-  https://github.com/weseegod/xgrok/releases/latest/download/thanh-0.2.122-macos-aarch64
+  https://github.com/weseegod/thanh/releases/latest/download/thanh-0.2.122-macos-aarch64
 chmod +x ~/.local/bin/thanh
 # Linux (x86_64): replace the asset name with thanh-0.2.122-linux-x86_64
 ```
 
 > [!NOTE]
 > Assets are named `thanh-<version>-<os>-<arch>`. Check the latest version on
-> the [releases page](https://github.com/weseegod/xgrok/releases).
+> the [releases page](https://github.com/weseegod/thanh/releases).
 
 **Auto-update (the easy path):** once installed via the managed layout
 (`./build.sh` or the first update), the TUI checks for new versions in the

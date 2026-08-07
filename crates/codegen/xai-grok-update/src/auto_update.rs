@@ -30,10 +30,10 @@ const MSG_RUN_UPDATE_MANUAL: &str = "Run `thanh update` to get the latest versio
 fn manual_install_cmd() -> &'static str {
     if cfg!(windows) {
         "Download the latest 'thanh' asset from \
-         https://github.com/weseegod/xgrok/releases/latest and put it on your PATH"
+         https://github.com/weseegod/thanh/releases/latest and put it on your PATH"
     } else {
         "Download the latest 'thanh' binary for your platform from \
-         https://github.com/weseegod/xgrok/releases/latest and put it on your PATH"
+         https://github.com/weseegod/thanh/releases/latest and put it on your PATH"
     }
 }
 
@@ -41,7 +41,7 @@ fn manual_install_cmd() -> &'static str {
 fn reinstall_hint(installer: &str) -> String {
     match installer {
         "npm" => "Please reinstall via npm:\n  npm i -g @xai-official/grok".to_string(),
-        "gh-release" => "Please reinstall via GitHub Releases:\n  gh release download --repo weseegod/xgrok --pattern 'thanh-*' --output thanh && chmod +x thanh".to_string(),
+        "gh-release" => "Please reinstall via GitHub Releases:\n  gh release download --repo weseegod/thanh --pattern 'thanh-*' --output thanh && chmod +x thanh".to_string(),
         _ => format!("Please reinstall via:\n  {}", manual_install_cmd()),
     }
 }
@@ -2105,7 +2105,7 @@ async fn gh_release_download(tag: &str, pattern: &str, dest: &std::path::Path) -
     Ok(())
 }
 
-/// Download and install thanh from the fork's GitHub Releases (weseegod/xgrok).
+/// Download and install thanh from the fork's GitHub Releases (weseegod/thanh).
 ///
 /// Uses `gh release download` to fetch the binary matching the current platform.
 /// This works anywhere the `gh` CLI is authenticated, without needing npm or
@@ -3581,7 +3581,7 @@ mod tests {
             "should suggest gh release download: {hint}"
         );
         assert!(
-            hint.contains("weseegod/xgrok"),
+            hint.contains("weseegod/thanh"),
             "should name the fork repo: {hint}"
         );
         assert!(hint.contains("thanh-*"), "should name thanh assets: {hint}");
@@ -3591,7 +3591,7 @@ mod tests {
     fn test_reinstall_hint_internal_mentions_fork_release_page() {
         let hint = reinstall_hint("internal");
         assert!(
-            hint.contains("github.com/weseegod/xgrok/releases"),
+            hint.contains("github.com/weseegod/thanh/releases"),
             "should point at the fork release page: {hint}"
         );
         assert!(hint.contains("thanh"), "should name the thanh binary: {hint}");

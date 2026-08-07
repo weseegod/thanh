@@ -19,7 +19,7 @@ auth, and small TUI ergonomics).
 
 | Remote | Repository | Role |
 |--------|------------|------|
-| `origin` | `weseegod/xgrok` | This fork — push here |
+| `origin` | `weseegod/thanh` | This fork — push here |
 | `upstream` | `xai-org/grok-build` | Source of truth for core |
 
 Setup (if `upstream` is missing):
@@ -122,7 +122,7 @@ These paths contain fork customizations. Preserve them during merges.
 |----------|-------|------|
 | Fork-only files | `build.sh`, `docs/byok-models.md` | Never delete; keep fork version |
 | Fork release pipeline | `.github/workflows/release.yml`, `scripts/publish_release.sh` | Never delete; keep fork-owned |
-| Self-update feed (`thanh`) | `crates/codegen/xai-grok-update/src/version.rs`, `auto_update.rs`, `crates/codegen/xai-grok-config/src/paths.rs`, `crates/codegen/xai-fast-worktree/src/db/mod.rs` (`resolve_grok_home`) | Keep fork feed (`weseegod/xgrok` releases), fork home `~/.thanh` (default in `default_grok_home()`/`resolve_grok_home()`, never upstream's `~/.grok`), `thanh` managed binary name (`~/.thanh/bin/thanh`, assets `thanh-<ver>-<os>-<arch>`), `version-thanh.json` cache, single-link swap (never touch `bin/grok`/`bin/agent`) |
+| Self-update feed (`thanh`) | `crates/codegen/xai-grok-update/src/version.rs`, `auto_update.rs`, `crates/codegen/xai-grok-config/src/paths.rs`, `crates/codegen/xai-fast-worktree/src/db/mod.rs` (`resolve_grok_home`) | Keep fork feed (`weseegod/thanh` releases), fork home `~/.thanh` (default in `default_grok_home()`/`resolve_grok_home()`, never upstream's `~/.grok`), `thanh` managed binary name (`~/.thanh/bin/thanh`, assets `thanh-<ver>-<os>-<arch>`), `version-thanh.json` cache, single-link swap (never touch `bin/grok`/`bin/agent`) |
 | Version lockstep | `crates/codegen/xai-grok-version/Cargo.toml`, `crates/codegen/xai-grok-pager-bin/Cargo.toml` | Keep fork version; bump after every sync (see [Release & versioning](#release--versioning)) |
 | BYOK model config | `crates/codegen/xai-grok-shell/src/agent/config.rs`, `config_model_override_parse.rs`, `models.rs` | Keep fork `input` / `input_modalities` parsing and text-only capability checks |
 | Image stripping | `crates/codegen/xai-grok-sampling-types/src/conversation.rs`, `types.rs`, `crates/codegen/xai-grok-shell/src/session/compaction.rs`, `acp_session_impl/turn.rs`, `helpers/full_replace_compaction.rs` | Keep `strip_image_parts_for_text_only` and all call sites |
@@ -146,7 +146,7 @@ sync #2, 7 inventory files merged that way; the marker diff caught no loss.
 The fork ships binaries as **`thanh`** (not `grok`) with its own home
 **`~/.thanh`** (config, auth, sessions, `bin/`, `downloads/`, caches) so it
 runs fully isolated from an official grok install that keeps `~/.grok`.
-Release assets on `weseegod/xgrok` GitHub Releases are named
+Release assets on `weseegod/thanh` GitHub Releases are named
 `thanh-<version>-<os>-<arch>` (e.g. `thanh-0.2.122-macos-aarch64`), plus
 plain-text `stable` / `alpha` channel pointers that the built-in updater
 (Ctrl+U / `thanh update`) reads from `releases/latest/download/`.
@@ -243,7 +243,7 @@ Manual checks:
 - [ ] `docs/byok-models.md` exists
 - [ ] `build.sh` exists and is executable
 - [ ] `./build.sh` prints a version (e.g. `thanh 0.2.x`)
-- [ ] Fork markers preserved: `strip_image_parts_for_text_only|input_modalities|ModelByok|byok`, plus `weseegod/xgrok`, `version-thanh.json`, `~/.thanh`, `bin/thanh`
+- [ ] Fork markers preserved: `strip_image_parts_for_text_only|input_modalities|ModelByok|byok`, plus `weseegod/thanh`, `version-thanh.json`, `~/.thanh`, `bin/thanh`
 - [ ] No conflict markers left in source (`rg -n '^(<<<<<<<|=======|>>>>>>>)'` — match at line start only; mid-line matches in string literals are false positives)
 
 ## Anti-patterns
@@ -260,7 +260,7 @@ Sync #1 (merge `1e99e1e`):
 - Build verified: `xgrok 0.2.120` via `./build.sh`
 - Fork had 8 commits ahead of upstream at merge time
 
-Sync #2 (merge `45939f6`, [PR #1](https://github.com/weseegod/xgrok/pull/1)):
+Sync #2 (merge `45939f6`, [PR #1](https://github.com/weseegod/thanh/pull/1)):
 - 1 upstream commit (`a5589e9`); 231 files, ~20.7k insertions, ~4.3k deletions
 - **Zero conflicts**; 7 fork-inventory files auto-merged (non-overlapping hunks)
 - Fork markers verified identical pre/post via the `git grep -n` diff
