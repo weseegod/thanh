@@ -1518,7 +1518,7 @@ fn dashboard_slash_model_stages_pending_model() {
 /// first prompt is the raw slash text.
 #[serial_test::serial(GROK_AGENT_DASHBOARD)]
 #[test]
-fn dashboard_slash_restricted_command_upsells_via_toast() {
+fn dashboard_slash_restricted_command_notices_via_toast() {
     let mut app = test_app();
     app.tier_restricted_commands = vec!["imagine".to_string()];
     open_dashboard(&mut app);
@@ -1534,10 +1534,10 @@ fn dashboard_slash_restricted_command_upsells_via_toast() {
         .unwrap()
         .error_toast
         .as_deref()
-        .expect("restricted command must set the upsell toast");
+        .expect("restricted command must set the restriction toast");
     assert!(
-        toast.contains("/imagine") && toast.contains("SuperGrok"),
-        "toast must carry the upsell: {toast}"
+        toast.contains("/imagine") && toast.contains("current plan"),
+        "toast must carry the restriction notice: {toast}"
     );
 }
 /// A slash command that fails (`CommandResult::Error`) surfaces on

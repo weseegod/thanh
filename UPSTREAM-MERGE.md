@@ -285,3 +285,15 @@ Sync #3 (merge `6f2d9d5`, direct local merge + push):
 - `cargo check` passed; full `./build.sh` waived by user
 - Delivered via **direct merge** into `main` + push (per user request)
 - Fork had 14 commits ahead of upstream at merge time
+
+Sync #4 (merge `5fa1439`, + Cargo.lock resync `5d3b005`):
+- 1 upstream commit (`afbc0fb`, "Synced from monorepo"); 74 files, ~4.7k insertions, ~0.7k deletions
+- **Zero conflicts** on the merge branch; Cargo.lock resynced on `main` afterwards (shell/pager follow upstream 1.0.0; fork version crates stay 0.2.122)
+- Follow-up **fork cleanup** — removed the consumer billing/paywall surface (BYOK sessions have no grok.com billing):
+  - Deleted `dispatch/billing.rs`, `views/credit_bar.rs`, `scrollback/blocks/credit_limit.rs`, shell `subscription_check.rs` + `extensions/billing.rs`
+  - `subscription.rs` trimmed to the server-driven gate chokepoint; `Effect::FetchBilling` / `CheckSubscription` / `GateVerify*` / `SchedulePaywallCheck` and the `credit_limit_blocked` / `free_usage_blocked` / `usage_visible` fields removed
+  - Tier-restricted upsell (SuperGrok modal/toast) replaced with a terse "isn't available on your current plan" notice
+- `cargo check --all-targets` clean (0 warnings); pager + shell lib tests: only **pre-existing** failures remain (paste file-URL probe, scrollback token teal, terminal-cursor tests, shell auth order-dependent flakes + one stack-overflow test — all fail identically at pre-cleanup HEAD)
+- Full `./build.sh` verified (release build + install)
+- Fork markers: 110/110 preserved (verified via the `git grep -n` diff pre/post)
+- Delivered via **direct merge** into `main` + push (per user request)

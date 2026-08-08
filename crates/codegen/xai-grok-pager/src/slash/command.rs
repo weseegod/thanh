@@ -109,8 +109,6 @@ pub struct AppCtx<'a> {
     pub cwd: &'a std::path::Path,
     /// Session announcements (critical or promo) exist (gates `/announcements` visibility).
     pub has_session_announcements: bool,
-    /// Consumer billing surface (`AppView::usage_visible`). Gates `/usage` subcommands.
-    pub billing_surface_visible: bool,
     /// Whether `/usage` is offered and executable. False for external-auth
     /// deployments with no grok.com billing session.
     pub usage_command_visible: bool,
@@ -131,8 +129,6 @@ pub struct CommandExecCtx<'a> {
     pub session_id: Option<&'a acp::SessionId>,
     pub bundle_state: &'a BundleState,
     pub(crate) screen_mode: crate::app::ScreenMode,
-    /// Consumer billing surface (`AppView::usage_visible`). Gates `/usage` subcommands.
-    pub billing_surface_visible: bool,
     /// Whether `/usage` is offered and executable. False for external-auth
     /// deployments with no grok.com billing session.
     pub usage_command_visible: bool,

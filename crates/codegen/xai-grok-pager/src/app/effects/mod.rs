@@ -93,31 +93,6 @@ pub(crate) fn execute(
             let tx = acp_tx.clone();
             tasks.spawn(async move { send_auth_cancel(&tx, request_seq).await });
         }
-        Effect::CheckSubscription { verify } => {
-            let tx = acp_tx.clone();
-            tasks.spawn(async move { send_check_subscription(&tx, verify).await });
-        }
-        Effect::CreditLimitRecheck { agent_id } => {
-            let tx = acp_tx.clone();
-            tasks.spawn(async move { send_credit_limit_recheck(&tx, agent_id).await });
-        }
-        Effect::SchedulePaywallCheck => {
-            tasks
-                .spawn(async move {
-                    tokio::time::sleep(std::time::Duration::from_secs(5)).await;
-                    TaskResult::PaywallCheckTick
-                });
-        }
-        Effect::ScheduleGateVerifyTimeout { generation } => {
-            tasks
-                .spawn(async move {
-                    tokio::time::sleep(crate::app::subscription::GATE_VERIFY_TIMEOUT)
-                        .await;
-                    TaskResult::GateVerifyTimeout {
-                        generation,
-                    }
-                });
-        }
         Effect::SwitchAccount { request_seq, method_id, use_oauth } => {
             let tx = acp_tx.clone();
             let abort_handle = tasks
@@ -4138,65 +4113,6 @@ pub(crate) fn execute(
                     }
                 });
         }
-        Effect::FetchBilling { agent_id, silent, nonce } => {
-            let tx = acp_tx.clone();
-            tasks
-                .spawn(async move {
-                    use xai_grok_shell::extensions::billing::BillingConfigResponse;
-                    let req = acp::ExtRequest::new(
-                        "x.ai/billing",
-                        serde_json::value::to_raw_value(&serde_json::json!({}))
-                            .expect("serialize billing params")
-                            .into(),
-                    );
-                    let parsed = match acp_send(req, &tx).await {
-                        Ok(resp) => {
-                            let wrapper: serde_json::Value = serde_json::from_str(
-                                    resp.0.get(),
-                                )
-                                .unwrap_or_default();
-                            let result = wrapper.get("result").unwrap_or(&wrapper);
-                            serde_json::from_value::<
-                                BillingConfigResponse,
-                            >(result.clone())
-                        }
-                        Err(e) => {
-                            return TaskResult::BillingError {
-                                agent_id,
-                                error: sanitize_user_error(&format!("{e}")),
-                                silent,
-                                nonce,
-                            };
-                        }
-                    };
-                    let billing = match parsed {
-                        Ok(billing) => billing,
-                        Err(e) => {
-                            return TaskResult::BillingError {
-                                agent_id,
-                                error: format!("Parse error: {e}"),
-                                silent,
-                                nonce,
-                            };
-                        }
-                    };
-                    let subscription_tier = billing.subscription_tier;
-                    let balance = billing.config.map(credit_balance_from_config);
-                    let autotopup = if has_prepaid_credits(balance.as_ref()) {
-                        fetch_auto_topup_info(&tx).await
-                    } else {
-                        crate::views::credit_bar::AutoTopupFetch::Cleared
-                    };
-                    TaskResult::BillingFetched {
-                        agent_id,
-                        balance,
-                        silent,
-                        subscription_tier,
-                        autotopup,
-                        nonce,
-                    }
-                });
-        }
         Effect::RefreshGate => {
             tasks
                 .spawn(async move {
@@ -4234,61 +4150,6 @@ pub(crate) fn execute(
                         .flatten();
                     TaskResult::GateRefreshed {
                         settings,
-                    }
-                });
-        }
-        Effect::FetchAppBilling => {
-            let tx = acp_tx.clone();
-            tasks
-                .spawn(async move {
-                    use xai_grok_shell::extensions::billing::BillingConfigResponse;
-                    let req = acp::ExtRequest::new(
-                        "x.ai/billing",
-                        serde_json::value::to_raw_value(&serde_json::json!({}))
-                            .expect("serialize billing params")
-                            .into(),
-                    );
-                    match acp_send(req, &tx).await {
-                        Ok(resp) => {
-                            let wrapper: serde_json::Value = serde_json::from_str(
-                                    resp.0.get(),
-                                )
-                                .unwrap_or_default();
-                            let result = wrapper.get("result").unwrap_or(&wrapper);
-                            match serde_json::from_value::<
-                                BillingConfigResponse,
-                            >(result.clone()) {
-                                Ok(billing) => {
-                                    let balance = billing
-                                        .config
-                                        .map(|c| crate::views::credit_bar::CreditBalance {
-                                            period_end_display: None,
-                                            ..credit_balance_from_config(c)
-                                        });
-                                    let autotopup = if has_prepaid_credits(balance.as_ref()) {
-                                        fetch_auto_topup_info(&tx).await
-                                    } else {
-                                        crate::views::credit_bar::AutoTopupFetch::Cleared
-                                    };
-                                    TaskResult::AppBillingFetched {
-                                        balance,
-                                        autotopup,
-                                    }
-                                }
-                                Err(_) => {
-                                    TaskResult::AppBillingFetched {
-                                        balance: None,
-                                        autotopup: crate::views::credit_bar::AutoTopupFetch::Unchanged,
-                                    }
-                                }
-                            }
-                        }
-                        Err(_) => {
-                            TaskResult::AppBillingFetched {
-                                balance: None,
-                                autotopup: crate::views::credit_bar::AutoTopupFetch::Unchanged,
-                            }
-                        }
                     }
                 });
         }

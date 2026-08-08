@@ -696,12 +696,8 @@ pub struct AppView {
     /// Whether the plugin marketplace CTA is enabled. Env `GROK_PLUGIN_CTA`
     /// overrides `RemoteSettings.plugin_cta` (remote settings); defaults to `false`.
     pub plugin_cta_enabled: bool,
-    /// Consumer billing surface (credit fetches / warnings). False for team
-    /// and API-key auth. `/usage` itself stays available for session token/cost
-    /// unless [`Self::has_external_auth_provider`].
-    pub usage_visible: bool,
     /// External `auth_provider_command` deployment.
-    /// No grok.com billing session exists; `/usage` and credit UI stay off.
+    /// No grok.com billing session exists; `/usage` stays off.
     pub has_external_auth_provider: bool,
     /// Slash commands denied for the current subscription tier
     /// ([`TIER_RESTRICTED_COMMANDS`] when the user is on the free / X Basic
@@ -716,13 +712,6 @@ pub struct AppView {
     /// `event_loop::run` from `connection.leader_status_rx.is_some()`;
     /// defaults to `false` (non-leader, dashboard hidden).
     pub leader_mode: bool,
-    /// App-level credit balance used to show the usage warning on the
-    /// welcome screen before any agent session exists.
-    pub credit_balance: Option<crate::views::credit_bar::CreditBalance>,
-    /// App-level auto top-up rule paired with `credit_balance` for the warning.
-    pub auto_topup: Option<crate::views::credit_bar::AutoTopupInfo>,
-    /// Periodic billing poll requested (credits >= 99%).
-    pub billing_poll_wanted: bool,
     /// Leader-mode session roster (FleetView dashboard). Populated from
     /// `x.ai/sessions/list` polls and `x.ai/sessions/changed` broadcasts.
     /// Empty in non-leader mode, which naturally gates roster rendering.
@@ -1116,11 +1105,6 @@ pub struct AppView {
     /// Whether ZDR users are allowed to use the product.
     /// Server-controlled via RemoteSettings (remote settings). Default `false` (blocked) during beta.
     pub zdr_access_enabled: bool,
-    /// When set, `/usage` shows a link to this URL instead of fetching billing
-    /// data from the backend. Server-controlled via RemoteSettings (remote settings
-    /// `grok_build_usage_redirect_url`, targeted at personal-team users).
-    /// `None` (default) fetches usage from the backend.
-    pub usage_billing_redirect_url: Option<String>,
     pub access_gate_shown_logged: bool,
     /// (hide-key, surface) pairs whose `AnnouncementCtaShown` impression was
     /// already logged — once per pager process, cleared on logout. Keyed by
@@ -1132,18 +1116,6 @@ pub struct AppView {
     pub gate: Option<xai_grok_shell::auth::GateInfo>,
     /// User-friendly subscription tier name (e.g. "SuperGrok", "Free").
     pub subscription_tier: Option<String>,
-    /// When the pager started auto-checking subscriptions (for 10-min timeout).
-    pub paywall_check_started: Option<std::time::Instant>,
-    /// Debounce stamp for watch/focus subscription checks (see
-    /// [`super::subscription`]).
-    pub last_subscription_check_at: Option<std::time::Instant>,
-    /// Server override (seconds) for the subscription-watch cadence.
-    pub subscription_watch_interval_secs: Option<u64>,
-    /// A stale-source gate held out of `gate` while a live check verifies
-    /// it (see [`super::subscription`]).
-    pub pending_gate_verification: Option<xai_grok_shell::auth::GateInfo>,
-    /// Generation stamp of the current gate verification.
-    pub gate_verify_gen: u64,
     /// Whether a leader reconnect is in progress (blocks prompt submission).
     pub reconnect_pending: bool,
     /// Structured startup warnings collected from the terminal diagnostics
@@ -1313,7 +1285,6 @@ impl AppView {
     }
     /// Apply typed auth metadata from the shell.
     pub fn apply_auth_meta(&mut self, meta: &xai_grok_shell::auth::AuthMeta) {
-        self.pending_gate_verification = None;
         let was_gated = self.gate.is_some();
         self.team_id = meta.team_id.clone();
         self.team_name = meta.team_name.clone();
@@ -1322,13 +1293,7 @@ impl AppView {
         self.coding_data_retention_opt_out = meta.coding_data_retention_opt_out;
         self.gate = meta.gate.clone();
         if was_gated && self.gate.is_none() {
-            self.paywall_check_started = None;
-            xai_grok_telemetry::session_ctx::log_event(
-                xai_grok_telemetry::events::SubscriptionActivated {
-                    auth_method: self.login_method_id.as_ref().map(|id| id.0.to_string()),
-                    upsell_shown_this_session: self.access_gate_shown_logged,
-                },
-            );
+            self.welcome_prompt_focused = true;
         }
         self.subscription_tier = meta.subscription_tier.clone();
         let was_api_key = self.is_api_key_auth;
@@ -1337,8 +1302,6 @@ impl AppView {
                 .subscription_tier
                 .as_deref()
                 .is_some_and(is_api_key_label);
-        self.usage_visible =
-            meta.team_name.is_none() && !self.is_api_key_auth && !self.has_external_auth_provider;
         self.sync_billing_surface_to_agents();
         self.apply_tier_restrictions();
         if self.is_api_key_auth {
@@ -1352,31 +1315,20 @@ impl AppView {
             self.show_resolved_model = show;
         }
     }
-    /// Mirror billing + `/usage` gates onto every slash surface (agents,
-    /// welcome, dashboard dispatch / peek-reply).
+    /// Mirror the `/usage` gate onto every slash surface (agents, welcome,
+    /// dashboard dispatch / peek-reply).
     pub(crate) fn sync_billing_surface_to_agents(&mut self) {
-        let billing = self.usage_visible;
         let usage_cmd = !self.has_external_auth_provider;
         for agent in self.agents.values_mut() {
-            agent.set_billing_surface_visible(billing);
             agent.set_usage_command_visible(usage_cmd);
         }
-        self.welcome_prompt
-            .slash_controller
-            .set_billing_surface_visible(billing);
         self.welcome_prompt
             .slash_controller
             .set_usage_command_visible(usage_cmd);
         if let Some(dash) = self.dashboard.as_mut() {
             dash.dispatch
                 .slash_controller
-                .set_billing_surface_visible(billing);
-            dash.dispatch
-                .slash_controller
                 .set_usage_command_visible(usage_cmd);
-            dash.peek_reply
-                .slash_controller
-                .set_billing_surface_visible(billing);
             dash.peek_reply
                 .slash_controller
                 .set_usage_command_visible(usage_cmd);
@@ -1567,16 +1519,10 @@ impl AppView {
             auto_update: None,
             ask_user_question_timeout_enabled: None,
             zdr_access_enabled: false,
-            usage_billing_redirect_url: None,
             access_gate_shown_logged: false,
             announcement_cta_impressions_logged: Default::default(),
             gate: None,
             subscription_tier: None,
-            paywall_check_started: None,
-            last_subscription_check_at: None,
-            subscription_watch_interval_secs: None,
-            pending_gate_verification: None,
-            gate_verify_gen: 0,
             reconnect_pending: false,
             startup_warnings: Vec::new(),
             is_api_key_auth: false,
@@ -1592,13 +1538,9 @@ impl AppView {
             show_resolved_model: true,
             sharing_enabled: false,
             plugin_cta_enabled: false,
-            usage_visible: true,
             has_external_auth_provider: false,
             tier_restricted_commands: Vec::new(),
             leader_mode: false,
-            credit_balance: None,
-            auto_topup: None,
-            billing_poll_wanted: false,
             leader_roster: Vec::new(),
             dashboard_local_sessions: Vec::new(),
             dashboard_sessions_loading: false,
@@ -3907,7 +3849,7 @@ fn handle_welcome_input(ev: &Event, ctx: &mut WelcomeInputCtx<'_>) -> InputOutco
                 if let Some(rect) = ctx.refresh_rect
                     && rect.contains(ratatui::layout::Position::new(mouse.column, mouse.row))
                 {
-                    return InputOutcome::Action(Action::CheckSubscription);
+                    return InputOutcome::Action(Action::RefreshGate);
                 }
                 if let Some(rect) = ctx.gate_url_rect
                     && rect.contains(ratatui::layout::Position::new(mouse.column, mouse.row))
@@ -4572,9 +4514,6 @@ impl AppView {
                                 .session_picker_pending_delete
                                 .is_some(),
                             chat_mode: self.chat_mode,
-                            credit_balance: self.credit_balance.as_ref(),
-                            auto_topup: self.auto_topup.as_ref(),
-                            usage_visible: self.usage_visible,
                             is_api_key_auth: self.is_api_key_auth,
                             changelog_bullets: &self.changelog_bullets,
                             changelog_has_full_notes: self.changelog_markdown.is_some(),
@@ -6039,16 +5978,10 @@ pub(crate) mod tests {
             auto_update: None,
             ask_user_question_timeout_enabled: None,
             zdr_access_enabled: false,
-            usage_billing_redirect_url: None,
             access_gate_shown_logged: false,
             announcement_cta_impressions_logged: Default::default(),
             gate: None,
             subscription_tier: None,
-            paywall_check_started: None,
-            last_subscription_check_at: None,
-            subscription_watch_interval_secs: None,
-            pending_gate_verification: None,
-            gate_verify_gen: 0,
             bundle_state: BundleState::default(),
             scroll_debug_hud: crate::views::scroll_debug_hud::ScrollDebugHud::new(),
             fps_hud: crate::views::fps_hud::FpsHud::new(),
@@ -6131,13 +6064,9 @@ pub(crate) mod tests {
             show_resolved_model: true,
             sharing_enabled: false,
             plugin_cta_enabled: false,
-            usage_visible: true,
             has_external_auth_provider: false,
             tier_restricted_commands: Vec::new(),
             leader_mode: true,
-            credit_balance: None,
-            auto_topup: None,
-            billing_poll_wanted: false,
             leader_roster: Vec::new(),
             dashboard_local_sessions: Vec::new(),
             dashboard_sessions_loading: false,
@@ -6185,8 +6114,6 @@ pub(crate) mod tests {
                 restore_degree: None,
                 rate_limited: false,
                 model_incompatible: false,
-                credit_limit_blocked: false,
-                free_usage_blocked: false,
                 available_commands: Vec::new(),
                 available_commands_generation: 0,
                 available_tools: None,
@@ -6378,8 +6305,6 @@ pub(crate) mod tests {
             restore_degree: None,
             rate_limited: false,
             model_incompatible: false,
-            credit_limit_blocked: false,
-            free_usage_blocked: false,
             available_commands: Vec::new(),
             available_commands_generation: 0,
             available_tools: None,
@@ -7381,12 +7306,10 @@ pub(crate) mod tests {
         assert_eq!(counts.get("t_seen"), Some(&2));
     }
     #[test]
-    fn external_auth_provider_keeps_billing_off_after_auth_meta() {
+    fn external_auth_provider_keeps_usage_command_off_after_auth_meta() {
         let mut app = test_app();
         app.has_external_auth_provider = true;
-        app.usage_visible = false;
         app.apply_auth_meta(&xai_grok_shell::auth::AuthMeta::default());
-        assert!(!app.usage_visible);
         assert!(app.tier_restricted_commands.is_empty());
         assert!(
             !app.welcome_prompt
@@ -7397,39 +7320,32 @@ pub(crate) mod tests {
         assert!(!app.welcome_prompt.slash_controller.usage_command_visible());
     }
     #[test]
-    fn apply_auth_meta_disables_billing_surface_for_team_users() {
+    fn apply_auth_meta_team_users_keep_usage_command() {
         let mut app = test_app();
-        assert!(app.usage_visible);
         let meta = xai_grok_shell::auth::AuthMeta {
             team_id: Some("team-uuid".into()),
             team_name: Some("Acme Corp".into()),
             ..Default::default()
         };
         app.apply_auth_meta(&meta);
-        assert!(!app.usage_visible);
         assert_eq!(app.team_id.as_deref(), Some("team-uuid"));
         assert!(
-            !app.welcome_prompt
+            app.welcome_prompt
                 .slash_controller
-                .billing_surface_visible()
+                .usage_command_visible()
         );
     }
     #[test]
-    fn apply_auth_meta_enables_billing_surface_for_personal_users() {
-        let mut app = test_app();
-        app.usage_visible = false;
-        let meta = xai_grok_shell::auth::AuthMeta::default();
-        app.apply_auth_meta(&meta);
-        assert!(app.usage_visible);
-    }
-    #[test]
-    fn apply_auth_meta_clears_api_key_flag_and_restores_billing_on_personal_login() {
+    fn apply_auth_meta_clears_api_key_flag_on_personal_login() {
         let mut app = test_app();
         app.is_api_key_auth = true;
-        app.usage_visible = false;
         app.apply_auth_meta(&xai_grok_shell::auth::AuthMeta::default());
         assert!(!app.is_api_key_auth);
-        assert!(app.usage_visible);
+        assert!(
+            app.welcome_prompt
+                .slash_controller
+                .usage_command_visible()
+        );
     }
     #[test]
     fn apply_auth_meta_api_key_enables_voice_and_skips_tier_gate() {
@@ -7442,7 +7358,6 @@ pub(crate) mod tests {
             ..Default::default()
         });
         assert!(app.is_api_key_auth);
-        assert!(!app.usage_visible);
         assert!(app.tier_restricted_commands.is_empty());
         assert_tier_restricted_commands_present(&app);
         assert!(!app.is_voice_tier_restricted());
@@ -7462,7 +7377,6 @@ pub(crate) mod tests {
         });
         assert!(!app.is_api_key_auth);
         assert!(!app.voice_mode_enabled);
-        assert!(app.usage_visible);
         assert!(!app.tier_restricted_commands.is_empty());
     }
     fn expected_tier_restricted_commands() -> Vec<String> {
@@ -7521,7 +7435,6 @@ pub(crate) mod tests {
             expected_tier_restricted_commands()
         );
         assert_tier_restricted_commands_absent(&app);
-        assert!(app.usage_visible);
     }
     #[test]
     fn apply_auth_meta_restricts_usage_for_x_basic_tier() {

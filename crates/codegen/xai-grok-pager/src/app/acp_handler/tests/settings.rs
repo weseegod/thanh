@@ -68,7 +68,6 @@
             &mut app
         ));
         assert!(app.is_api_key_auth);
-        assert!(!app.usage_visible);
         assert!(app.tier_restricted_commands.is_empty());
         assert!(app.voice_mode_enabled);
 
@@ -78,7 +77,6 @@
             &mut app
         ));
         assert!(!app.is_api_key_auth);
-        assert!(app.usage_visible);
         assert!(!app.tier_restricted_commands.is_empty());
         assert!(!app.voice_mode_enabled);
 

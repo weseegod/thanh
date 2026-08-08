@@ -891,10 +891,6 @@ pub struct AgentView {
     /// Stashed normal prompt state while editing a queued prompt.
     /// Restored when editing ends.
     pub stashed_prompt: Option<StashedPrompt>,
-    /// Complete prompt stashed from a credit-limit-blocked turn. Used by
-    /// `CreditLimitRecheckComplete` to retry the prompt after a tier
-    /// upgrade instead of showing a stale upsell.
-    pub credit_limit_stashed_prompt: Option<crate::app::agent::InFlightPrompt>,
     /// Complete prompt stashed from a turn that failed because the login
     /// expired (401 / re-auth). Used by the `AuthComplete` handler to
     /// auto-resubmit the prompt after a successful mid-session re-auth so
@@ -924,10 +920,6 @@ pub struct AgentView {
     /// True when CLI/env locked local workspace at startup for this session.
     #[cfg(feature = "local-workspace")]
     pub workspace_mode_cli_locked: bool,
-    /// Mocked credit balance for the status bar indicator.
-    pub credit_balance: Option<crate::views::credit_bar::CreditBalance>,
-    /// Auto top-up rule paired with `credit_balance` for the prompt warning.
-    pub auto_topup: Option<crate::views::credit_bar::AutoTopupInfo>,
     /// Current goal orchestration state. Set by `GoalUpdated` session
     /// notifications, cleared when a new session starts.
     pub goal_state: Option<super::agent::GoalDisplayState>,
@@ -1458,8 +1450,6 @@ pub struct AgentView {
     /// refreshed by `x.ai/settings/update`: the fire side is pinned for the
     /// session's lifetime, so a live mirror would drift out of agreement.
     pub scheduler_background_loops: Option<bool>,
-    /// Mirrors `AppView::usage_visible` (credit warning + `/usage manage`).
-    pub billing_surface_visible: bool,
     /// Whether `/usage` is offered. Mirrors `!AppView::has_external_auth_provider`.
     pub usage_command_visible: bool,
     /// Input flight recorder — rolling buffer of recent key events.
@@ -1748,39 +1738,6 @@ fn translate_local_submit(
                 worktree,
                 persist_mode,
             })
-        }
-        LocalQuestionKind::CreditLimitUpsell { choices } => {
-            let q = qv.questions.first();
-            let url = q
-                .and_then(|q| q.options.get(*idx))
-                .and_then(|o| o.id.as_deref())
-                .unwrap_or(super::dispatch::UPSELL_URL_PAYG);
-            let choice = choices
-                .get(*idx)
-                .copied()
-                .unwrap_or(xai_grok_telemetry::events::CreditLimitChoice::PayAsYouGo);
-            xai_grok_telemetry::session_ctx::log_event(
-                xai_grok_telemetry::events::CreditLimitUpsellClicked {
-                    surface: xai_grok_telemetry::events::CreditLimitUpsellSurface::QuestionModal,
-                    choice,
-                },
-            );
-            InputOutcome::Action(Action::OpenUrl(url.to_string()))
-        }
-        LocalQuestionKind::FreeUsageUpsell { source } => {
-            let url = qv
-                .questions
-                .first()
-                .and_then(|q| q.options.get(*idx))
-                .and_then(|o| o.id.as_deref())
-                .unwrap_or(super::dispatch::UPSELL_URL_UPGRADE);
-            xai_grok_telemetry::session_ctx::log_event(
-                xai_grok_telemetry::events::SuperGrokUpsellClicked {
-                    source,
-                    auth_method: None,
-                },
-            );
-            InputOutcome::Action(Action::OpenUrl(url.to_string()))
         }
         LocalQuestionKind::AgentTypeMismatch { model_id, effort } => {
             let start_new = *idx == 0;
@@ -2558,8 +2515,6 @@ pub(crate) mod test_fixtures {
             restore_degree: None,
             rate_limited: false,
             model_incompatible: false,
-            credit_limit_blocked: false,
-            free_usage_blocked: false,
             available_commands: Vec::new(),
             available_commands_generation: 0,
             available_tools: None,
@@ -2621,8 +2576,6 @@ pub(crate) mod test_fixtures {
                 restore_degree: None,
                 rate_limited: false,
                 model_incompatible: false,
-                credit_limit_blocked: false,
-                free_usage_blocked: false,
                 available_commands: Vec::new(),
                 available_commands_generation: 0,
                 available_tools: None,
@@ -3442,8 +3395,6 @@ pub(crate) fn test_agent_view(session_id: Option<&str>, cwd: std::path::PathBuf)
             restore_degree: None,
             rate_limited: false,
             model_incompatible: false,
-            credit_limit_blocked: false,
-            free_usage_blocked: false,
             available_commands: Vec::new(),
             available_commands_generation: 0,
             available_tools: None,

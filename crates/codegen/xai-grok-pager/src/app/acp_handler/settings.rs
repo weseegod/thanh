@@ -153,7 +153,6 @@ pub(super) fn handle_settings_update(notif: &acp::ExtNotification, app: &mut App
         let was_api_key = app.is_api_key_auth;
         let is_key = super::super::app_view::is_api_key_label(&v);
         app.is_api_key_auth = is_key;
-        app.usage_visible = !is_key && app.team_name.is_none() && !app.has_external_auth_provider;
         app.sync_billing_surface_to_agents();
         app.subscription_tier = Some(v);
         app.apply_tier_restrictions();
@@ -199,9 +198,6 @@ pub(super) fn handle_settings_update(notif: &acp::ExtNotification, app: &mut App
             })
             .unwrap_or(remote_val);
         app.session_picker_grouped = resolved;
-    }
-    if let Some(v) = update.subscription_watch_interval_secs {
-        app.subscription_watch_interval_secs = Some(v);
     }
 
     // Gate update logic:
@@ -573,8 +569,6 @@ pub(super) struct PagerSettingsUpdate {
     group_tool_verbs: Option<bool>,
     #[serde(default)]
     collapsed_edit_blocks: Option<bool>,
-    #[serde(default)]
-    subscription_watch_interval_secs: Option<u64>,
 }
 
 /// Presence-aware string: omit → `None` (`#[serde(default)]`), null →

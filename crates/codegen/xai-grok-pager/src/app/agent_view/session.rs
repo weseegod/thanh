@@ -118,7 +118,6 @@ impl AgentView {
             bash_turn: false,
             cron_task_id: None,
             stashed_prompt: None,
-            credit_limit_stashed_prompt: None,
             reauth_stashed_prompt: None,
             active_modal: None,
             modal_buttons: Vec::new(),
@@ -130,8 +129,6 @@ impl AgentView {
             workspace_mode: crate::views::welcome::WelcomeWorkspaceMode::Sandbox,
             #[cfg(feature = "local-workspace")]
             workspace_mode_cli_locked: false,
-            credit_balance: None,
-            auto_topup: None,
             goal_state: None,
             workflow_blocks: std::collections::HashMap::new(),
             workflow_runs: Vec::new(),
@@ -315,7 +312,6 @@ impl AgentView {
             hit_subagent_frame_close: Default::default(),
             sharing_enabled: false,
             scheduler_background_loops: None,
-            billing_surface_visible: false,
             usage_command_visible: true,
             input_log: crate::input_log::InputRingBuffer::new(),
             esc_pressed_at: None,
@@ -980,21 +976,6 @@ impl AgentView {
             }
         }
     }
-    /// Apply Build coding-credit balance only for non-chat agents.
-    /// Gateway/chat-kind sessions keep credits unset so bars/warnings stay off.
-    pub fn apply_credit_balance(
-        &mut self,
-        balance: Option<crate::views::credit_bar::CreditBalance>,
-        auto_topup: Option<crate::views::credit_bar::AutoTopupInfo>,
-    ) {
-        if self.chat_kind {
-            self.credit_balance = None;
-            self.auto_topup = None;
-            return;
-        }
-        self.credit_balance = balance;
-        self.auto_topup = auto_topup;
-    }
     /// Record a key event to the input flight recorder.
     ///
     /// Zero heap allocations — stores raw `Copy` types in the ring buffer.
@@ -1053,14 +1034,6 @@ impl AgentView {
             .registry_mut()
             .set_share_visible(enabled);
     }
-    /// Set [`Self::billing_surface_visible`] (see the field doc) and mirror it
-    /// into this agent's slash controller, so the two can't drift.
-    pub fn set_billing_surface_visible(&mut self, visible: bool) {
-        self.billing_surface_visible = visible;
-        self.prompt
-            .slash_controller
-            .set_billing_surface_visible(visible);
-    }
     pub fn set_usage_command_visible(&mut self, visible: bool) {
         self.usage_command_visible = visible;
         self.prompt
@@ -1093,7 +1066,6 @@ impl AgentView {
     pub(crate) fn apply_app_scoped_gates(
         &mut self,
         sharing_enabled: bool,
-        billing_surface_visible: bool,
         usage_command_visible: bool,
         chat_mode: bool,
         screen_mode: crate::app::ScreenMode,
@@ -1101,7 +1073,6 @@ impl AgentView {
         restricted_commands: &[String],
     ) {
         self.set_sharing_enabled(sharing_enabled);
-        self.set_billing_surface_visible(billing_surface_visible);
         self.set_usage_command_visible(usage_command_visible);
         self.app_chat_mode = chat_mode;
         self.prompt.set_screen_mode(screen_mode);

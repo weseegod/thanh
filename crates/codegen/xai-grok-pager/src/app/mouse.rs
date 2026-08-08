@@ -870,46 +870,6 @@ impl AgentView {
                             .scrollback
                             .entry_index_at_screen_row(click_row, self.pane_areas.scrollback);
                         if let Some(idx) = hit_idx {
-                            let credit_click = self
-                                .scrollback
-                                .entry(idx)
-                                .and_then(|entry| {
-                                    if let crate::scrollback::block::RenderBlock::CreditLimit(
-                                        ref blk,
-                                    ) = entry.block
-                                    {
-                                        use crate::scrollback::blocks::CreditLimitCardAction;
-                                        let choice = match blk.action {
-                                            CreditLimitCardAction::PurchaseCredits => {
-                                                xai_grok_telemetry::events::CreditLimitChoice::PurchaseCredits
-                                            }
-                                            CreditLimitCardAction::EnablePayg
-                                            | CreditLimitCardAction::IncreasePaygLimit => {
-                                                xai_grok_telemetry::events::CreditLimitChoice::PayAsYouGo
-                                            }
-                                        };
-                                        Some((blk.url.clone(), choice))
-                                    } else {
-                                        None
-                                    }
-                                });
-                            if let Some((url, choice)) = credit_click
-                                && let Some((area, _, _)) = self
-                                    .scrollback
-                                    .entry_screen_area(idx, self.pane_areas.scrollback)
-                            {
-                                let url_row = area.y + area.height.saturating_sub(2);
-                                if click_row >= url_row {
-                                    self.scrollback.set_selected(Some(idx));
-                                    xai_grok_telemetry::session_ctx::log_event(xai_grok_telemetry::events::CreditLimitUpsellClicked {
-                                        surface: xai_grok_telemetry::events::CreditLimitUpsellSurface::InlineCard,
-                                        choice,
-                                    });
-                                    self.open_url_or_show(&url);
-                                    self.last_click = None;
-                                    return InputOutcome::Changed;
-                                }
-                            }
                             let selectable = self
                                 .scrollback
                                 .get(idx)

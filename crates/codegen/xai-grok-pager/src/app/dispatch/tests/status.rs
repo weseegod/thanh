@@ -1044,7 +1044,6 @@ fn session_usage_page_flips_info_to_top() {
     let mut app = test_app_with_agent();
     // Scrollback flow is minimal-only.
     app.screen_mode = crate::app::ScreenMode::Minimal;
-    app.usage_visible = false;
     seed_scrolled_up(&mut app);
     complete_session_usage(&mut app);
     let sb = &mut app.agents.get_mut(&AgentId(0)).unwrap().scrollback;
@@ -1061,7 +1060,6 @@ fn session_usage_keeps_scroll_when_page_flip_off() {
     crate::appearance::cache::set_page_flip_on_send(false);
     let mut app = test_app_with_agent();
     app.screen_mode = crate::app::ScreenMode::Minimal;
-    app.usage_visible = false;
     seed_scrolled_up(&mut app);
     complete_session_usage(&mut app);
     assert_eq!(app.agents[&AgentId(0)].scrollback.scroll_offset(), 0);
@@ -1079,11 +1077,9 @@ fn show_usage_on_welcome_screen_is_noop() {
 }
 
 #[test]
-fn show_usage_with_redirect_url_fetches_session_only() {
-    // Redirect link is deferred until SessionUsageComplete (see billing tests).
+fn show_usage_fetches_session_usage_only() {
     let mut app = test_app_with_agent();
     app.screen_mode = crate::app::ScreenMode::Minimal;
-    app.usage_billing_redirect_url = Some("https://billing.example.com/me".to_string());
     let before = agent_scrollback_len(&app);
     let effects = dispatch(Action::ShowUsage, &mut app);
     assert!(
@@ -1142,16 +1138,15 @@ fn usage_modal_state(app: &AppView) -> &crate::views::usage_modal::UsageInfoModa
 }
 
 #[test]
-fn show_usage_opens_modal_on_usage_limit_tab_with_fetches() {
+fn show_usage_opens_modal_on_usage_tab_with_fetches() {
     let mut app = test_app_with_agent();
     let effects = dispatch(Action::ShowUsage, &mut app);
     let state = usage_modal_state(&app);
     assert_eq!(
         state.active_tab,
-        crate::views::usage_modal::UsageInfoTab::UsageLimit
+        crate::views::usage_modal::UsageInfoTab::Usage
     );
     assert_eq!(state.ctx.session_id.as_deref(), Some("test-session"));
-    assert!(state.billing_loading);
     assert!(
         matches!(
             effects.as_slice(),
@@ -1159,7 +1154,6 @@ fn show_usage_opens_modal_on_usage_limit_tab_with_fetches() {
                 Effect::ShowContextInfo { .. },
                 Effect::ShowSessionInfo { .. },
                 Effect::FetchSessionUsage { .. },
-                Effect::FetchBilling { silent: true, .. },
             ]
         ),
         "got: {effects:?}"
