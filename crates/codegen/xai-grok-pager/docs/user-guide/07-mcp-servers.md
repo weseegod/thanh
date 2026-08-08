@@ -87,45 +87,45 @@ Manage MCP servers from the command line without editing config files:
 
 ```bash
 # List configured MCP servers
-grok mcp list
-grok mcp list --json          # Machine-readable output
+thanh mcp list
+thanh mcp list --json          # Machine-readable output
 
 # Add a stdio server. Everything after -- is the server command, so flags
 # like -y reach the server instead of being parsed by grok.
-grok mcp add filesystem -- npx -y @modelcontextprotocol/server-filesystem /path/to/dir
+thanh mcp add filesystem -- npx -y @modelcontextprotocol/server-filesystem /path/to/dir
 
 # Add a stdio server with environment variables (-e is repeatable)
-grok mcp add postgres -e DATABASE_URL=postgres://localhost/mydb -- npx -y @modelcontextprotocol/server-postgres
+thanh mcp add postgres -e DATABASE_URL=postgres://localhost/mydb -- npx -y @modelcontextprotocol/server-postgres
 
 # Add a remote HTTP server
-grok mcp add --transport http sentry https://mcp.sentry.dev/mcp
+thanh mcp add --transport http sentry https://mcp.sentry.dev/mcp
 
 # Add a remote server with an authentication header (--header is repeatable)
-grok mcp add --transport http api https://mcp.example.com/mcp --header "Authorization: Bearer YOUR_TOKEN"
+thanh mcp add --transport http api https://mcp.example.com/mcp --header "Authorization: Bearer YOUR_TOKEN"
 
 # Add a remote SSE server
-grok mcp add --transport sse linear https://mcp.linear.app/sse
+thanh mcp add --transport sse linear https://mcp.linear.app/sse
 
 # Remove a server
-grok mcp remove github
+thanh mcp remove github
 
 # Enable or disable a local/TOML (or compat-sourced) server
-grok mcp enable github
-grok mcp disable github
+thanh mcp enable github
+thanh mcp disable github
 
 # Diagnose a server's configuration and connectivity
-grok mcp doctor               # Check every configured server
-grok mcp doctor github        # Check one server
-grok mcp doctor --json        # Machine-readable output
+thanh mcp doctor               # Check every configured server
+thanh mcp doctor github        # Check one server
+thanh mcp doctor --json        # Machine-readable output
 ```
 
 The transport defaults to `stdio`; pass `--transport http` or `--transport sse` for remote servers.
 
-By default `grok mcp add` writes to `~/.thanh/config.toml` (`--scope user`). Use `--scope project` to write to `.grok/config.toml` in the current directory instead, which can be committed and shared with your team (see [Project-Scoped MCP Servers](#project-scoped-mcp-servers)). Header and environment variable values are stored verbatim, so reference secrets as `${VAR}` instead of pasting them into a committed project config (see [Example Configurations](#example-configurations)). `grok mcp list` shows servers from both scopes, marking project-scoped ones with `(project)` and disabled ones with `(disabled)`.
+By default `thanh mcp add` writes to `~/.thanh/config.toml` (`--scope user`). Use `--scope project` to write to `.grok/config.toml` in the current directory instead, which can be committed and shared with your team (see [Project-Scoped MCP Servers](#project-scoped-mcp-servers)). Header and environment variable values are stored verbatim, so reference secrets as `${VAR}` instead of pasting them into a committed project config (see [Example Configurations](#example-configurations)). `thanh mcp list` shows servers from both scopes, marking project-scoped ones with `(project)` and disabled ones with `(disabled)`.
 
-`grok mcp remove` searches both scopes and exits 0 after removing the server. It exits 1 when the name is not found, or when the name is defined in both user and project scope — pass `--scope` to say which one to remove.
+`thanh mcp remove` searches both scopes and exits 0 after removing the server. It exits 1 when the name is not found, or when the name is defined in both user and project scope — pass `--scope` to say which one to remove.
 
-`grok mcp enable` / `disable` persist the personal on/off state to user `~/.thanh/config.toml` (`disabled_mcp_servers`, and `[mcp_servers.<name>].enabled` when that entry exists). Scope:
+`thanh mcp enable` / `disable` persist the personal on/off state to user `~/.thanh/config.toml` (`disabled_mcp_servers`, and `[mcp_servers.<name>].enabled` when that entry exists). Scope:
 
 - **Known names:** user/project Grok TOML, names already on the disabled list, compat sources (`.mcp.json`, Claude, Cursor), **plugin** MCP servers (same discovery as doctor/`/mcps`), and legacy managed `grok_com_*` (no local entry required).
 - **Enable only:** if the cwd-nearest project definition has sticky `enabled = false`, that single key is cleared (comments preserved); disable never rewrites project configs.
@@ -221,7 +221,7 @@ Grok loads MCP server configurations from multiple sources for compatibility:
 
 All sources are merged in priority order: config.toml > Claude > Cursor > `.mcp.json`. Servers from higher-priority sources take precedence when names conflict.
 
-The Claude and Cursor MCP sources are scanned by default. To disable scanning for a specific vendor, set `[compat.<vendor>] mcps = false` in `~/.thanh/config.toml` or the corresponding environment variable (`GROK_CURSOR_MCPS_ENABLED`, `GROK_CLAUDE_MCPS_ENABLED`). See [Configuration](05-configuration.md#harness-compatibility) for details. Use `grok inspect` to see which MCP servers were loaded and their vendor origin (`[cursor]`, `[claude]`).
+The Claude and Cursor MCP sources are scanned by default. To disable scanning for a specific vendor, set `[compat.<vendor>] mcps = false` in `~/.thanh/config.toml` or the corresponding environment variable (`GROK_CURSOR_MCPS_ENABLED`, `GROK_CLAUDE_MCPS_ENABLED`). See [Configuration](05-configuration.md#harness-compatibility) for details. Use `thanh inspect` to see which MCP servers were loaded and their vendor origin (`[cursor]`, `[claude]`).
 
 ---
 
@@ -328,7 +328,7 @@ Subagents inherit the parent session’s connected MCP servers by default, inclu
 
 If a child lists `search_tool` / `use_tool` but returns an empty catalog, check that:
 
-1. The parent session actually connected the server (see Extensions / `grok inspect`)
+1. The parent session actually connected the server (see Extensions / `thanh inspect`)
 2. The agent’s `mcpInheritance` is not `none` or a filter that excludes the server
 3. Plugin agents cannot declare their own `mcpServers` in frontmatter — they only see parent-connected servers
 
@@ -356,11 +356,11 @@ tail -f ~/.thanh/logs/mcp/filesystem.stderr.log
 
 ### Viewing Server Status
 
-Use `grok inspect` to see all loaded MCP servers and their sources:
+Use `thanh inspect` to see all loaded MCP servers and their sources:
 
 ```bash
-grok inspect          # Human-readable
-grok inspect --json   # Machine-readable
+thanh inspect          # Human-readable
+thanh inspect --json   # Machine-readable
 ```
 
 ### Debug Logging

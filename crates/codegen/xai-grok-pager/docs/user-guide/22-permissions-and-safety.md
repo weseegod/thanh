@@ -21,9 +21,9 @@ Modes set a baseline. Allow, ask, and deny [rules](#configuring-permissions) sti
 | Scripts, SDKs, CI, agent servers | Always-approve; add [deny rules](#configuring-permissions) or hooks for hard limits |
 
 ```bash
-grok -p "Run the tests" --always-approve
-grok agent --always-approve stdio
-grok agent --always-approve serve --bind 127.0.0.1:2419 --secret <token>
+thanh -p "Run the tests" --always-approve
+thanh agent --always-approve stdio
+thanh agent --always-approve serve --bind 127.0.0.1:2419 --secret <token>
 ```
 
 ACP clients can set `"_meta": { "yoloMode": true }` on `session/new`. See [Agent mode](15-agent-mode.md#automation-and-sdks).
@@ -48,9 +48,9 @@ ACP clients can set `"_meta": { "yoloMode": true }` on `session/new`. See [Agent
 **CLI:**
 
 ```bash
-grok --always-approve -p "Run the test suite"
-grok --permission-mode auto
-grok agent --always-approve serve --bind 127.0.0.1:2419 --secret <token>
+thanh --always-approve -p "Run the test suite"
+thanh --permission-mode auto
+thanh agent --always-approve serve --bind 127.0.0.1:2419 --secret <token>
 ```
 
 **Config:**
@@ -90,14 +90,14 @@ deny = [
 ```
 
 ```bash
-grok -p "Deploy the service" --always-approve --deny 'Bash(rm -rf *)'
+thanh -p "Deploy the service" --always-approve --deny 'Bash(rm -rf *)'
 ```
 
 Deny always wins over allow and over always-approve’s normal pass-through. See [Configuring permissions](#configuring-permissions).
 
 ### Auto mode
 
-Reduces interactive prompts by checking many tool calls before they run. Routine local work often proceeds; other calls may be blocked or escalated. In non-interactive sessions, a blocked call fails and is reported to the model (for example `Auto mode blocked this action …`). Behavior is the same for `grok -p`, `agent stdio`, and `agent serve`.
+Reduces interactive prompts by checking many tool calls before they run. Routine local work often proceeds; other calls may be blocked or escalated. In non-interactive sessions, a blocked call fails and is reported to the model (for example `Auto mode blocked this action …`). Behavior is the same for `thanh -p`, `agent stdio`, and `agent serve`.
 
 For automation that must run tools without interactive approval, use always-approve (and deny rules if you need hard blocks) rather than auto alone.
 
@@ -212,7 +212,7 @@ This approves only the listed commands. Always-approve mode, by contrast, approv
 ### 1. CLI Flags
 
 ```bash
-grok -p "Review the API changes" \
+thanh -p "Review the API changes" \
   --allow 'Bash(git *)' \
   --allow 'Bash(gh *)' \
   --allow 'Read' \
@@ -485,7 +485,7 @@ For hook installation, the JSON format, the trust model for project hooks, and o
 ### Headless git and gh Only (CI and Automation)
 
 ```bash
-grok -p "Implement the feature using only git and GitHub CLI" \
+thanh -p "Implement the feature using only git and GitHub CLI" \
   --allow 'Read' \
   --allow 'Grep' \
   --allow 'Bash(git *)' \

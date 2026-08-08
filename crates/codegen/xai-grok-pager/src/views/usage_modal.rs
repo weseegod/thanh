@@ -421,6 +421,7 @@ fn session_info_content(state: &UsageInfoModalState, theme: &Theme) -> TabConten
         // not part of this surface.
         if trimmed.is_empty()
             || trimmed.starts_with("Auth method:")
+            || trimmed.starts_with("Run `thanh login`")
             || trimmed.starts_with("Run `grok login`")
         {
             continue;

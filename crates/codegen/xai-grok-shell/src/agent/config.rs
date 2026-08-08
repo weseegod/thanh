@@ -8758,6 +8758,56 @@ reasoning_effort = "low"
         assert_eq!(sampling.base_url, "https://my-proxy.example.com/v1");
     }
     #[test]
+    fn native_model_override_context_window_and_input() {
+        let mut prefetched = IndexMap::new();
+        let mut entry = test_model_entry(
+            "grok-4.5",
+            "https://cli-chat-proxy.grok.com/v1",
+            None,
+            None,
+            None,
+        );
+        entry.info.context_window = NonZeroU64::new(500_000).unwrap();
+        entry.info.input_modalities =
+            Some(vec![InputModality::Text, InputModality::Image]);
+        prefetched.insert("grok-4.5".to_string(), entry);
+
+        let (_, models) = resolve_models_from_toml(
+            r#"
+            [model."grok-4.5"]
+            context_window = 300000
+            input = ["text"]
+            "#,
+            Some(prefetched),
+        );
+
+        let model = models.get("grok-4.5").expect("grok-4.5 should exist");
+        assert_eq!(
+            model.info.context_window,
+            NonZeroU64::new(300_000).unwrap(),
+            "user context_window must override prefetched catalog value"
+        );
+        assert_eq!(
+            model.info.input_modalities,
+            Some(vec![InputModality::Text]),
+            "user input must override prefetched input_modalities"
+        );
+        assert!(
+            !model_entry_accepts_images(model),
+            "input = [\"text\"] must report image-incapable"
+        );
+        assert_eq!(
+            model.info.base_url, "https://cli-chat-proxy.grok.com/v1",
+            "minimal override must not change base_url from prefetched entry"
+        );
+
+        let sampling = resolve_sampling(model, Some("session-token"));
+        assert_eq!(
+            sampling.context_window, 300_000,
+            "sampling_config_for_model must propagate overridden context_window"
+        );
+    }
+    #[test]
     #[serial]
     fn e2e_credential_priority_model_key_beats_session_beats_env() {
         let model_with_key = test_model_entry(

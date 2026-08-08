@@ -374,7 +374,7 @@ For Claude and Cursor, `rules` and `agents` are independent: turning off named i
 
 Each cell can be set via environment variable or `config.toml`; see the environment-variables reference for the names. Resolution: env var > config.toml > default (on).
 
-`grok inspect` reports cells that still need session-start resolution as `?` until a value is available; cells with an explicit env or TOML value use that value. Affected discovery entries report `compatibilityStatus: "unresolved"` in JSON and `[compat unresolved]` in human output.
+`thanh inspect` reports cells that still need session-start resolution as `?` until a value is available; cells with an explicit env or TOML value use that value. Affected discovery entries report `compatibilityStatus: "unresolved"` in JSON and `[compat unresolved]` in human output.
 
 ### Plugins
 
@@ -554,13 +554,13 @@ required_maximum_version = "0.2.200" # refuse to start above this
 - `required_minimum_version` (`GROK_REQUIRED_MINIMUM_VERSION`) and
   `required_maximum_version` (`GROK_REQUIRED_MAXIMUM_VERSION`) are hard bounds. If
   the running version is outside the range, the CLI exits at startup and instructs
-  the user to install an approved version. `grok update` and `grok --version` keep
+  the user to install an approved version. `thanh update` and `thanh --version` keep
   working so an out-of-range install can recover.
 - Bounds resolve across config layers by tightening only: a floor takes the
   highest value and a ceiling the lowest, so a managed bound can't be loosened,
   and a user or environment bound can't cancel a managed hard bound. An invalid
   value is ignored so a bad policy can't block startup.
-- An explicit `grok update --version X` is allowed above the ceiling, to recover
+- An explicit `thanh update --version X` is allowed above the ceiling, to recover
   from a too-new install, and rejected below the hard floor.
 
 ### Enterprise deployment

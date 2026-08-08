@@ -422,7 +422,7 @@ pub async fn run_headless(
 
     // Headless's only transport is the relay (no IPC fallback), so a session is required.
     const HEADLESS_NO_SESSION: &str = "Headless mode requires a grok.com session. \
-        Run `thanh login` to sign in, or use `grok agent stdio` for API-key access.";
+        Run `thanh login` to sign in, or use `thanh agent stdio` for API-key access.";
 
     // Clean up orphaned upload queue temp files from previous sessions (best-effort).
     // Uses DEFAULT_MAX_AGE to stay in sync with the upload queue's retry policy.

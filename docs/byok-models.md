@@ -164,7 +164,7 @@ context_window = 128000
 thanh models
 
 # Trong TUI đang chạy: Grok hot-reload config.toml;
-# nếu model chưa hiện → restart `grok`
+# nếu model chưa hiện → restart `thanh`
 ```
 
 Chọn model:
@@ -251,7 +251,48 @@ Backup lúc import: `~/.thanh/config.toml.bak-20260731-221150`
 
 ---
 
-## 6. Dual provider: native Grok + BYOK
+## 6. Override native Grok models
+
+Native xAI models (`grok-4.5`, v.v.) có sẵn trong catalog (từ `default_models.json`
+hoặc remote `/models-v2`). Bạn có thể **ghi đè** `context_window` và `input` mà
+không cần khai báo `base_url` / `api_key` — các field khác giữ nguyên từ catalog.
+
+```toml
+# Catalog key phải khớp id dùng với /model (quote nếu có dấu chấm)
+[model."grok-4.5"]
+context_window = 300000
+input = ["text", "image"]   # hoặc ["text"] cho text-only
+
+# Tùy chọn: đặt làm default
+[models]
+default = "grok-4.5"
+```
+
+| Field | Ý nghĩa |
+|-------|---------|
+| `context_window` | Ngưỡng auto-compact (tokens). Ghi đè giá trị từ catalog/remote. |
+| `input` | Modalities model nhận: `["text"]` hoặc `["text", "image"]`. Alias: `input_modalities`. |
+
+**Catalog key vs routing slug:** Tên section `[model.<id>]` là catalog key (dùng với
+`/model <id>`). Field `model = "..."` chỉ cần khi routing slug khác catalog key.
+Nếu managed config dùng key khác (vd. `[model.grok-build]` với `model = "grok-4.5"`),
+`context_window` có thể propagate sang entry cùng slug — nhưng an toàn nhất là override
+đúng catalog key bạn chọn trong `/model`.
+
+**Kiểm tra:**
+
+```bash
+thanh models    # mỗi model in kèm modalities, vd. grok-4.5 [text, image]
+```
+
+Trong TUI: `/model grok-4.5`. Sau khi sửa `config.toml`, catalog hot-reload khi file
+đổi; nếu model list chưa cập nhật, restart `thanh`.
+
+Danh sách field đầy đủ: `~/.thanh/docs/user-guide/11-custom-models.md`.
+
+---
+
+## 7. Dual provider: native Grok + BYOK
 
 Grok is built for native xAI models first, but BYOK entries (DeepSeek, OpenAI-compatible, etc.) get automatic tuning:
 
@@ -288,11 +329,11 @@ model = "deepseek-v4-flash"
 
 ---
 
-## 7. Troubleshooting
+## 8. Troubleshooting
 
 | Triệu chứng | Việc kiểm tra |
 |-------------|----------------|
-| `thanh models` không thấy model | Typo section TOML? Id có `.` đã quote chưa? Restart `grok` |
+| `thanh models` không thấy model | Typo section TOML? Id có `.` đã quote chưa? Restart `thanh` |
 | 401 / unauthorized | Sai `api_key` / `env_key`; env đã export chưa |
 | 404 model | Field `model` phải khớp id API của provider |
 | Request đi nhầm xAI | Model cần `base_url` hoặc `model_provider` trỏ provider đúng |
@@ -313,7 +354,7 @@ chmod 600 ~/.thanh/config.toml
 
 ---
 
-## 7. Credential: `api_key` vs `env_key`
+## 9. Credential: `api_key` vs `env_key`
 
 ```toml
 # Inline (tiện, kém an toàn hơn nếu file bị copy)
@@ -334,7 +375,7 @@ Thứ tự resolve (tóm tắt): `api_key` model → `env_key` model → provide
 
 ---
 
-## 8. Liên kết
+## 10. Liên kết
 
 - Official: `~/.thanh/docs/user-guide/11-custom-models.md`
 - Slash commands: `~/.thanh/docs/user-guide/04-slash-commands.md` (`/model`, `/effort`)

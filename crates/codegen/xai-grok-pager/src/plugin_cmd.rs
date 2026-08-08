@@ -1,4 +1,4 @@
-//! `grok plugin` CLI subcommand — manage plugins and marketplace sources.
+//! `thanh plugin` CLI subcommand — manage plugins and marketplace sources.
 //!
 //! Follows the `memory_cmd.rs` / `sessions_cmd.rs` / `worktree_cmd` pattern:
 //! clap args and handler logic co-located in a dedicated module. The pager's
@@ -23,7 +23,7 @@ use xai_grok_shell::plugin::{self, RepoUpdateOutcome, UninstallError};
 
 // ── JSON output types ───────────────────────────────────────────────
 
-/// Typed entry for `grok plugin list --json`. The `status` field acts as a
+/// Typed entry for `thanh plugin list --json`. The `status` field acts as a
 /// discriminator: `"installed"` entries have repo/path fields, `"available"`
 /// entries have description/component fields.
 #[derive(Serialize)]
@@ -51,7 +51,7 @@ enum PluginEntry {
     },
 }
 
-/// Typed entry for `grok plugin marketplace list --json`.
+/// Typed entry for `thanh plugin marketplace list --json`.
 #[derive(Serialize)]
 struct MarketplaceSourceEntry {
     name: String,
@@ -106,7 +106,7 @@ pub enum PluginCommand {
     /// Uninstall an installed plugin by name
     #[command(visible_alias = "rm", visible_alias = "remove")]
     Uninstall {
-        /// Plugin name (as shown by `grok plugin list`).
+        /// Plugin name (as shown by `thanh plugin list`).
         name: String,
         /// Skip confirmation for multi-plugin repos.
         #[arg(long)]
@@ -232,7 +232,7 @@ fn trust_prompt(subject: &str, source_arg: &str) -> String {
         "Installing {subject} requires confirmation.\n\
          Plugins can run hooks, MCP servers, and skills on your machine, so installation needs explicit trust.\n\
          \n\
-         To proceed, re-run with --trust:\n  grok plugin install {source_arg} --trust"
+         To proceed, re-run with --trust:\n  thanh plugin install {source_arg} --trust"
     )
 }
 
@@ -275,7 +275,7 @@ fn cmd_list(json: bool, available: bool) -> Result<()> {
         }
         println!("{}", serde_json::to_string_pretty(&entries)?);
     } else if repos.is_empty() {
-        println!("No plugins installed. Run `grok plugin install --help` to get started.");
+        println!("No plugins installed. Run `thanh plugin install --help` to get started.");
     } else {
         for (repo_key, repo) in &repos {
             let mp = repo
@@ -498,7 +498,7 @@ fn cmd_install_marketplace(
                     .unwrap_or(&mref.name);
                 println!(
                     "Plugin \"{}\" is already installed from {}. \
-                     Run `grok plugin update {}` to update it.",
+                     Run `thanh plugin update {}` to update it.",
                     mref.name, outcome.source_display_name, update_name,
                 );
                 return Ok(());
@@ -553,7 +553,7 @@ fn cmd_uninstall(name: &str, confirm: bool, keep_data: bool) -> Result<()> {
             "Plugin \"{name}\" belongs to repo \"{repo_key}\" which also contains:\n\
              {}\n\n\
              Uninstalling will remove all {total} plugin(s). To proceed:\n\
-               grok plugin uninstall {name} --confirm",
+               thanh plugin uninstall {name} --confirm",
             other_plugins
                 .iter()
                 .map(|p| format!("  - {p}"))
@@ -607,7 +607,7 @@ fn cmd_enable(name: &str) -> Result<()> {
     if registry.find_plugin(name).is_none() {
         bail!(
             "Plugin \"{name}\" not found.\n\
-               Run `grok plugin list` to see installed plugins."
+               Run `thanh plugin list` to see installed plugins."
         );
     }
     if let Err(e) = xai_grok_shell::config::remove_disabled_plugin(name) {
@@ -624,7 +624,7 @@ fn cmd_disable(name: &str) -> Result<()> {
     if registry.find_plugin(name).is_none() {
         bail!(
             "Plugin \"{name}\" not found.\n\
-               Run `grok plugin list` to see installed plugins."
+               Run `thanh plugin list` to see installed plugins."
         );
     }
     if let Err(e) = xai_grok_shell::config::remove_enabled_plugin(name) {
@@ -641,7 +641,7 @@ fn cmd_details(name: &str) -> Result<()> {
     let (repo_key, repo, _) = registry.find_plugin(name).ok_or_else(|| {
         anyhow::anyhow!(
             "Plugin \"{name}\" not found.\n\
-             Run `grok plugin list` to see installed plugins."
+             Run `thanh plugin list` to see installed plugins."
         )
     })?;
 
@@ -721,7 +721,7 @@ fn cmd_tag(path: &str, push: bool, force: bool, dry_run: bool) -> Result<()> {
     let version = match load_manifest(&root) {
         Ok(ManifestLoadResult::Found(m)) => m.version.ok_or_else(|| {
             anyhow::anyhow!(
-                "No `version` field in plugin.json. Set a version to use `grok plugin tag`."
+                "No `version` field in plugin.json. Set a version to use `thanh plugin tag`."
             )
         })?,
         Ok(ManifestLoadResult::NotFound) => bail!("No plugin.json found in {path}."),
@@ -831,7 +831,7 @@ fn marketplace_list(
     } else if sources.is_empty() {
         println!(
             "No marketplace sources configured.\n\
-             Run `grok plugin marketplace add --help` to get started."
+             Run `thanh plugin marketplace add --help` to get started."
         );
     } else {
         for s in sources {
@@ -1217,7 +1217,7 @@ mod tests {
         );
         assert!(msg.contains("hooks, MCP servers, and skills"));
         assert!(msg.contains(
-            "To proceed, re-run with --trust:\n  grok plugin install sentry@xai-org/plugin-marketplace --trust"
+            "To proceed, re-run with --trust:\n  thanh plugin install sentry@xai-org/plugin-marketplace --trust"
         ));
         assert!(!msg.contains("Error"));
         assert!(!msg.contains("Failed"));
@@ -1233,7 +1233,7 @@ mod tests {
             ),
             "{git}"
         );
-        assert!(git.ends_with("  grok plugin install u/r --trust"), "{git}");
+        assert!(git.ends_with("  thanh plugin install u/r --trust"), "{git}");
         let local = trust_prompt("from directory /tmp/p", "./p");
         assert!(
             local.starts_with("Installing from directory /tmp/p requires confirmation."),

@@ -112,7 +112,7 @@ There is deliberately no `headers` key: supply collector auth via
 `OTEL_EXPORTER_OTLP_HEADERS` so tokens are never stored on disk.
 
 Managed deployments can additionally enable org-wide telemetry by distributing
-the `[telemetry]` `otel_*` keys through `grok setup` managed config /
+the `[telemetry]` `otel_*` keys through `thanh setup` managed config /
 requirements pins, or force-disable it fleet-wide with the same local config
 layers (`external_otel_disabled`, content-gate locks).
 
@@ -137,7 +137,7 @@ A fleet policy that arrives afterwards still applies; it can only ever
 something your local configuration did not.
 
 If your collector receives nothing at all, check the debug log
-(`grok --debug`) for `external otel:` lines — they record whether the stream
+(`thanh --debug`) for `external otel:` lines — they record whether the stream
 resolved its configuration, and whether it is exporting or suppressed.
 
 ## Resource attributes

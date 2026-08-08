@@ -9,6 +9,9 @@ pub const VERSION: &str = match option_env!("GROK_VERSION") {
     None => env!("CARGO_PKG_VERSION"),
 };
 
+/// User-facing CLI binary name for the thanh fork (pasteable hints, errors, docs).
+pub const CLI_BINARY_NAME: &str = "thanh";
+
 /// [`TEST_VERSION_ENV`] override first, then [`VERSION`]. Trimmed so
 /// non-semver-aware callers can pass the result straight into parsing.
 pub fn installed() -> String {

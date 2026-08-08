@@ -98,7 +98,7 @@ Each source shows its plugins with:
 
 ### Adding Marketplace Sources
 
-Press `a` on the Marketplace tab (or run `grok plugin marketplace add <source>`)
+Press `a` on the Marketplace tab (or run `thanh plugin marketplace add <source>`)
 with a git URL, a GitHub shorthand (`owner/repo`), or a local directory path
 (`/absolute`, `~/dir`, or `./relative`). Local paths are stored as `path`
 sources — handy for developing a marketplace from an existing checkout.

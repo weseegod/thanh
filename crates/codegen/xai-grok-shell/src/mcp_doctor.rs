@@ -648,7 +648,7 @@ pub fn print_report(report: &DoctorReport) {
 
     if report.servers.is_empty() {
         println!("  No MCP servers configured.");
-        println!("  Run `grok mcp add --help` to get started.");
+        println!("  Run `thanh mcp add --help` to get started.");
         println!();
         return;
     }
@@ -678,7 +678,7 @@ pub fn print_report(report: &DoctorReport) {
         report.healthy_count,
         report.failing_count,
         if report.failing_count > 0 {
-            " Run `grok mcp doctor --json` for full diagnostics."
+            " Run `thanh mcp doctor --json` for full diagnostics."
         } else {
             ""
         }

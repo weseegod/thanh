@@ -163,7 +163,7 @@ Running a skill loads its instructions into the conversation and directs the mod
 /commit fix the build
 ```
 
-To browse your skills, type `/` to open the slash-command menu. Grok lists every built-in command and skill and filters them as you type. To list skills from the command line instead, run `grok inspect` (see [Viewing Skill Details](#viewing-skill-details)).
+To browse your skills, type `/` to open the slash-command menu. Grok lists every built-in command and skill and filters them as you type. To list skills from the command line instead, run `thanh inspect` (see [Viewing Skill Details](#viewing-skill-details)).
 
 ### Qualified Names
 
@@ -177,7 +177,7 @@ When a skill's name collides with another skill or a built-in command, Grok keep
 
 Typing `/login` in the slash menu shows both rows, with a right-aligned **built-in** or **skill · plugin-name** badge so you can tell them apart. Rename the skill (or its directory) if you want the bare `/name` for the skill instead.
 
-`grok inspect` tags colliding skills with `[collides with /login → /acme:login]`.
+`thanh inspect` tags colliding skills with `[collides with /login → /acme:login]`.
 
 ### Automatic Invocation
 
@@ -189,11 +189,11 @@ For example, if a skill's description says "Use when the user wants to commit ch
 
 ## Viewing Skill Details
 
-Run `grok inspect` to see every skill Grok discovers, along with the rest of your configuration:
+Run `thanh inspect` to see every skill Grok discovers, along with the rest of your configuration:
 
 ```bash
-grok inspect          # Human-readable summary
-grok inspect --json   # Machine-readable report
+thanh inspect          # Human-readable summary
+thanh inspect --json   # Machine-readable report
 ```
 
 In the human-readable output, the Skills section lists each skill's name and its source -- `project`, `user`, `bundled`, `config` (a `[skills].paths` entry), `server` (skills synced from the skill store in managed workspaces), or `plugin: <name>`. Grok tags any skill disabled via `[skills].disabled` or from a disabled vendor surface with `[disabled]`.
@@ -206,9 +206,9 @@ The `--json` report includes the full detail for each skill: its `name`, `descri
 
 ## Bundled and Plugin Skills
 
-Grok distributes platform skills separately from your personal skills. Bundled skills are cached under `~/.thanh/bundled/skills/`; Grok never writes them into `~/.thanh/skills/`. A same-named local, repo, or user skill overrides the bundled copy. `grok inspect` labels each definition by its actual source. (A plugin skill of the same name does not override a native skill; it stays available under its qualified `plugin:name` form.)
+Grok distributes platform skills separately from your personal skills. Bundled skills are cached under `~/.thanh/bundled/skills/`; Grok never writes them into `~/.thanh/skills/`. A same-named local, repo, or user skill overrides the bundled copy. `thanh inspect` labels each definition by its actual source. (A plugin skill of the same name does not override a native skill; it stays available under its qualified `plugin:name` form.)
 
-Skills can also come from plugins. When you install a plugin that includes skills, they appear alongside your user and project skills. `grok inspect` labels each plugin-provided skill with its source as `plugin: <name>`.
+Skills can also come from plugins. When you install a plugin that includes skills, they appear alongside your user and project skills. `thanh inspect` labels each plugin-provided skill with its source as `plugin: <name>`.
 
 See the [Plugins guide](09-plugins.md) for more on installing plugins that provide skills.
 
