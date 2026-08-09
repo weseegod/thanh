@@ -95,11 +95,14 @@ git fetch --all
    scripts/publish_release.sh
    ```
 
-   The script bumps `xai-grok-version` + `xai-grok-pager-bin`, tags `vX.Y.Z`,
-   and pushes — CI builds `thanh` for macOS arm64 + Linux x86_64 and publishes
-   the GitHub Release. Before closing out the sync, confirm CI went green and
-   the release + `stable` pointer are live (`gh run watch`, then
-   `gh release view vX.Y.Z`).
+   The script bumps `xai-grok-version` + `xai-grok-pager-bin` (+ `Cargo.lock`),
+   tags `vX.Y.Z`, builds `thanh` **locally** via `./build.sh` for the current
+   platform, and publishes the GitHub Release with the local binary + `stable`/
+   `alpha` pointers. **There is no CI** — the fork builds and releases from the
+   machine running the script (needs `gh` installed + authenticated). Before
+   closing out the sync, confirm the release + `stable` pointer are live
+   (`gh release view vX.Y.Z`). To ship other platforms, build on each machine
+   and `gh release upload vX.Y.Z thanh-...-<os>-<arch>`.
 
 **Strategy:** always **merge** `upstream/main` into a branch off fork `main`.
 Do **not** rebase fork commits onto upstream — that drops fork history and
@@ -124,7 +127,7 @@ These paths contain fork customizations. Preserve them during merges.
 | Category | Paths | Rule |
 |----------|-------|------|
 | Fork-only files | `build.sh`, `docs/byok-models.md` | Never delete; keep fork version |
-| Fork release pipeline | `.github/workflows/release.yml`, `scripts/publish_release.sh` | Never delete; keep fork-owned |
+| Fork release pipeline | `scripts/publish_release.sh` (self-build via `./build.sh`; **no CI** — `.github/` is removed) | Never delete; keep fork-owned |
 | Self-update feed (`thanh`) | `crates/codegen/xai-grok-update/src/version.rs`, `auto_update.rs`, `crates/codegen/xai-grok-config/src/paths.rs`, `crates/codegen/xai-fast-worktree/src/db/mod.rs` (`resolve_grok_home`) | Keep fork feed (`weseegod/thanh` releases), fork home `~/.thanh` (default in `default_grok_home()`/`resolve_grok_home()`, never upstream's `~/.grok`), `thanh` managed binary name (`~/.thanh/bin/thanh`, assets `thanh-<ver>-<os>-<arch>`), `version-thanh.json` cache, single-link swap (never touch `bin/grok`/`bin/agent`) |
 | Version lockstep | `crates/codegen/xai-grok-version/Cargo.toml`, `crates/codegen/xai-grok-pager-bin/Cargo.toml` | Keep fork version; bump after every sync (see [Release & versioning](#release--versioning)) |
 | BYOK model config | `crates/codegen/xai-grok-shell/src/agent/config.rs`, `config_model_override_parse.rs`, `models.rs` | Keep fork `input` / `input_modalities` parsing and text-only capability checks |
@@ -161,13 +164,14 @@ Rules:
   be considered an update). Keep `xai-grok-version` and `xai-grok-pager-bin`
   lockstepped (they already are, both synced to upstream's current version).
 - **After every upstream sync**, bump the version (typically patch
-  `0.2.121 → 0.2.122`) and publish: `scripts/publish_release.sh`. The CI
-  workflow builds on `ubuntu-latest` (linux-x86_64) and `macos-14`
-  (macos-aarch64, Apple Silicon) — no local macOS build needed.
+  `1.0.0 → 1.0.1`) and publish: `scripts/publish_release.sh`. It builds
+  `thanh` **locally** via `./build.sh` for the machine it runs on (no CI).
+  `gh` must be installed and authenticated (`gh auth login`) to create the
+  GitHub Release; to ship other platforms, build on each machine and
+  `gh release upload vX.Y.Z thanh-...-<os>-<arch>`.
 - **Verify the release after publishing**: the `stable`/`alpha` pointers and
   the `thanh-<ver>-<os>-<arch>` assets must exist on the GitHub Release
-  before `thanh update` can serve them — check `gh run watch` (release
-  workflow) and `gh release view vX.Y.Z`.
+  before `thanh update` can serve them — check `gh release view vX.Y.Z`.
 - The updater's default installer is `internal` (pure HTTP against the fork's
   GitHub Releases); `gh-release` (needs `gh`) is also supported. It manages
   `~/.thanh/bin/thanh` only and never touches grok's `~/.grok` tree.
@@ -225,7 +229,7 @@ Run all checks before merging to `main`:
 ```bash
 # Fast pre-gate (a few minutes) — run first; the full release build is slow
 cargo check -p xai-grok-shell -p xai-grok-pager -p xai-grok-sampling-types
-# Full gate (slow — may be waived by the user)
+# Full gate (slow) — this is also the self-build path used for releases
 ./build.sh
 ```
 
