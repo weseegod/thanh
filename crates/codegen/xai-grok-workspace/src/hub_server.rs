@@ -7,7 +7,7 @@ use crate::error::{WorkspaceError, WorkspaceResult};
 use crate::handle::WorkspaceHandle;
 use crate::hub_ids::WORKSPACE_RPC_TOOL_ID;
 use crate::rpc_envelope::{RpcEnvelope, envelope_err};
-use crate::workspace_ops::WorkspaceOp;
+use crate::workspace_ops::{RpcActivityClass, WorkspaceOp, WorkspaceRpc};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use prometheus::{HistogramVec, IntCounterVec, register_histogram_vec, register_int_counter_vec};
@@ -192,12 +192,20 @@ fn ensure_client_fs_queries_enabled() -> WorkspaceResult<()> {
         ))
     }
 }
+/// Stamp client-RPC activity for mutation-classed methods. Called before
+/// param validation so a malformed call from a live client still counts.
+fn note_mutation<Op: WorkspaceRpc>(ws: &WorkspaceHandle) {
+    if Op::ACTIVITY == RpcActivityClass::Mutation {
+        ws.activity_tracker().note_client_rpc_activity();
+    }
+}
 /// Generic dispatch helper: deserialize params, execute, serialize result.
 async fn dispatch_op<Op: WorkspaceOp>(
     params: Value,
     ws: &WorkspaceHandle,
     session_id: Option<&str>,
 ) -> WorkspaceResult<Value> {
+    note_mutation::<Op>(ws);
     let req: Op = serde_json::from_value(params)
         .map_err(|e| WorkspaceError::HubError(format!("invalid params for {}: {e}", Op::METHOD)))?;
     let result = req.execute(ws, session_id).await?;
@@ -363,13 +371,14 @@ impl WorkspaceRpcHandler {
         use crate::workspace_ops::*;
         use crate::worktree::{ApplyWorktreeRequest, CreateWorktreeRequest, RemoveWorktreeRequest};
         use xai_grok_workspace_types::rpc::git::{GitBranchInfoReq, GitMetadataReq};
+        use xai_grok_workspace_types::rpc::presence::PresenceNoteReq;
         use xai_grok_workspace_types::rpc::search::FuzzyStatusReq;
         use xai_grok_workspace_types::rpc::skills::DiscoverPluginsReq;
         use xai_grok_workspace_types::rpc::workspace::{
             ConfigureMcpReq, DropSessionReq, InstallPluginReq, ListBackgroundTasksReq,
             ListBackgroundTasksResponse, ListTodosReq, ListTodosResponse, LoadEnvrcReq,
             LoadPermissionsReq, LoadProjectConfigReq, RefreshPluginsReq, ResolveFileReferencesReq,
-            TasksSnapshotReq, ToolDefinitionsReq, UpdateToolConfigReq,
+            TasksSnapshotReq, ToolDefinitionsReq, UpdateToolConfigReq, WorkspaceInfo,
         };
         use xai_grok_workspace_types::rpc::worktree::WorktreeCreateSyncReq;
         tracing::debug!(method, "workspace rpc dispatch");
@@ -381,8 +390,6 @@ impl WorkspaceRpcHandler {
         match method {
             <WorkspaceInfoReq as WorkspaceRpc>::METHOD => {
                 let cwd = self.workspace.root_cwd()?;
-                let cwd_str = cwd.to_string_lossy().to_string();
-                let os = std::env::consts::OS;
                 let shell = std::env::var("SHELL")
                     .ok()
                     .and_then(|s| {
@@ -391,11 +398,13 @@ impl WorkspaceRpcHandler {
                             .map(|n| n.to_string_lossy().to_string())
                     })
                     .unwrap_or_else(|| "sh".to_string());
-                Ok(serde_json::json!({
-                    "os": os,
-                    "shell": shell,
-                    "cwd": cwd_str,
-                }))
+                let info = WorkspaceInfo {
+                    os: std::env::consts::OS.to_owned(),
+                    shell,
+                    cwd: cwd.to_string_lossy().into_owned(),
+                    version: Some(xai_grok_version::VERSION.to_owned()),
+                };
+                serde_json::to_value(info).map_err(|e| WorkspaceError::HubError(e.to_string()))
             }
             <GitStatusReq as WorkspaceRpc>::METHOD => {
                 static DEPRECATION_WARNING: std::sync::Once = std::sync::Once::new();
@@ -473,6 +482,7 @@ impl WorkspaceRpcHandler {
                     .map_err(|e| WorkspaceError::HubError(e.to_string()))
             }
             <UpdateToolConfigReq as WorkspaceRpc>::METHOD => {
+                note_mutation::<UpdateToolConfigReq>(&self.workspace);
                 let caller = resolve_mutation_caller(
                     "update_tool_config",
                     bound_session,
@@ -637,6 +647,7 @@ impl WorkspaceRpcHandler {
                 serde_json::to_value(env).map_err(|e| WorkspaceError::HubError(e.to_string()))
             }
             <InstallPluginReq as WorkspaceRpc>::METHOD => {
+                note_mutation::<InstallPluginReq>(&self.workspace);
                 let _ = params;
                 Ok(Value::Null)
             }
@@ -651,6 +662,7 @@ impl WorkspaceRpcHandler {
                 Ok(Value::Array(plugins))
             }
             <ConfigureMcpReq as WorkspaceRpc>::METHOD => {
+                note_mutation::<ConfigureMcpReq>(&self.workspace);
                 let session_id = bound_session.ok_or_else(|| {
                     WorkspaceError::HubError("configure_mcp requires a bound session".into())
                 })?;
@@ -724,6 +736,7 @@ impl WorkspaceRpcHandler {
                 dispatch_op::<PrepareWorktreeFromWorktreeReq>(params, &self.workspace, None).await
             }
             <WorktreeCreateSyncReq as WorkspaceRpc>::METHOD => {
+                note_mutation::<WorktreeCreateSyncReq>(&self.workspace);
                 let req: crate::worktree::CreateWorktreeRequest = serde_json::from_value(params)
                     .map_err(|e| {
                         WorkspaceError::HubError(format!("invalid create_sync params: {e}"))
@@ -918,7 +931,20 @@ impl WorkspaceRpcHandler {
                     .await;
                 serde_json::to_value(points).map_err(|e| WorkspaceError::HubError(e.to_string()))
             }
+            <PresenceNoteReq as WorkspaceRpc>::METHOD => {
+                let req: PresenceNoteReq = serde_json::from_value(params).map_err(|e| {
+                    WorkspaceError::HubError(format!("invalid params for presence.note: {e}"))
+                })?;
+                self.workspace
+                    .session(&req.session_id)
+                    .ok_or_else(|| WorkspaceError::SessionNotFound(req.session_id.clone()))?;
+                self.workspace
+                    .activity_tracker()
+                    .apply_presence_note(req.visible, req.seq);
+                Ok(Value::Null)
+            }
             <RewindToReq as WorkspaceRpc>::METHOD => {
+                note_mutation::<RewindToReq>(&self.workspace);
                 let req: RewindToReq = serde_json::from_value(params).map_err(|e| {
                     WorkspaceError::HubError(format!("invalid params for rewind_to: {e}"))
                 })?;
@@ -1132,7 +1158,7 @@ impl ToolServerHandler for WorkspaceRpcHandler {
         let (became_empty, start_drain) = {
             let mut sessions = self.workspace.shared.sessions.write();
             if let Some(session) = sessions.remove(sid) {
-                session.abort_system_notify_forwarder();
+                session.abort_system_notify_producers();
                 session.shutdown_terminal_backend();
                 session.shutdown_browser_service();
                 session.cancel_hunk_tracker();
@@ -1266,6 +1292,21 @@ mod tests {
             .expect("fail-open no-op reply");
         let reply: turn_hook::HookReply = serde_json::from_value(value).unwrap();
         assert_eq!(reply, turn_hook::HookReply::default());
+    }
+    #[tokio::test]
+    async fn dispatch_workspace_info_reports_server_version() {
+        use xai_grok_workspace_types::rpc::workspace::{WorkspaceInfo, WorkspaceInfoReq};
+        let handler = WorkspaceRpcHandler::new(make_handle());
+        let value = handler
+            .dispatch(
+                <WorkspaceInfoReq as WorkspaceRpc>::METHOD,
+                serde_json::json!({}),
+                None,
+            )
+            .await
+            .expect("workspace.info dispatch");
+        let info: WorkspaceInfo = serde_json::from_value(value).expect("typed WorkspaceInfo");
+        assert_eq!(Some(xai_grok_version::VERSION.to_owned()), info.version);
     }
     #[tokio::test]
     async fn dispatch_unknown_method_returns_unknown_method_error() {
@@ -3240,6 +3281,7 @@ mod tests {
             <EndPromptReq as WorkspaceRpc>::METHOD,
             <GetRewindPointsReq as WorkspaceRpc>::METHOD,
             <RewindToReq as WorkspaceRpc>::METHOD,
+            <xai_grok_workspace_types::rpc::presence::PresenceNoteReq as WorkspaceRpc>::METHOD,
             <HookRegistryReq as WorkspaceRpc>::METHOD,
             <LoadProjectConfigReq as WorkspaceRpc>::METHOD,
             <LoadPermissionsReq as WorkspaceRpc>::METHOD,
@@ -3268,5 +3310,127 @@ mod tests {
                 );
             }
         }
+    }
+    /// Mutation-classed methods stamp client-RPC activity (even on invalid
+    /// params — the call itself is the evidence of a live client); reads and
+    /// the deliberate teardown exception never do.
+    #[tokio::test]
+    async fn dispatch_stamps_client_rpc_activity_for_mutations_only() {
+        use crate::file_system::{FsListReq, FsWriteFileReq};
+        use xai_grok_workspace_types::rpc::workspace::DropSessionReq;
+        use xai_tool_protocol::IdleWithholdReason;
+        let handler = WorkspaceRpcHandler::new(make_handle());
+        let tracker = handler.workspace.activity_tracker().clone();
+        assert_eq!(tracker.snapshot().withhold_reason, None);
+        let _ = handler
+            .dispatch(
+                <FsListReq as WorkspaceRpc>::METHOD,
+                serde_json::json!({}),
+                None,
+            )
+            .await;
+        assert_eq!(
+            tracker.snapshot().withhold_reason,
+            None,
+            "a read never stamps"
+        );
+        let _ = handler
+            .dispatch(
+                <DropSessionReq as WorkspaceRpc>::METHOD,
+                serde_json::json!({}),
+                None,
+            )
+            .await;
+        assert_eq!(
+            tracker.snapshot().withhold_reason,
+            None,
+            "drop_session mutates but must not hold the sandbox alive"
+        );
+        let _ = handler
+            .dispatch(
+                <FsWriteFileReq as WorkspaceRpc>::METHOD,
+                serde_json::json!({}),
+                None,
+            )
+            .await;
+        assert_eq!(
+            tracker.snapshot().withhold_reason,
+            Some(IdleWithholdReason::ClientRpc),
+            "a mutation stamps"
+        );
+    }
+    #[tokio::test]
+    async fn presence_note_stamps_only_visible_notes_for_live_sessions() {
+        use xai_grok_workspace_types::rpc::presence::PresenceNoteReq;
+        use xai_tool_protocol::IdleWithholdReason;
+        let handle = crate::handle::tests::make_handle_with_status_config(crate::StatusConfig {
+            presence_keepalive_enabled: true,
+            ..crate::StatusConfig::default()
+        });
+        handle.create_session("sess-1").expect("create session");
+        let tracker = handle.activity_tracker().clone();
+        let handler = WorkspaceRpcHandler::new(handle);
+        let method = <PresenceNoteReq as WorkspaceRpc>::METHOD;
+        let err = handler
+            .dispatch(
+                method,
+                serde_json::json!({"session_id": "ghost", "visible": true, "seq": 1}),
+                None,
+            )
+            .await
+            .expect_err("unknown session is an error");
+        assert!(matches!(err, WorkspaceError::SessionNotFound(_)));
+        assert_eq!(
+            tracker.snapshot().withhold_reason,
+            None,
+            "an unknown session must not stamp"
+        );
+        handler
+            .dispatch(
+                method,
+                serde_json::json!({"session_id": "sess-1", "visible": false, "seq": 2}),
+                None,
+            )
+            .await
+            .expect("hidden note is acked");
+        assert_eq!(
+            tracker.snapshot().withhold_reason,
+            None,
+            "a hidden note stamps nothing"
+        );
+        handler
+            .dispatch(
+                method,
+                serde_json::json!({"session_id": "sess-1", "visible": true, "seq": 3}),
+                None,
+            )
+            .await
+            .expect("visible note is acked");
+        assert_eq!(
+            tracker.snapshot().withhold_reason,
+            Some(IdleWithholdReason::ClientPresence),
+            "a visible note stamps the presence tier"
+        );
+    }
+    #[tokio::test]
+    async fn presence_note_is_inert_while_dark() {
+        use xai_grok_workspace_types::rpc::presence::PresenceNoteReq;
+        let handle = make_handle();
+        handle.create_session("sess-1").expect("create session");
+        let tracker = handle.activity_tracker().clone();
+        let handler = WorkspaceRpcHandler::new(handle);
+        handler
+            .dispatch(
+                <PresenceNoteReq as WorkspaceRpc>::METHOD,
+                serde_json::json!({"session_id": "sess-1", "visible": true, "seq": 1}),
+                None,
+            )
+            .await
+            .expect("visible note is acked even while dark");
+        assert_eq!(
+            tracker.snapshot().withhold_reason,
+            None,
+            "dark default: the note must not withhold idle"
+        );
     }
 }

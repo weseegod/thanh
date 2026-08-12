@@ -247,11 +247,12 @@ fn main() -> anyhow::Result<()> {
     } else {
         None
     };
-    tokio::runtime::Builder::new_multi_thread()
+    let mut builder = tokio::runtime::Builder::new_multi_thread();
+    builder
         .worker_threads(xai_tty_utils::runtime::capped_worker_threads().get())
-        .enable_all()
-        .build()?
-        .block_on(run(args, cwd))
+        .enable_all();
+    let rt = xai_tty_utils::runtime::build_with_blocking_pool(&mut builder)?;
+    rt.block_on(run(args, cwd))
 }
 async fn run(args: Args, cwd: PathBuf) -> anyhow::Result<()> {
     let _ = rustls::crypto::ring::default_provider().install_default();
@@ -372,7 +373,8 @@ async fn run(args: Args, cwd: PathBuf) -> anyhow::Result<()> {
         "Workspace server starting — sessions created dynamically via server bind"
     );
     let server_id = args.server_id.clone();
-    let status_config = xai_grok_workspace::StatusConfig::from_env();
+    let mut status_config = xai_grok_workspace::StatusConfig::from_env();
+    status_config.preview_control_port = args.preview.preview_control_port;
     let preview_shutdown = if args.preview.preview_enabled {
         let control_port = args.preview.preview_control_port;
         let cfg = args.preview.into_preview_args(cwd.clone());

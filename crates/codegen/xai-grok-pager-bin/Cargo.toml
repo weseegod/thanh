@@ -81,6 +81,7 @@ serial_test = { workspace = true }
 # `PagerArgs::try_parse_from` in the CLI-parsing unit tests (needs the
 # `clap::Parser` trait in scope).
 clap = { workspace = true, features = ["derive"] }
+tempfile = { workspace = true }
 
 [features]
 default = [

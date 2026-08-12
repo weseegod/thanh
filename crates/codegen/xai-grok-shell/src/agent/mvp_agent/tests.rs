@@ -1973,6 +1973,7 @@ async fn ensure_plugin_registry_lazily_populates_snapshot() {
 }
 #[cfg(unix)]
 mod process_scope_reclaim;
+mod session_rename_tests;
 mod session_resume_close_tests;
 mod subagent_spawn_context_tests;
 /// No load in flight and no session → the wait returns immediately
@@ -2768,7 +2769,10 @@ async fn prepare_video_gen_config_disabled_when_zdr_flag_set() {
     agent.cfg.borrow_mut().disable_zdr_incompatible_tools = true;
     assert!(matches!(
         agent.prepare_video_gen_config(),
-        VideoGenConfig::Disabled
+        VideoGenConfig::Enabled {
+            zdr_restricted: true,
+            ..
+        }
     ));
     agent.cfg.borrow_mut().zdr_video_output_s3 = Some(zdr_s3());
     agent.cfg.borrow_mut().disable_zdr_incompatible_tools = false;
@@ -2786,12 +2790,14 @@ async fn prepare_video_gen_config_disabled_when_zdr_flag_set() {
     agent.cfg.borrow_mut().disable_zdr_incompatible_tools = true;
     let VideoGenConfig::Enabled {
         zdr_video_output_s3,
+        zdr_restricted,
         ..
     } = agent.prepare_video_gen_config()
     else {
         panic!("expected Enabled");
     };
     assert!(zdr_video_output_s3.as_ref().is_some_and(|c| c.is_valid()));
+    assert!(!zdr_restricted);
 }
 #[tokio::test(flavor = "current_thread")]
 async fn prepare_video_gen_config_respects_feature_flag() {

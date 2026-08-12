@@ -125,6 +125,7 @@ impl AgentView {
             modal_hovered_key: None,
             context_state: None,
             chat_kind: false,
+            conversation_entry: false,
             app_chat_mode: false,
             #[cfg(feature = "local-workspace")]
             workspace_mode: crate::views::welcome::WelcomeWorkspaceMode::Sandbox,
@@ -323,6 +324,7 @@ impl AgentView {
             pending_recap_entry: None,
             display_name: None,
             generated_session_title: None,
+            title_unpin_committed: false,
             last_turn_summary: None,
             last_turn_summary_gen: 0,
             pending_effects: Vec::new(),
@@ -1094,6 +1096,14 @@ impl AgentView {
             announcements,
         ));
         self.set_restricted_commands(restricted_commands);
+    }
+    /// ACP `kind` for `x.ai/session/rename`: the lane this session opened on.
+    pub(crate) fn rename_kind(&self) -> xai_grok_shell::session::unified_list::SessionKind {
+        if self.conversation_entry {
+            xai_grok_shell::session::unified_list::SessionKind::Chat
+        } else {
+            xai_grok_shell::session::unified_list::SessionKind::Build
+        }
     }
     /// Show or hide the `/recap` slash command in this agent's registry.
     pub fn set_session_recap_available(&mut self, available: bool) {

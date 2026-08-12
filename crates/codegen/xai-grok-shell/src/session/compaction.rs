@@ -3733,6 +3733,7 @@ mod inline_auto_compact_flow_tests {
             is_retryable: false,
             retry_after_secs: None,
             should_retry: None,
+            error_code: None,
             model_metadata: Some(crate::sampling::ResponseModelMetadata {
                 context_window: Some(context_window),
                 max_completion_tokens: None,
@@ -3795,6 +3796,7 @@ mod inline_auto_compact_flow_tests {
                     is_retryable: false,
                     retry_after_secs: None,
                     should_retry: None,
+                    error_code: None,
                     model_metadata: None,
                     empty_response_context: None,
                     doom_loop_triggers: None,
