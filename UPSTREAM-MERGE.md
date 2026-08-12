@@ -301,3 +301,19 @@ Sync #4 (merge `5fa1439`, + Cargo.lock resync `5d3b005`):
 - Full `./build.sh` verified (release build + install)
 - Fork markers: 110/110 preserved (verified via the `git grep -n` diff pre/post)
 - Delivered via **direct merge** into `main` + push (per user request)
+
+Sync #5 (merge `de01de1`, direct local merge into `main`):
+- 3 upstream commits (`75e73f3`..`be71313`, "Synced from monorepo"); 296 files, ~18.0k insertions, ~2.7k deletions
+- **7 conflicts**, resolved by combining:
+  - `pager-bin/main.rs`: adopt upstream `build_with_blocking_pool` + `resolve_update_trigger`; keep `thanh` branding and worker-count error text
+  - `dispatch/session/fork.rs`: keep `conversation_entry` stamping; drop reintroduced `apply_credit_balance` / `credit_balance` (no consumer billing surface)
+  - `dispatch/tests/task_result.rs`: keep new `ResetSessionTitle*` tests; drop `CheckSubscription` / `pending_gate_verification` billing tests
+  - `slash/commands/mod.rs`: keep bare `/usage` tests (no `ManageBilling` / `billing_surface_visible`)
+  - `shell/agent/app.rs`: keep `thanh login` / `thanh agent stdio` copy + orphaned-upload cleanup comment
+  - `shell/config/mod.rs`: take upstream ZDR video-tools doc wording; keep `~/.thanh/managed_config.toml`
+  - `update/auto_update.rs`: adopt channel-aware `reinstall_hint(installer, channel)` API + Rosetta / install-phase helpers; keep `weseegod/thanh` feed, `thanh` binary name, and fork release-page manual install hint (channel arg accepted, ignored)
+- Fork markers: 113/113 preserved (content identical; line numbers shifted by upstream insertions/reorderings)
+- `cargo check -p xai-grok-shell -p xai-grok-pager -p xai-grok-sampling-types -p xai-grok-update -p xai-grok-pager-bin` passed
+- Full `./build.sh` not run yet (waive or run before release)
+- Delivered via **direct merge** into local `main` (not pushed; push + release when requested)
+- Fork had 32 commits ahead of upstream at merge time; version crates remain `1.0.1` pending post-sync bump
