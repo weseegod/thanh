@@ -317,3 +317,18 @@ Sync #5 (merge `de01de1`, direct local merge into `main`):
 - Full `./build.sh` not run yet (waive or run before release)
 - Delivered via **direct merge** into local `main` (not pushed; push + release when requested)
 - Fork had 32 commits ahead of upstream at merge time; version crates remain `1.0.1` pending post-sync bump
+
+Sync #6 (merge `a45c679`, direct local merge into `main`):
+- 4 upstream commits (`e5fd481`..`5163763`, "Synced from monorepo"); 763 files, ~172k insertions, ~121k deletions (mostly test-file splits)
+- **34 conflicts**, resolved by combining:
+  - New `xai-grok-home` crate is now the home-dir source of truth; fork default remains `~/.thanh` (not `~/.grok`); `paths.rs` re-exports it and keeps `bin/thanh`
+  - `pager-bin` / `cli.rs` / `version`: adopt upstream `full_version()` / `set_full_version`; keep `thanh` branding and `CLI_BINARY_NAME`
+  - Docs (`05-configuration`, `10-hooks`, `13-memory`, `17-sessions`): take upstream wording (`GROK_CONFIG` overlay, memory flag removal, worktree gc safety); re-apply `thanh` / `~/.thanh`
+  - Billing files (`dispatch/billing.rs` + tests) kept **deleted**; usage modal keeps BYOK tab (no credit bar / `ManageBilling`)
+  - Several large files adopted upstream `#[path = "..._tests.rs"]` extracts (`app_view`, `auto_update`, `compaction`, `goal_classifier`, `remote/client`, `agent/config`)
+  - BYOK: kept `strip_image_parts_for_text_only` + tests (alongside new upstream `strip_images_by_url`), `input`/`input_modalities` parsing, `stop_child_session_after_cancel`
+- Fork markers: production logic preserved (113 lines pre-merge; tests for `input_modalities` / `ModelByok` moved to `config_tests.rs` with the upstream extract)
+- `cargo check -p xai-grok-shell -p xai-grok-pager -p xai-grok-sampling-types -p xai-grok-update -p xai-grok-pager-bin -p xai-grok-home -p xai-fast-worktree` passed
+- Full `./build.sh` not run yet (waive or run before release)
+- Delivered via **direct merge** into local `main` (not pushed; push + release when requested)
+- Fork had 34 commits ahead of upstream at merge time; version crates followed upstream to `1.0.4` (pending post-sync bump + publish)
