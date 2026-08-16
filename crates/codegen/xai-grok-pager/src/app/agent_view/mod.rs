@@ -546,13 +546,14 @@ pub(super) fn app_should_open_link_on_click_with(
     }
     !link.looks_like_bare_url_text()
 }
-/// Whether double/triple-click performs terminal-like word/line text selection
-/// (and copy) instead of toggling a fold.
+/// Whether double/triple-click performs terminal-like word/paragraph text
+/// selection (and copy) instead of toggling a fold.
 ///
 /// Unified into the `keep_text_selection` setting (the `word_select` mode):
 /// reads the live appearance cache, so a Settings-panel change applies without
 /// a restart and can never drift from the highlight-persistence behavior. The
-/// default (`flash`) is fold-toggle, preserving backwards compatibility.
+/// compile-time default (`flash`) keeps double-click as a fold-toggle;
+/// `word_select` is a staged rollout via a remote flag.
 pub(super) fn is_text_selection_on_double_click() -> bool {
     crate::appearance::cache::load_keep_text_selection().selects_word()
 }
@@ -566,6 +567,10 @@ pub(crate) struct PendingTurnEnd {
     pub stop_reason: Option<String>,
     /// `agentResult` detail from the broadcast (error text, when present).
     pub agent_result: Option<String>,
+    /// `_meta.cancellationCategory` from the broadcast (`"HookDenied"` picks
+    /// the "blocked by a hook" marker over "cancelled by user"). `None` on
+    /// older shells or plain user cancels.
+    pub cancellation_category: Option<String>,
     /// `_meta.cancelTrigger` from the broadcast (`"send_now"` marks a
     /// cancel-and-send whose "Turn cancelled" marker is suppressed). `None`
     /// on older shells / non-cancel ends.
@@ -610,8 +615,7 @@ pub(crate) struct PendingCancelResend {
     /// Replayed so a resend still arms the shell's task-wake barrier.
     pub trigger: crate::app::actions::CancelTrigger,
 }
-/// Stop/stop_failure hook runs held for the live turn's terminal marker.
-/// See [`AgentView::pending_stop_hooks`].
+/// Turn-end hook runs held for the live turn's marker. See [`AgentView::pending_stop_hooks`].
 #[derive(Debug, Clone, Default)]
 pub(crate) struct PendingStopHooks {
     /// The turn the stash belongs to; a stash that can't be matched to the
@@ -630,6 +634,12 @@ pub(crate) struct PendingForkBanner {
     pub parent_sid: String,
     /// Whether the fork created a new worktree.
     pub worktree: bool,
+}
+/// A finish held until its spawn arrives. Output is stripped at insert.
+#[derive(Debug, Clone)]
+pub(crate) struct DeferredSubagentFinish {
+    pub notification: xai_grok_shell::extensions::notification::SessionNotification,
+    pub inserted_at: std::time::Instant,
 }
 /// In-flight reconnect session reload.
 ///
@@ -653,19 +663,15 @@ pub(crate) struct SessionReload {
     /// Reconnect generation (from `ConnectionStatus::Connected`) this reload
     /// was opened for; finalization is rejected for any other generation.
     generation: u64,
-    /// Pre-outage transcript.
-    scrollback: ScrollbackState,
-    /// Pre-outage streaming tracker (paired with `scrollback`).
-    tracker: crate::acp::tracker::AcpUpdateTracker,
-    /// Pre-outage todo list (replayed Plan updates overwrite the live pane).
-    todo: TodoPane,
-    workflow_blocks: std::collections::HashMap<String, crate::scrollback::entry::EntryId>,
-    workflow_runs: Vec<crate::views::workflows::WorkflowRunSnapshot>,
-    workflow_run_revisions: std::collections::HashMap<String, u64>,
-    cleared_workflow_runs: std::collections::HashSet<String>,
+    /// Pre-outage transcript, tracker, todo, and workflow state: the same
+    /// [`ReplayRebuiltState`] every replay detaches, stashed for
+    /// restore-on-failure.
+    stash: ReplayRebuiltState,
     /// Reconnect cursor as of window open, restored with the stash so a
     /// later reload doesn't skip events the restored transcript never got.
     last_seen_event_id: Option<String>,
+    /// Parsed counter of [`Self::last_seen_event_id`] (same restore rationale).
+    last_seen_event_seq: Option<u64>,
     /// Live dedup highwaters (ACP + xAI) as of window open (same restore
     /// rationale).
     last_applied_event_seq: Option<u64>,
@@ -676,6 +682,22 @@ pub(crate) struct SessionReload {
     /// Whether a Plan update applied during this window: the cursor-merge
     /// outcome then keeps the staging todo list (newer) instead of the stash.
     saw_todo_update: bool,
+    /// Expiry notices staged by replayed tombstones during this window. The keep-stash finalize
+    /// drops staged copies of a line only up to the count the stash already shows (two tasks can
+    /// share identical notice text).
+    replayed_expiry_notices: Vec<crate::scrollback::entry::EntryId>,
+}
+/// The `AgentView` state a session replay rebuilds from disk, detached by
+/// [`AgentView::take_replay_rebuilt_state`] (see its doc for the contract).
+pub(crate) struct ReplayRebuiltState {
+    pub(crate) scrollback: ScrollbackState,
+    pub(crate) tracker: crate::acp::tracker::AcpUpdateTracker,
+    pub(crate) todo: TodoPane,
+    pub(crate) workflow_blocks:
+        std::collections::HashMap<String, crate::scrollback::entry::EntryId>,
+    pub(crate) workflow_runs: Vec<crate::views::workflows::WorkflowRunSnapshot>,
+    pub(crate) workflow_run_revisions: std::collections::HashMap<String, u64>,
+    pub(crate) cleared_workflow_runs: std::collections::HashSet<String>,
 }
 /// Lifecycle of the inline plugin CTA. `Hidden`/`Matched` cover the idle and
 /// prompt-matched states; `Installing`/`Installed`/`Error` cover an in-TUI
@@ -829,15 +851,28 @@ pub struct AgentView {
     /// chunks look stale (silent live-text loss).
     pub last_applied_event_seq: Option<u64>,
     /// xAI-stream sibling of [`Self::last_applied_event_seq`] (see there for
-    /// why the highwaters are split). Same drop rule, replay-exempt.
+    /// why the highwaters are split). Same drop rule, replay-exempt. Durable
+    /// subagent lifecycle events bypass that drop check but still lift this
+    /// highwater via `max` so later ordinary updates on the cursor tail stay
+    /// deduped.
     pub last_applied_xai_event_seq: Option<u64>,
     /// Raw `eventId` of the most recent update APPLIED to this root session —
     /// replay or live, on both the ACP and xAI paths; dropped updates (dedup,
     /// promptId gate, unexpected replay) don't move it. Sent as `_meta.cursor`
     /// on a reconnect `session/load` so the agent replays only the post-cursor
     /// tail. Why the full string: see
-    /// [`crate::acp::meta::NotificationMeta::event_id`].
+    /// [`crate::acp::meta::NotificationMeta::event_id`]. Forward-only: a later
+    /// applied lower-ID lifecycle update must not regress this cursor. All
+    /// writers go through [`Self::advance_last_seen_event_id`].
     pub last_seen_event_id: Option<String>,
+    /// Parsed counter for [`Self::last_seen_event_id`], kept in lockstep by
+    /// [`Self::advance_last_seen_event_id`] so forward-only compares do not
+    /// re-parse the id string at every writer.
+    pub last_seen_event_seq: Option<u64>,
+    /// Terminal lifecycle updates that arrived before their spawn. Bounded,
+    /// output-stripped, and cleared on session rebind; the spawn path drains
+    /// an entry before a later reconnect cursor can strand the finish.
+    pub(crate) deferred_subagent_finishes: HashMap<String, DeferredSubagentFinish>,
     /// Open reconnect reload window, if any. See [`SessionReload`].
     pub(crate) session_reload: Option<SessionReload>,
     /// Unexpected-replay drops since the last reload window opened. Gates the
@@ -941,10 +976,8 @@ pub struct AgentView {
     pub cleared_workflow_runs: std::collections::HashSet<String>,
     pub show_workflows: bool,
     pub workflows_view: crate::views::workflows::WorkflowsViewState,
-    /// Live `stop`/`stop_failure` hook runs held for the turn's terminal
-    /// marker (driver order: the hooks arrive before the `PromptResponse`
-    /// that pushes it). Consumed or flushed by `push_turn_terminal_marker`;
-    /// dropped on every replay-window entry.
+    /// Turn-end hook runs waiting for the turn's marker, which they race. Consumed or flushed
+    /// by `push_turn_terminal_marker`; dropped on every replay-window entry.
     pub(crate) pending_stop_hooks: Option<PendingStopHooks>,
     /// Goal id of the most recently cleared goal, captured from the dropped
     /// state (the `cleared` event itself carries an empty id). Drops a late
@@ -1116,7 +1149,6 @@ pub struct AgentView {
     pub last_context_click_at: Option<Instant>,
     /// Whether the mouse is hovering over the prompt widget.
     pub hovered_prompt: bool,
-    pub hit_badge: HitArea,
     pub hit_context: HitArea,
     pub hit_credits: HitArea,
     pub hit_todo_close: HitArea,
@@ -1130,7 +1162,6 @@ pub struct AgentView {
     #[allow(dead_code)]
     pub(crate) last_bg_click: Option<Instant>,
     pub hit_queue_close: HitArea,
-    pub hit_queue_badge: HitArea,
     pub hit_plan_button: HitArea,
     pub hit_plan_approval_status: HitArea,
     pub hit_follow_indicator: HitArea,
@@ -1194,6 +1225,12 @@ pub struct AgentView {
     /// Protocol-prepared image bytes keyed by file path. Used for dimension
     /// decoding and iTerm2 re-sends. Kitty transmits once and re-places.
     pub(crate) inline_media_cache: std::collections::HashMap<std::path::PathBuf, Vec<u8>>,
+    /// Paths that failed to decode/extract, keyed by the file stamp at
+    /// failure: skips per-frame decode/ffmpeg retries while the file is
+    /// unchanged, and self-heals when it changes (e.g. caught mid-write).
+    /// Cleared with the byte cache on eviction.
+    pub(crate) inline_media_load_failed:
+        std::collections::HashMap<std::path::PathBuf, media::MediaFileStamp>,
     /// Kitty GPU image IDs per media path. Each path gets a unique ID (2+)
     /// so switching between images is a cheap re-place (~80 bytes) instead
     /// of a full re-transmit. ID 1 is reserved for modal overlays.
@@ -1374,6 +1411,10 @@ pub struct AgentView {
     /// per-request — stashing happens on the `empty -> non-empty` transition
     /// and restoring on the `non-empty -> empty` transition.
     pub permission_stashed_prompt: Option<StashedPrompt>,
+    /// `exit_plan_mode` deferred freeform prefill because permission owned the
+    /// keyboard. Cleared when `restore_permission_stashes` applies it (or plan
+    /// review ends). Must not run on unrelated restore calls (e.g. YOLO).
+    pub plan_freeform_prefill_deferred: bool,
     /// Scrollback focus stolen for a permission prompt; restored when the queue empties.
     pub permission_stashed_pane: Option<AgentPane>,
     /// Free-form "Always allow" pattern editor buffer for the front request.
@@ -2218,6 +2259,7 @@ pub(crate) mod test_fixtures {
             active_idx: 0,
             bash_highlights: None,
             bash_selection_count: 0,
+            bash_deny_selection_count: 0,
             bash_command_raw: None,
             mcp_scope: None,
             title: String::new(),
@@ -2392,7 +2434,7 @@ pub(crate) mod test_fixtures {
         assert!(
             matches!(
                 activity,
-                Some(TurnActivity::Waiting(WaitingReason::Subagent))
+                Some(TurnActivity::Waiting(WaitingReason::Subagent { .. }))
             ),
             "expected Subagent wait, got {activity:?}"
         );
@@ -2439,7 +2481,7 @@ pub(crate) mod test_fixtures {
             prompt: None,
             child_cwd: None,
             worktree_path: None,
-            child_updates_replayed: false,
+            transcript: Default::default(),
         }
     }
     /// Count of "Worked for X" (`TurnCompleted`) marker blocks in the

@@ -6,6 +6,7 @@
 //! panel stays on screen until the user presses Esc, at which point
 //! the content is persisted to scrollback as a collapsed `BtwBlock`.
 
+use crate::render::SafeBuf;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
@@ -123,8 +124,9 @@ impl BtwOverlayState {
                     block_line_idx: idx,
                     screen_y: 0,
                     screen_x: 0,
-                    selectable_cols: 0..text.width() as u16,
+                    selectable_cols: 0..crate::scrollback::types::str_display_cells(&text) as u16,
                     text,
+                    painted_region: None,
                     joiner_to_previous,
                 });
             }
@@ -221,6 +223,8 @@ pub fn render_btw_panel(
     link_overlay: Option<&mut LinkOverlay>,
     // Generated-media paths for resolving relative file-path link targets.
     media_paths: &[std::path::PathBuf],
+    // Session cwd for resolving relative markdown link targets to on-disk files.
+    cwd: Option<&std::path::Path>,
 ) {
     if area.width < 12 || area.height < 3 {
         return;
@@ -393,7 +397,10 @@ pub fn render_btw_panel(
             let visible_count = end.saturating_sub(content_skip);
             for (row, idx) in (content_skip..end).enumerate() {
                 let bl = &block_output.lines[idx];
-                buf.set_line(
+                // Content paints bidi-aware (when rtl_bidi is on) so the shared
+                // selection machinery, which maps visual columns, agrees with
+                // the drawn cells — matching scrollback/list content.
+                buf.set_line_safe_bidi(
                     content_x,
                     body_y + row as u16,
                     &bl.content,
@@ -407,8 +414,9 @@ pub fn render_btw_panel(
                     block_line_idx: idx,
                     screen_y: body_y + row as u16,
                     screen_x: content_x,
-                    selectable_cols: 0..text.width() as u16,
+                    selectable_cols: 0..crate::scrollback::types::str_display_cells(&text) as u16,
                     text,
+                    painted_region: None,
                     joiner_to_previous,
                 });
             }
@@ -448,6 +456,7 @@ pub fn render_btw_panel(
                         content_x,
                         /* content_line_offset */ 0,
                         media_paths,
+                        cwd,
                         overlay,
                     );
                 });
@@ -496,7 +505,18 @@ mod tests {
         let area = Rect::new(0, 0, width, height);
         let mut buf = Buffer::empty(area);
         let mut model = ResolvedSelectionModel::default();
-        render_btw_panel(&mut buf, state, area, 0, false, None, &mut model, None, &[]);
+        render_btw_panel(
+            &mut buf,
+            state,
+            area,
+            0,
+            false,
+            None,
+            &mut model,
+            None,
+            &[],
+            None,
+        );
         model
     }
 
@@ -505,7 +525,18 @@ mod tests {
         let area = Rect::new(0, 0, width, height);
         let mut buf = Buffer::empty(area);
         let mut model = ResolvedSelectionModel::default();
-        render_btw_panel(&mut buf, state, area, 0, false, None, &mut model, None, &[]);
+        render_btw_panel(
+            &mut buf,
+            state,
+            area,
+            0,
+            false,
+            None,
+            &mut model,
+            None,
+            &[],
+            None,
+        );
         buf
     }
 
@@ -535,6 +566,7 @@ mod tests {
             &mut model,
             Some(&mut links),
             &[],
+            None,
         );
         (model, links)
     }
@@ -1010,6 +1042,7 @@ mod tests {
             &mut model,
             None,
             &[],
+            None,
         );
         let rect = hit
             .rect

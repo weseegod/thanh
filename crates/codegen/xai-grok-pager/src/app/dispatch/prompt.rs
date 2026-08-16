@@ -25,6 +25,9 @@ use crate::slash::command::DoctorRequest;
 use agent_client_protocol as acp;
 use xai_grok_telemetry::session_ctx::log_event;
 
+/// Shared by every submit guard that refuses while the session reconnects.
+pub(super) const RECONNECTING_NOTICE: &str = "Reconnecting, please wait...";
+
 /// Chat kind for the next create: CLI `--chat` (`app.chat_mode`) or one-shot
 /// `/chat` (`deferred_startup.pending_chat`, consumed here).
 pub(super) fn consume_chat_kind(app: &mut AppView) -> bool {
@@ -451,7 +454,7 @@ pub(super) fn dispatch_send_prompt_inner(
     };
 
     if app.reconnect_pending {
-        app.show_toast("Reconnecting, please wait...");
+        app.show_toast(RECONNECTING_NOTICE);
         return vec![];
     }
 
@@ -597,6 +600,9 @@ pub(super) fn dispatch_send_prompt_inner(
                     // filtered out of every completion surface, but it stays
                     // resolvable so a fully-typed invocation earns a hint that
                     // names the way out instead of leaking to the model.
+                    // A refusal added here must also extend the pre-check in `EditedCommandGate`
+                    // (`dispatch::queue`): that caller has to know the command will be refused
+                    // before it drops the queued row the text came from.
                     if let Some(refusal) = command
                         .mode_support()
                         .refusal(invocation.token, ctx.screen_mode)
@@ -869,7 +875,10 @@ pub(super) fn dispatch_send_prompt_inner(
                 Some(&sid_str),
                 Some(serde_json::json!({ "kind": "prompt", "len": text.len() })),
             );
-            if queued_while_running && !parked_sendable_wait {
+            if queued_while_running
+                && !parked_sendable_wait
+                && !crate::appearance::cache::load_follow_up_steer()
+            {
                 maybe_show_send_now_tip(app);
             }
             return vec![Effect::SendPrompt {
@@ -941,7 +950,7 @@ pub(super) fn dispatch_send_prompt_inner(
 /// the execute block from the shell IS the visual entry.
 pub(super) fn dispatch_send_bash_command(app: &mut AppView, command: String) -> Vec<Effect> {
     if app.reconnect_pending {
-        app.show_toast("Reconnecting, please wait...");
+        app.show_toast(RECONNECTING_NOTICE);
         return vec![];
     }
 
@@ -1190,7 +1199,7 @@ pub(super) fn handle_prompt_response(
         let wire_cancel_trigger = result.as_ref().ok().and_then(|pr| {
             pr.meta
                 .as_ref()?
-                .get("cancelTrigger")?
+                .get(crate::app::turn_completion::CANCEL_TRIGGER_KEY)?
                 .as_str()
                 .map(str::to_string)
         });
@@ -1199,6 +1208,15 @@ pub(super) fn handle_prompt_response(
                 Some(trigger) => trigger == "send_now",
                 None => expected_send_now.is_some(),
             };
+        // A hook-denied end rides the cancelled stop reason but is a policy
+        // block, not a user cancel — `cancelled_turn_event` picks the marker.
+        let wire_cancellation_category = result.as_ref().ok().and_then(|pr| {
+            pr.meta
+                .as_ref()?
+                .get(crate::app::turn_completion::CANCELLATION_CATEGORY_KEY)?
+                .as_str()
+                .map(str::to_string)
+        });
         let rate_limited = agent.session.rate_limited;
         let model_incompatible = agent.session.model_incompatible;
         // Context overflow: the RetryState handler already pushed the actionable
@@ -1298,9 +1316,10 @@ pub(super) fn handle_prompt_response(
             // Send-now cancel: no marker (the new prompt is the next turn); the
             // `None` still flushes any held stop hooks standalone.
             (Ok(_), true) if send_now_cancel => None,
-            (Ok(_), true) => Some(SessionEvent::TurnCancelled {
-                elapsed: elapsed.unwrap_or_default(),
-            }),
+            (Ok(_), true) => Some(crate::app::turn_completion::cancelled_turn_event(
+                wire_cancellation_category.as_deref(),
+                elapsed.unwrap_or_default(),
+            )),
             (Ok(_), false) if agent.bash_turn => None,
             (Ok(_), false) => Some(SessionEvent::TurnCompleted {
                 // Legacy copy on purpose: unknown elapsed keeps the "in 0.0s"

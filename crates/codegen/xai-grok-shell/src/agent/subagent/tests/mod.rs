@@ -1,9 +1,9 @@
 #![cfg_attr(rustfmt, rustfmt::skip)]
 use super::*;
-use super::handle_request::{
-    canonical_total_tokens, record_subagent_usage, stop_child_session_after_cancel,
-    usage_is_incomplete,
+use super::attempt_runner::{
+    canonical_total_tokens, record_subagent_usage, usage_is_incomplete,
 };
+use super::handle_request::stop_child_session_after_cancel;
 use crate::test_support::lsp_runtime::{
     DummyLspDispatch, ctx_with_toggle, test_gateway_with_receiver,
 };
@@ -1848,6 +1848,7 @@ fn test_model_entry(model_id: &str) -> crate::agent::config::ModelEntry {
         info: crate::agent::config::ModelInfo {
             user_selectable: true,
             id: None,
+            model_family: None,
             model: model_id.to_string(),
             base_url: String::new(),
             name: None,

@@ -363,7 +363,7 @@ impl SessionFlags {
     /// `askUserQuestion: false` into the meta, even when paired with
     /// `GROK_AGENT` — the env var chooses the *agent*, but the tool-strip is
     /// independent. Chat mode additionally stamps `x.ai/session.kind`.
-    pub(super) fn to_meta(&self) -> Option<acp::Meta> {
+    pub(crate) fn to_meta(&self) -> Option<acp::Meta> {
         let mut meta = serde_json::Map::new();
         if self.chat_mode {
             if self.plan_mode || self.agent_override.is_some()
@@ -840,6 +840,11 @@ pub(super) fn parse_session_picker_entries(
                 .or_else(|| v.get("last_turn_summary"))
                 .and_then(|s| s.as_str())
                 .map(String::from);
+            let last_recap = v
+                .get("lastRecap")
+                .or_else(|| v.get("last_recap"))
+                .and_then(|s| s.as_str())
+                .map(String::from);
             let repo_name = crate::views::session_picker::repo_name_from_cwd(&cwd_str);
             Some(SessionPickerEntry {
                 id,
@@ -856,6 +861,7 @@ pub(super) fn parse_session_picker_entries(
                 repo_name,
                 worktree_label,
                 last_turn_summary,
+                last_recap,
                 card_detail: None,
             })
         })
@@ -1020,6 +1026,14 @@ pub(crate) async fn persist_setting(
                 return Err(kind_mismatch("combine_queued_prompts", "Bool", &value));
             };
             xai_grok_shell::util::config::set_combine_queued_prompts(b)
+                .await
+                .map_err(|e| e.to_string())
+        }
+        "follow_up_behavior" => {
+            let SettingValue::Enum(s) = value else {
+                return Err(kind_mismatch("follow_up_behavior", "Enum", &value));
+            };
+            xai_grok_shell::util::config::set_follow_up_behavior(s.to_string())
                 .await
                 .map_err(|e| e.to_string())
         }
@@ -1542,7 +1556,7 @@ pub(super) fn unregister_active_session_best_effort_in(
     root: &Path,
     session_id: &acp::SessionId,
 ) {
-    match xai_grok_shell::active_sessions::try_unregister_in(root, session_id) {
+    match xai_grok_active_sessions::try_unregister_in(root, session_id) {
         Ok(true) => {}
         Ok(false) => {
             tracing::debug!(

@@ -103,8 +103,19 @@ impl AgentView {
         } else {
             return;
         }
+        if self.active_subagent.as_deref() != Some(child_sid.as_str()) {
+            self.close_subagent_fullscreen();
+        }
         crate::app::subagent::ensure_subagent_child_replayed(self, &child_sid);
         self.active_subagent = Some(child_sid);
+    }
+    /// Close the fullscreen subagent takeover (if any), evicting the closed
+    /// child when finished (see [`crate::app::subagent::evict_finished_child_view`]
+    /// for rationale and guards). All close sites route through here.
+    pub(crate) fn close_subagent_fullscreen(&mut self) {
+        if let Some(child_sid) = self.active_subagent.take() {
+            crate::app::subagent::evict_finished_child_view(self, &child_sid);
+        }
     }
     /// Shortcut hints for the plan-approval prompt/comment focus states.
     ///
@@ -1026,6 +1037,12 @@ impl AgentView {
                     .is_some_and(|pav| pav.focus == PlanApprovalFocus::Commenting)
             {
                 Some("Type your comment...")
+            } else if self
+                .plan_approval_view
+                .as_ref()
+                .is_some_and(|pav| pav.focus == PlanApprovalFocus::Prompt)
+            {
+                Some("Type revision notes...")
             } else {
                 None
             },
@@ -1551,44 +1568,12 @@ impl AgentView {
         ) {
             status.push("context", ctx_line);
         }
-        let running = self.session.current_prompt_id.as_deref();
-        let queue_len = self.session.queue_len()
-            + self
-                .shared_queue
-                .iter()
-                .filter(|e| Some(e.id.as_str()) != running)
-                .count();
-        if queue_len > 0 {
-            use ratatui::style::Modifier;
-            let mut queue_style = ratatui::style::Style::default()
-                .fg(theme.accent_user)
-                .bg(theme.bg_base);
-            if self.hit_queue_badge.hovered {
-                queue_style = queue_style.add_modifier(Modifier::BOLD);
-            }
-            status.push(
-                "queue",
-                Line::from(Span::styled(format!("+{queue_len}"), queue_style)),
-            );
-        }
-        let counts = self.todo.counts();
-        if let Some(badge_spans) = agent::render_todo_badge_spans(
-            &counts,
-            self.hit_badge.hovered,
-            self.todo.badge_flash_active(),
-            appearance.todo.badge_format,
-            &theme,
-        ) {
-            status.push("badge", Line::from(badge_spans));
-        }
         let areas = status.render(buf, layout.status_bar);
         self.hit_bg_status.rect = areas.get("bg_tasks").copied();
         self.hit_goal_status.rect = areas.get("goal").copied();
         self.hit_context.rect = areas.get("context").copied();
         self.hit_credits.rect = areas.get("credits").copied();
         self.hit_plan_button.rect = areas.get("plan").copied();
-        self.hit_queue_badge.rect = areas.get("queue").copied();
-        self.hit_badge.rect = areas.get("badge").copied();
         let home = std::env::var("HOME").ok();
         let display = self.session.cwd.display().to_string();
         let short = match &home {
@@ -2123,6 +2108,7 @@ impl AgentView {
                 &mut self.last_btw_selection_model,
                 Some(&mut btw_links),
                 &self.media_link_paths,
+                self.scrollback.cwd(),
             );
             self.last_btw_area = layout.btw;
             if !btw_links.is_empty() {
@@ -2167,7 +2153,10 @@ impl AgentView {
             };
             let tick = self.scrollback.animation_tick();
             let activity = self.resolve_turn_activity();
-            if activity != self.last_activity {
+            if crate::acp::tracker::is_phase_transition(
+                self.last_activity.as_ref(),
+                activity.as_ref(),
+            ) {
                 if let Some(prev) = &self.last_activity {
                     let phase_ms = self
                         .activity_started_at
@@ -2187,6 +2176,8 @@ impl AgentView {
                     );
                 }
                 self.activity_started_at = Some(Instant::now());
+            }
+            if activity != self.last_activity {
                 self.last_activity = activity.clone();
             }
             self.hit_plan_approval_status.clear();
@@ -4545,6 +4536,7 @@ mod selection_state_tests {
             screen_x: 0,
             selectable_cols: 0..3,
             text: "foo".to_string(),
+            painted_region: None,
             joiner_to_previous: None,
         };
         let mut boundaries = ResolvedSelectionBoundaries::default();

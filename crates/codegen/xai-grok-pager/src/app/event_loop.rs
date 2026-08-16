@@ -30,7 +30,7 @@ use super::session_load_barrier::{
 use super::{PagerArgs, PagerTerminal, acp_handler, dispatch, effects};
 
 #[derive(Clone, Debug, PartialEq)]
-pub(super) struct TimedInputEvent {
+pub(crate) struct TimedInputEvent {
     pub(super) event: Event,
     pub(super) arrived_at: std::time::Instant,
 }
@@ -42,6 +42,116 @@ impl TimedInputEvent {
             arrived_at: std::time::Instant::now(),
         }
     }
+}
+
+/// Whether an event carries genuine text-typing intent that belongs in the
+/// composer, as opposed to terminal noise (mouse/focus/resize reports,
+/// cursor/device-attribute replies) or control keys.
+///
+/// Text is defined by the live composer's
+/// [`is_text_input_key`](crate::input::key::is_text_input_key) — plain and
+/// Shifted characters plus Windows AltGr (Ctrl+Alt) chords — plus Backspace and
+/// bracketed Paste; Enter, arrows, Esc, function keys, and true chording
+/// modifiers are dropped. Reusing that predicate keeps startup type-ahead
+/// consistent with what the composer accepts once the reader thread is live.
+/// Terminal query replies (DA2/OSC) that leak as raw key events decode as an Esc
+/// followed by printable bytes; the Esc is non-text and [`filter_startup_typeahead`]
+/// truncates the batch at the first Esc key, so such residue is unlikely to
+/// reach the input field.
+fn is_typeahead_event(event: &Event) -> bool {
+    match event {
+        // Repeat is kept alongside Press so a held key typed during startup is
+        // not silently dropped; Release events carry no text.
+        Event::Key(key) if matches!(key.kind, KeyEventKind::Press | KeyEventKind::Repeat) => {
+            crate::input::key::is_text_input_key(key) || key.code == KeyCode::Backspace
+        }
+        Event::Paste(_) => true,
+        _ => false,
+    }
+}
+
+/// Apply the type-ahead policy to one ordered drain batch: keep only genuine
+/// typing (see [`is_typeahead_event`]), truncating at the first Esc key. A
+/// terminal query reply (DA2/OSC) leaks as an Esc followed by printable bytes,
+/// and after `EnableMouseCapture`/`EnableFocusChange` it is often prefixed by
+/// mouse/focus reports in the same drain, so the Esc is not necessarily first.
+/// Dropping everything from the Esc onward discards that printable tail (which
+/// the per-event filter would otherwise keep as ghost text) while preserving
+/// genuine typing that arrived before it; the leading reports are dropped by the
+/// per-event filter regardless. Pure, so ordering and filtering are unit-testable
+/// without touching the tty.
+fn filter_startup_typeahead(batch: Vec<TimedInputEvent>) -> Vec<TimedInputEvent> {
+    let cutoff = batch
+        .iter()
+        .position(|e| matches!(&e.event, Event::Key(key) if key.code == KeyCode::Esc))
+        .unwrap_or(batch.len());
+    batch
+        .into_iter()
+        .take(cutoff)
+        .filter(|e| is_typeahead_event(&e.event))
+        .collect()
+}
+
+/// Poll-drain the terminal input queue, returning the events `keep` selects and
+/// discarding the rest. `poll_timeout` bounds each individual `poll` (not the
+/// total time spent draining). One shared loop for both disposal rules: startup
+/// type-ahead capture keeps typing (see [`capture_startup_typeahead`]); the
+/// teardown/handoff drains keep nothing.
+pub(super) fn drain_pending_events(
+    poll_timeout: Duration,
+    keep: impl Fn(&Event) -> bool,
+) -> Vec<TimedInputEvent> {
+    let mut kept = Vec::new();
+    while crossterm::event::poll(poll_timeout).unwrap_or(false) {
+        match crossterm::event::read() {
+            Ok(event) if keep(&event) => kept.push(TimedInputEvent::now(event)),
+            Ok(_) => {}
+            Err(_) => break,
+        }
+    }
+    kept
+}
+
+/// Capture keyboard type-ahead pending in the terminal input queue.
+///
+/// Contract: keeps genuine typing (printable keys, Backspace, Paste) and drops
+/// terminal noise (mouse/focus/resize reports, query replies, control keys); a
+/// batch that begins with an Esc is dropped whole. [`run`] replays the captured
+/// events into the composer when it is already the active consumer at launch
+/// (authed + trusted), so a prompt typed while the app was still loading is not
+/// lost; if a login/trust/paywall screen is still up it drops them rather than
+/// let that screen swallow (or be answered by) the keys.
+pub(super) fn capture_startup_typeahead(poll_timeout: Duration) -> Vec<TimedInputEvent> {
+    let captured = filter_startup_typeahead(drain_pending_events(poll_timeout, |_| true));
+    if !captured.is_empty() {
+        crate::unified_log::debug(
+            "startup type-ahead captured",
+            None,
+            Some(serde_json::json!({ "count": captured.len() })),
+        );
+    }
+    captured
+}
+
+/// Replay captured startup type-ahead into the input channel, in order, before
+/// the reader thread starts, so it lands in the composer ahead of live
+/// keystrokes; drains `pending` and logs the count (no contents).
+fn replay_startup_typeahead(
+    input_tx: &tokio::sync::mpsc::UnboundedSender<TimedInputEvent>,
+    pending: &mut Vec<TimedInputEvent>,
+) {
+    if pending.is_empty() {
+        return;
+    }
+    let count = pending.len();
+    for event in pending.drain(..) {
+        let _ = input_tx.send(event);
+    }
+    crate::unified_log::debug(
+        "startup type-ahead replayed",
+        None,
+        Some(serde_json::json!({ "count": count })),
+    );
 }
 
 /// Values resolved before `init_terminal` and consumed by the event loop.
@@ -58,6 +168,11 @@ pub(crate) struct TerminalState {
     /// Do NOT re-resolve via `theme::cache::resolve_initial_theme()` here:
     /// its OSC 11 fallback reads stdin and competes with the input reader.
     pub initial_theme: ThemeKind,
+    /// Type-ahead captured by `init_terminal` AFTER raw mode was enabled (the
+    /// one field here computed post-takeover). Replayed into the composer by
+    /// [`run`] when it is the active consumer at launch, else dropped; see
+    /// [`capture_startup_typeahead`].
+    pub startup_typeahead: Vec<TimedInputEvent>,
 }
 
 /// Result of the event loop run.
@@ -224,6 +339,29 @@ fn seed_trust_state(
         TrustOutcome::Prompt => TrustState::Pending { workspace: key },
         TrustOutcome::Trusted | TrustOutcome::Untrusted => TrustState::Done,
     };
+}
+
+/// Must run before the first render, or the startup-intent block opens a session behind the gate
+/// and the first frame shows the normal welcome.
+pub(crate) fn seed_consent_state_from_gate(
+    app: &mut AppView,
+    gate: Option<&xai_grok_shell::util::config::ConsentGate>,
+) {
+    use crate::app::consent::{ConsentInputs, consent_verdict};
+    let stored = xai_grok_shell::config::load_from_disk()
+        .ok()
+        .map(|root| xai_grok_shell::util::config::load_config_from_toml(&root).consent)
+        .unwrap_or_default();
+    app.consent_state = consent_verdict(&ConsentInputs {
+        gate,
+        answered_this_run: app
+            .consent_answered
+            .as_ref()
+            .map(|(id, version)| (id.as_str(), *version)),
+        answers: &stored.answers,
+        account: app.account_email.as_deref(),
+        minimal: app.screen_mode.is_minimal(),
+    });
 }
 
 /// Pause terminal input and wait up to `timeout` for the reader to acknowledge.
@@ -738,7 +876,7 @@ pub(crate) async fn run(
     args: &PagerArgs,
     session_cwd: Option<std::path::PathBuf>,
     remote_settings: Option<xai_grok_shell::util::config::RemoteSettings>,
-    term_state: TerminalState,
+    mut term_state: TerminalState,
     materialized: crate::app::session_startup::MaterializedStartup,
     bg_update_rx: Option<
         tokio::sync::oneshot::Receiver<Option<xai_grok_update::auto_update::UpdateAvailable>>,
@@ -1084,12 +1222,11 @@ pub(crate) async fn run(
         effective_config.as_ref().ok_or(()),
         remote_settings.as_ref(),
     );
-    app.foreign_session_compat =
-        xai_grok_workspace::foreign_sessions::EnabledForeignSessionSources {
-            claude: compat.claude.sessions,
-            codex: compat.codex.sessions,
-            cursor: compat.cursor.sessions,
-        };
+    app.foreign_session_compat = xai_grok_foreign_sessions::EnabledForeignSessionSources {
+        claude: compat.claude.sessions,
+        codex: compat.codex.sessions,
+        cursor: compat.cursor.sessions,
+    };
 
     // Load notification config from [ui.notifications] in config.toml.
     if let Some(ref raw) = effective_config {
@@ -1429,6 +1566,14 @@ pub(crate) async fn run(
     app.ask_user_question_timeout_enabled = config_session_bools.ask_user_question_timeout_enabled;
     // Prime thread-local caches so first render doesn't hit disk.
     crate::appearance::cache::prime(&app.current_ui);
+    // Apply the remote soft default for text selection (flash | hold | word_select) when the
+    // user has set none locally; an explicit local `keep_text_selection` always wins.
+    crate::appearance::cache::apply_remote_keep_text_selection_default(
+        remote_settings
+            .as_ref()
+            .and_then(|s| s.keep_text_selection_default.as_deref()),
+        &app.current_ui,
+    );
     // Re-derive the render-value compact flag from the hydrated `current_ui`:
     // the seed above used the pre-hydration disk read, which layered/remote
     // config can contradict — the canonical single-writer corrects it (and
@@ -1456,6 +1601,48 @@ pub(crate) async fn run(
     // to re-poll (every ~20s via recap_poll). The always-on tracing_rx tick
     // used to mask this by re-polling ~30Hz; this removes that dependency.
     let (input_tx, mut input_rx) = tokio::sync::mpsc::unbounded_channel::<TimedInputEvent>();
+    // Folder-trust verdict, seeded BEFORE the first render, before any session
+    // is created (no repo-local MCP/LSP/hooks/plugins have loaded yet), and —
+    // for the type-ahead gate just below — before the reader thread starts.
+    // Feature-off (kill-switch / opt-out / local build) resolves `Trusted`, so
+    // this stays `TrustState::Done`.
+    seed_trust_state(&mut app, remote_settings.as_ref());
+    seed_consent_state_from_gate(
+        &mut app,
+        remote_settings
+            .as_ref()
+            .and_then(|s| s.consent_gate.as_ref()),
+    );
+
+    // Type-ahead captured while the app was still loading (see `init_terminal`),
+    // replayed only when the composer is already the active input consumer; a
+    // startup screen still being up means the keys are dropped, not replayed.
+    let mut startup_typeahead = std::mem::take(&mut term_state.startup_typeahead);
+    if app.ready_for_startup_typeahead() {
+        // Composer is already the active input consumer (authed + trusted +
+        // access). Replay ahead of the reader thread so a prompt typed while
+        // loading lands first, in order: "typed-while-loading" before
+        // "typed-during-connect" (kernel-buffered, read once the reader starts).
+        replay_startup_typeahead(&input_tx, &mut startup_typeahead);
+    } else if !startup_typeahead.is_empty() {
+        // A startup screen (login/auth, folder-trust, paywall, ZDR) is still up.
+        // Replaying now would let that screen consume the keys — a prompt
+        // starting with "n" would answer the folder-trust question and quit —
+        // and deferring the replay until the screen resolves cannot restore
+        // order: keystrokes typed right after the answer are already ahead in
+        // the channel. Drop it; better than answering a prompt or scrambling the
+        // composer. The common authed + trusted launch takes the branch above.
+        crate::unified_log::debug(
+            "startup type-ahead dropped (startup screen pending)",
+            None,
+            Some(serde_json::json!({ "count": startup_typeahead.len() })),
+        );
+    }
+    // The reader thread owns the sole strong sender, so when it dies (e.g. a
+    // terminal spewing bytes crossterm cannot parse) or on shutdown (`input_rx`
+    // dropped) the channel closes and `input_rx.recv()` returns `None`, exiting
+    // the loop.
+    let reader_input_tx = input_tx;
     // Set true around tty handoffs (e.g. $EDITOR) so the reader stops touching
     // stdin and the inheriting child process keeps every keystroke. The handoff
     // does not proceed until `reader_parked` acknowledges this pause.
@@ -1477,7 +1664,7 @@ pub(crate) async fn run(
         loop {
             // Shutdown observed within one poll cycle in every state (idle or
             // paused); the send() break below covers close-while-sending.
-            if input_tx.is_closed() {
+            if reader_input_tx.is_closed() {
                 break;
             }
             // While a tty handoff owns stdin, do not read(): the child (e.g. the
@@ -1501,7 +1688,7 @@ pub(crate) async fn run(
                 Ok(ev) => {
                     consecutive_event_errors = 0;
                     let timed = TimedInputEvent::now(ev);
-                    if input_tx.send(timed).is_err() {
+                    if reader_input_tx.send(timed).is_err() {
                         break; // event loop has shut down
                     }
                 }
@@ -1567,11 +1754,8 @@ pub(crate) async fn run(
     const RECAP_POLL_INTERVAL: Duration = Duration::from_secs(20);
     let mut recap_poll_at: Option<Instant> = Some(Instant::now() + RECAP_POLL_INTERVAL);
 
-    // Seed the folder-trust verdict BEFORE the first render and before any
-    // session is created (no repo-local MCP/LSP/hooks/plugins have loaded yet).
-    // Feature-off (kill-switch / opt-out / local build) resolves `Trusted`, so
-    // this stays `TrustState::Done`.
-    seed_trust_state(&mut app, remote_settings.as_ref());
+    // Folder trust is seeded earlier (before the reader thread) so the startup
+    // type-ahead gate can consult it; see `seed_trust_state` above.
 
     let mut presenter = Presenter::new();
     // A timed-out handoff stays queued but cannot synchronously retry until
@@ -3273,29 +3457,22 @@ async fn drain_and_process(
                 had_non_resize_change = true;
             }
             InputOutcome::ActionThenForward(action) => {
-                // Dispatch the action (e.g. create session), then re-process
-                // the same event through the now-active view so the input
-                // (character, paste) lands in the session's prompt.
-                let effs = dispatch::dispatch(action, app);
-                if process_effects(effs, tasks, app, progress_tx) {
-                    return true;
-                }
-                if let InputOutcome::Action(follow_up) = app.handle_input_at_with_paste_provenance(
+                // One combined effect wave so forwarded state (e.g. CycleMode) shapes session/new meta.
+                let effs = dispatch_then_forward(
+                    action,
                     ev,
                     routed.arrived_at,
                     routed.paste_provenance,
-                ) {
-                    let effs = dispatch::dispatch(follow_up, app);
-                    if process_effects(effs, tasks, app, progress_tx) {
-                        return true;
-                    }
+                    app,
+                );
+                if process_effects(effs, tasks, app, progress_tx) {
+                    return true;
                 }
                 needs_draw = true;
                 had_non_resize_change = true;
             }
             InputOutcome::ActionPair(first, second) => {
-                // Dispatch both in order; first must fully resolve
-                // before second (e.g. revert preview then open reset).
+                // Effect barrier: first must fully resolve before second (e.g. revert preview then open reset).
                 let effs = dispatch::dispatch(first, app);
                 if process_effects(effs, tasks, app, progress_tx) {
                     return true;
@@ -3794,6 +3971,12 @@ pub(crate) fn retarget_suppress_code_restore(app: &mut AppView, from: &str, to: 
 }
 
 /// Shared [`SessionFlags`] builder (interactive loop + leader-cluster).
+///
+/// Permission seeds come from the global mirrors (`default_yolo`,
+/// `current_ui.permission_mode`). Pre-session `CycleMode` / `SetPermissionMode`
+/// update those synchronously, and `ActionThenForward` batches mode dispatch
+/// before this runs, so create meta sees the post-mode values without
+/// effect-shape sniffing.
 pub(crate) fn session_flags_for_effects(
     app: &mut AppView,
     #[cfg_attr(not(feature = "local-workspace"), allow(unused_variables))]
@@ -3847,6 +4030,24 @@ pub(crate) fn session_flags_for_effects(
     }
 }
 
+/// Dispatch `action`, re-process `event` through the updated view, return one combined effect list.
+/// Shared by the event-loop `ActionThenForward` arm and tests (batches; no effect barrier between).
+fn dispatch_then_forward(
+    action: Action,
+    event: &Event,
+    arrived_at: std::time::Instant,
+    paste_provenance: PasteProvenance,
+    app: &mut AppView,
+) -> Vec<Effect> {
+    let mut effects = dispatch::dispatch(action, app);
+    if let InputOutcome::Action(follow_up) =
+        app.handle_input_at_with_paste_provenance(event, arrived_at, paste_provenance)
+    {
+        effects.extend(dispatch::dispatch(follow_up, app));
+    }
+    effects
+}
+
 /// Spawn effects into the task set. Returns `true` if the app should quit.
 fn process_effects(
     effs: Vec<super::actions::Effect>,
@@ -3891,6 +4092,135 @@ fn process_effects(
 mod tests {
     use super::*;
     use crossterm::event::{KeyEvent, KeyEventState};
+
+    #[test]
+    fn typeahead_classification_keeps_text_drops_noise_and_control() {
+        use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
+
+        // Printable characters (any Shift-only case) and a repeat carry text.
+        let press = Event::Key(KeyEvent::new(KeyCode::Char('h'), KeyModifiers::NONE));
+        assert!(is_typeahead_event(&press), "a printable keypress is text");
+        let shifted = Event::Key(KeyEvent::new(KeyCode::Char('H'), KeyModifiers::SHIFT));
+        assert!(is_typeahead_event(&shifted), "Shift+char is still text");
+        let repeat = Event::Key(KeyEvent::new_with_kind(
+            KeyCode::Char('h'),
+            KeyModifiers::NONE,
+            KeyEventKind::Repeat,
+        ));
+        assert!(is_typeahead_event(&repeat), "a key repeat is text");
+        let backspace = Event::Key(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE));
+        assert!(is_typeahead_event(&backspace), "Backspace edits the prompt");
+        let paste = Event::Paste("fix the bug".to_string());
+        assert!(is_typeahead_event(&paste), "a paste is text");
+
+        // Control-modified keys, Esc, Enter, arrows and function keys are not
+        // plain text: dropped so terminal-reply residue and accidental submits
+        // never land in the composer.
+        let ctrl_c = Event::Key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL));
+        assert!(!is_typeahead_event(&ctrl_c), "Ctrl+char is not text");
+        let alt_a = Event::Key(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::ALT));
+        assert!(!is_typeahead_event(&alt_a), "Alt+char is not text");
+
+        // Windows AltGr chords report as Ctrl+Alt and ARE text there (matching
+        // the live composer's `is_text_input_key`); elsewhere they are not.
+        let altgr = Event::Key(KeyEvent::new(
+            KeyCode::Char('@'),
+            KeyModifiers::CONTROL | KeyModifiers::ALT,
+        ));
+        assert_eq!(is_typeahead_event(&altgr), cfg!(target_os = "windows"));
+        assert!(!is_typeahead_event(&Event::Key(KeyEvent::new(
+            KeyCode::Esc,
+            KeyModifiers::NONE
+        ))));
+        assert!(!is_typeahead_event(&Event::Key(KeyEvent::new(
+            KeyCode::Enter,
+            KeyModifiers::NONE
+        ))));
+        assert!(!is_typeahead_event(&Event::Key(KeyEvent::new(
+            KeyCode::Up,
+            KeyModifiers::NONE
+        ))));
+
+        // A key release carries no text, and terminal reports are noise.
+        let release = Event::Key(KeyEvent::new_with_kind(
+            KeyCode::Char('h'),
+            KeyModifiers::NONE,
+            KeyEventKind::Release,
+        ));
+        assert!(
+            !is_typeahead_event(&release),
+            "a key release carries no text"
+        );
+        assert!(!is_typeahead_event(&Event::FocusGained));
+        assert!(!is_typeahead_event(&Event::FocusLost));
+        assert!(!is_typeahead_event(&Event::Resize(80, 24)));
+        assert!(!is_typeahead_event(&Event::Mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 1,
+            row: 1,
+            modifiers: KeyModifiers::NONE,
+        })));
+    }
+
+    #[test]
+    fn filter_startup_typeahead_preserves_order_and_truncates_at_escape() {
+        let timed = |code: KeyCode| {
+            TimedInputEvent::now(Event::Key(KeyEvent::new(code, KeyModifiers::NONE)))
+        };
+        let chars = |batch: Vec<TimedInputEvent>| -> Vec<char> {
+            filter_startup_typeahead(batch)
+                .into_iter()
+                .filter_map(|e| match e.event {
+                    Event::Key(k) => match k.code {
+                        KeyCode::Char(c) => Some(c),
+                        _ => None,
+                    },
+                    _ => None,
+                })
+                .collect()
+        };
+
+        // Typing interleaved with noise: keep the text, in order, drop the rest.
+        assert_eq!(
+            chars(vec![
+                TimedInputEvent::now(Event::FocusGained),
+                timed(KeyCode::Char('h')),
+                TimedInputEvent::now(Event::Resize(80, 24)),
+                timed(KeyCode::Char('i')),
+            ]),
+            vec!['h', 'i'],
+            "text kept in original order"
+        );
+
+        // A batch that begins with an Esc key is a terminal query reply
+        // (DA2/OSC leaking as raw bytes): dropped even though its tail decodes
+        // as printable characters.
+        assert!(
+            chars(vec![
+                timed(KeyCode::Esc),
+                timed(KeyCode::Char('[')),
+                timed(KeyCode::Char('>')),
+                timed(KeyCode::Char('c')),
+            ])
+            .is_empty(),
+            "an Esc-led batch is dropped"
+        );
+
+        // The reply can be prefixed by focus/mouse noise so the Esc is not
+        // first: genuine typing before it is kept; the noise and the reply tail
+        // after the Esc are dropped.
+        assert_eq!(
+            chars(vec![
+                TimedInputEvent::now(Event::FocusGained),
+                timed(KeyCode::Char('h')),
+                timed(KeyCode::Esc),
+                timed(KeyCode::Char('[')),
+                timed(KeyCode::Char('c')),
+            ]),
+            vec!['h'],
+            "reply tail after a non-leading Esc is dropped, prior typing kept"
+        );
+    }
 
     #[cfg(feature = "local-workspace")]
     #[test]
@@ -3962,6 +4292,144 @@ mod tests {
         assert!(
             flags.local_workspace.is_none(),
             "conversation load must strip local stamp"
+        );
+    }
+
+    #[tokio::test]
+    async fn pending_create_uses_auto_selected_before_effect_execution() {
+        let mut app = crate::app::app_view::tests::test_app();
+        app.default_yolo = true;
+        app.current_ui.permission_mode = Some("always-approve".into());
+        let (acp_tx, mut acp_rx) = tokio::sync::mpsc::unbounded_channel();
+        app.acp_tx = acp_tx;
+        let create_effects = dispatch::dispatch(Action::NewSession, &mut app);
+        let mode_effects = dispatch::dispatch(
+            Action::SetPermissionMode(crate::app::actions::PermissionModeKind::Auto),
+            &mut app,
+        );
+        assert!(mode_effects.iter().any(|effect| matches!(
+            effect,
+            Effect::PersistPermissionMode {
+                canonical: "auto",
+                session_id: None,
+                ..
+            }
+        )));
+        let (progress_tx, _progress_rx) = tokio::sync::mpsc::unbounded_channel();
+        let mut tasks = JoinSet::new();
+
+        assert!(!process_effects(
+            create_effects,
+            &mut tasks,
+            &mut app,
+            &progress_tx
+        ));
+
+        let request = match acp_rx.recv().await.expect("session/new request") {
+            xai_acp_lib::AcpAgentMessage::NewSession(args) => args.request,
+            other => panic!("expected session/new, got {other:?}"),
+        };
+        let meta = request.meta.expect("permission metadata");
+        assert_eq!(meta.get("yoloMode"), Some(&serde_json::json!(false)));
+        assert_eq!(meta.get("autoMode"), Some(&serde_json::json!(true)));
+        assert_eq!(app.current_ui.permission_mode.as_deref(), Some("auto"));
+        assert!(!app.default_yolo);
+    }
+
+    #[test]
+    fn welcome_shift_tab_applies_mode_before_session_new_is_sent() {
+        for (
+            initial_mode,
+            initial_yolo,
+            expected_mode,
+            expected_yolo,
+            expected_auto,
+            expected_canonical,
+        ) in [
+            ("always-approve", true, "ask", false, false, "ask"),
+            (
+                "auto",
+                false,
+                "always-approve",
+                true,
+                false,
+                "always-approve",
+            ),
+        ] {
+            let mut app = crate::app::app_view::tests::test_app();
+            app.default_yolo = initial_yolo;
+            app.current_ui.permission_mode = Some(initial_mode.into());
+            let event = Event::Key(KeyEvent::new(KeyCode::BackTab, KeyModifiers::SHIFT));
+            let effects = dispatch_then_forward(
+                Action::NewSession,
+                &event,
+                std::time::Instant::now(),
+                PasteProvenance::Terminal,
+                &mut app,
+            );
+
+            assert!(effects.iter().any(|effect| matches!(
+                effect,
+                Effect::PersistPermissionMode {
+                    canonical,
+                    session_id: None,
+                    ..
+                } if *canonical == expected_canonical
+            )));
+            let create = effects
+                .into_iter()
+                .find(|effect| matches!(effect, Effect::CreateSession { .. }))
+                .expect("create effect");
+            let flags = session_flags_for_effects(&mut app, std::slice::from_ref(&create));
+            let meta = flags.to_meta().expect("permission metadata");
+
+            assert_eq!(
+                meta.get("yoloMode"),
+                Some(&serde_json::json!(expected_yolo))
+            );
+            assert_eq!(
+                meta.get("autoMode"),
+                Some(&serde_json::json!(expected_auto))
+            );
+            assert_eq!(
+                app.current_ui.permission_mode.as_deref(),
+                Some(expected_mode)
+            );
+            assert_eq!(app.default_yolo, expected_yolo);
+        }
+    }
+
+    #[tokio::test]
+    async fn welcome_paste_preserves_create_and_forwarded_prompt() {
+        let mut app = crate::app::app_view::tests::test_app();
+        let (acp_tx, mut acp_rx) = tokio::sync::mpsc::unbounded_channel();
+        app.acp_tx = acp_tx;
+        let (input_tx, mut input_rx) = tokio::sync::mpsc::unbounded_channel();
+        drop(input_tx);
+        let (progress_tx, _progress_rx) = tokio::sync::mpsc::unbounded_channel();
+        let mut tasks = JoinSet::new();
+        let mut csi_filter = super::super::csi_filter::CsiFragmentFilter::new();
+        let mut xt_filter = super::super::xt_filter::XtversionFilter::new();
+
+        let result = drain_and_process(
+            TimedInputEvent::now(Event::Paste("fix the bug".into())),
+            &mut input_rx,
+            &mut app,
+            &mut tasks,
+            &progress_tx,
+            &mut csi_filter,
+            &mut xt_filter,
+        )
+        .await;
+
+        assert!(!result.should_quit);
+        assert!(matches!(
+            acp_rx.recv().await.expect("session/new request"),
+            xai_acp_lib::AcpAgentMessage::NewSession(_)
+        ));
+        assert_eq!(
+            app.agents[&crate::app::agent::AgentId(0)].prompt.text(),
+            "fix the bug"
         );
     }
 

@@ -159,7 +159,15 @@ pub struct ResolvedSelectableLine {
     pub screen_y: u16,
     pub screen_x: u16,
     pub selectable_cols: Range<u16>,
+    /// Logical copy text: trailing-trimmed for `Selectable::All`, a span subset
+    /// for `Selectable::Spans`, or the stored override for tool headers.
     pub text: String,
+    /// Exact text painted in the selectable columns (logical order, untrimmed),
+    /// or `None` for synthetic rows whose painted cells equal `text`. Selection
+    /// snaps and slices against this so drag columns line up with drawn cells
+    /// even when `text` diverges from what was painted (see
+    /// [`crate::scrollback::types::painted_selectable_region`]).
+    pub painted_region: Option<String>,
     pub joiner_to_previous: Option<String>,
 }
 
@@ -622,9 +630,10 @@ fn render_selection_overlay_impl(
             table_selected_cols_for_line(geom, kind, anchor, head, line.block_line_idx)
                 .into_iter()
                 .map(|cols| {
-                    let snapped = endpoint_start_col(&line.text, cols.start)
-                        ..endpoint_end_col(&line.text, cols.end.saturating_sub(1));
-                    clip_cols_to_content(&line.text, snapped)
+                    let display = display_text_for_cols(&line.text);
+                    let snapped = endpoint_start_col(display.as_ref(), cols.start)
+                        ..endpoint_end_col(display.as_ref(), cols.end.saturating_sub(1));
+                    clip_cols_to_content(display.as_ref(), snapped)
                 })
                 .collect()
         } else {
@@ -865,7 +874,34 @@ fn selection_slice_for_line_by_block_idx(
         .selectable_cols
         .end
         .saturating_sub(line.selectable_cols.start);
-    let selected = slice_text_cols(&line.text, cols.clone());
+    // Columns are visual cells of the painted row. Slice the painted region
+    // (the exact drawn cells) back to logical order for the clipboard so a
+    // trailing-trimmed or overridden `text` can't drift from the cells the user
+    // dragged. Identity when reordering is off (falls back to `text`).
+    let selected = if crate::render::bidi::is_enabled() {
+        match line.painted_region.as_deref() {
+            // Override rows (tool headers) paint a display that differs from the
+            // stored copy text; its columns can't index the painted cells, so
+            // copy the whole override on overlap.
+            Some(region) if line.text.trim_end() != region.trim_end() => line.text.clone(),
+            Some(region) => {
+                let sliced = slice_text_cols(region, cols.clone());
+                // Strip render-only trailing padding only for a row whose copy
+                // `text` is the trimmed form of the painted region (i.e. a
+                // `Selectable::All` row) once the selection reaches the row end,
+                // matching the multi-row path. A `Selectable::Spans` row with
+                // legitimate trailing spaces keeps them.
+                if cols.end == visible_width && line.text == region.trim_end() {
+                    sliced.trim_end().to_string()
+                } else {
+                    sliced
+                }
+            }
+            None => slice_text_cols(&line.text, cols.clone()),
+        }
+    } else {
+        slice_text_cols(&line.text, cols.clone())
+    };
     Some(apply_selection_boundary(
         selected,
         boundary,
@@ -916,10 +952,21 @@ fn selected_cols_for_endpoints(
         return None;
     }
 
+    // Snap on the painted row so ranges line up with the drawn cells. Prefer
+    // the painted region (untrimmed, exact painted cells) over `text`, which is
+    // trailing-trimmed: on an RTL row those spaces paint at the opposite edge,
+    // so a narrower `text` would snap the highlight band off the drawn cells.
+    let snap_src = if crate::render::bidi::is_enabled() {
+        line.painted_region.as_deref().unwrap_or(line.text.as_str())
+    } else {
+        line.text.as_str()
+    };
+    let display = display_text_for_cols(snap_src);
     if start_bl == end_bl {
-        let start = endpoint_start_col(&line.text, min(anchor_col, head_col));
+        let start = endpoint_start_col(display.as_ref(), min(anchor_col, head_col));
         return Some(
-            start.min(width)..endpoint_end_col(&line.text, max(anchor_col, head_col)).min(width),
+            start.min(width)
+                ..endpoint_end_col(display.as_ref(), max(anchor_col, head_col)).min(width),
         );
     }
 
@@ -929,7 +976,7 @@ fn selected_cols_for_endpoints(
         } else {
             head_col
         };
-        return Some(endpoint_start_col(&line.text, start).min(width)..width);
+        return Some(endpoint_start_col(display.as_ref(), start).min(width)..width);
     }
 
     if bl == end_bl {
@@ -938,7 +985,7 @@ fn selected_cols_for_endpoints(
         } else {
             anchor_col
         };
-        return Some(0..endpoint_end_col(&line.text, end).min(width));
+        return Some(0..endpoint_end_col(display.as_ref(), end).min(width));
     }
 
     Some(0..width)
@@ -991,7 +1038,9 @@ pub(crate) fn reconstruct_full_selection_text_with_boundaries(
     boundaries: &crate::scrollback::types::SelectionBoundaries,
     drag: &ActiveTextDrag,
 ) -> Option<String> {
-    use crate::scrollback::types::{derive_selection_text, selectable_cols};
+    use crate::scrollback::types::{
+        Selectable, painted_selectable_region, selectable_cols, slice_display_cols,
+    };
 
     let start_bl = min(drag.anchor.block_line_idx, drag.head.block_line_idx);
     let end_bl = max(drag.anchor.block_line_idx, drag.head.block_line_idx);
@@ -1009,32 +1058,48 @@ pub(crate) fn reconstruct_full_selection_text_with_boundaries(
             continue;
         }
 
-        let text = derive_selection_text(line);
         let Some(cols) = selectable_cols(&line.content, &line.selectable) else {
             continue;
         };
         let width = cols.end.saturating_sub(cols.start);
 
-        // Snap endpoints exactly like selected_cols_for_endpoints: `col_range.end == width` decides suffix re-attachment below,
-        // so an unsnapped end stopping mid-character would drop a suffix that the highlight includes.
+        // Map against the exact text painted in the selectable columns, in
+        // logical order: this is the string `set_line_safe_bidi` reorders, so
+        // the visual drag columns line up 1:1 with the drawn cells. Shared with
+        // the resolved-model overlay path via `painted_region`.
+        let region = painted_selectable_region(line);
+
+        // Tool-header rows paint a truncated/reworded display but copy a stored
+        // string. When that override diverges from what is painted (ignoring
+        // render-only trailing padding), its columns can't be reorder-mapped
+        // onto it. The same trim-tolerant predicate the overlay path uses.
+        let override_text = line
+            .selection_text
+            .as_deref()
+            .filter(|ov| ov.trim_end() != region.trim_end());
+
+        // Snap endpoints on the painted region (matches drawn cells).
+        // `col_range.end == width` decides suffix re-attachment below.
+        let display = display_text_for_cols(&region);
         let col_range = if start_bl == end_bl {
             let s = min(drag.anchor.col_within_range, drag.head.col_within_range);
             let e = max(drag.anchor.col_within_range, drag.head.col_within_range);
-            endpoint_start_col(&text, s).min(width)..endpoint_end_col(&text, e).min(width)
+            endpoint_start_col(display.as_ref(), s).min(width)
+                ..endpoint_end_col(display.as_ref(), e).min(width)
         } else if idx == start_bl {
             let s = if anchor_is_start {
                 drag.anchor.col_within_range
             } else {
                 drag.head.col_within_range
             };
-            endpoint_start_col(&text, s).min(width)..width
+            endpoint_start_col(display.as_ref(), s).min(width)..width
         } else if idx == end_bl {
             let e = if anchor_is_start {
                 drag.head.col_within_range
             } else {
                 drag.anchor.col_within_range
             };
-            0..endpoint_end_col(&text, e).min(width)
+            0..endpoint_end_col(display.as_ref(), e).min(width)
         } else {
             0..width
         };
@@ -1043,7 +1108,23 @@ pub(crate) fn reconstruct_full_selection_text_with_boundaries(
             out.push_str(line.joiner.as_deref().unwrap_or("\n"));
         }
         first = false;
-        let selected = slice_text_cols(&text, col_range.clone());
+        let selected = match override_text {
+            // Painted display is reordered and differs from the stored copy
+            // text, so visual columns don't index it: copy it whole on overlap.
+            Some(ov) if crate::render::bidi::is_enabled() => ov.to_string(),
+            // LTR: column-precise partial copy of the stored string.
+            Some(ov) => slice_display_cols(ov, col_range.start, col_range.end),
+            None => {
+                let sliced = slice_text_cols(&region, col_range.clone());
+                // Strip render-only trailing padding once the selection reaches
+                // the row end (matches `derive_selection_text` for `All` rows).
+                if matches!(line.selectable, Selectable::All) && col_range.end == width {
+                    sliced.trim_end().to_string()
+                } else {
+                    sliced
+                }
+            }
+        };
         out.push_str(&apply_selection_boundary(
             selected,
             boundaries.get(idx).map(Arc::as_ref),
@@ -1058,7 +1139,20 @@ pub(crate) fn reconstruct_full_selection_text_with_boundaries(
     Some(out)
 }
 
+/// Visual display order for column snap when rtl_bidi paints visual cells.
+fn display_text_for_cols(text: &str) -> std::borrow::Cow<'_, str> {
+    crate::render::bidi::visual_text(text)
+}
+
+/// Slice by visual columns; returns logical-order text for the clipboard.
 fn slice_text_cols(text: &str, cols: Range<u16>) -> String {
+    if crate::render::bidi::is_enabled() && crate::render::bidi::needs_bidi(text) {
+        return crate::render::bidi::logical_slice_for_visual_cols(
+            text,
+            cols.start as usize,
+            cols.end as usize,
+        );
+    }
     crate::scrollback::types::slice_display_cols(text, cols.start, cols.end)
 }
 
@@ -1230,6 +1324,218 @@ pub fn url_range_at_col(text: &str, col: u16) -> Option<Range<u16>> {
     None
 }
 
+/// Wrap-aware word or URL selection. `head` is inclusive; `text` is the joined
+/// fragment text and is never empty. `None` means nothing selectable.
+#[derive(Debug, PartialEq, Eq)]
+pub struct SemanticSelection {
+    pub anchor: SelectionEndpoint,
+    pub head: SelectionEndpoint,
+    pub text: String,
+}
+
+struct ConcatFragment {
+    block_line_idx: usize,
+    text_start: u16,
+    text_end: u16,
+}
+
+/// Snap when an inclusive concat column lands inside a joiner: `Forward` → next
+/// fragment col 0, `Backward` → previous fragment's last col.
+#[derive(Clone, Copy)]
+enum JoinerColSnap {
+    Forward,
+    Backward,
+}
+
+/// Select the wrap-group word or URL at `hit`.
+///
+/// The wrap group is the maximal run of `Some` joiners inside one range.
+/// `head` is inclusive; `text` is the joined fragment text and is never empty.
+/// `None` means nothing selectable.
+///
+/// `joiner_to_previous: None` is a hard source-line break and is not crossed,
+/// even though `'\n'` is not in `word_separators`.
+#[must_use]
+pub fn semantic_selection_at(
+    model: &ResolvedSelectionModel,
+    hit: &RangeHit,
+    separators: &str,
+) -> Option<SemanticSelection> {
+    let range = model.range(hit.entry_idx, hit.range_id)?;
+    let lines = &range.lines;
+    let hit_pos = lines
+        .iter()
+        .position(|line| line.block_line_idx == hit.block_line_idx)?;
+
+    let mut lo = hit_pos;
+    while lo > 0 && lines[lo].joiner_to_previous.is_some() {
+        lo -= 1;
+    }
+    let mut hi = hit_pos;
+    while hi + 1 < lines.len() && lines[hi + 1].joiner_to_previous.is_some() {
+        hi += 1;
+    }
+
+    // Single-row case (and, under reordering, the wrap-group case too — see
+    // below): the hit column is a visual cell of the painted row and
+    // `word_or_url_slice` maps it against that same row.
+    if lo == hi || (crate::render::bidi::is_enabled() && wrap_group_needs_bidi(lines, lo, hi)) {
+        let line = &lines[if lo == hi { lo } else { hit_pos }];
+        // The hit column is a visual cell of the painted row, so resolve the
+        // word against the painted region (identity/`text` when reordering off).
+        let src = if crate::render::bidi::is_enabled() {
+            line.painted_region.as_deref().unwrap_or(line.text.as_str())
+        } else {
+            line.text.as_str()
+        };
+        let (sel, text) = word_or_url_slice(src, hit.col_within_range, separators)?;
+        return Some(SemanticSelection {
+            anchor: SelectionEndpoint {
+                block_line_idx: line.block_line_idx,
+                col_within_range: sel.start,
+            },
+            head: SelectionEndpoint {
+                block_line_idx: line.block_line_idx,
+                col_within_range: sel.end.saturating_sub(1),
+            },
+            text,
+        });
+    }
+
+    let mut concat = String::new();
+    let mut text_byte_ranges = Vec::with_capacity(hi - lo + 1);
+    for (offset, line) in lines[lo..=hi].iter().enumerate() {
+        if offset > 0
+            && let Some(joiner) = line.joiner_to_previous.as_deref()
+        {
+            concat.push_str(joiner);
+        }
+        let text_byte_start = concat.len();
+        concat.push_str(&line.text);
+        text_byte_ranges.push((line.block_line_idx, text_byte_start, concat.len()));
+    }
+
+    // Measure fragment columns on the finished concat so a grapheme split
+    // across a wrap boundary is not counted twice.
+    let mut fragments = Vec::with_capacity(text_byte_ranges.len());
+    let mut hit_concat_col = None;
+    for (block_line_idx, text_byte_start, text_byte_end) in text_byte_ranges {
+        let text_start = display_width(&concat[..text_byte_start]);
+        let text_end = display_width(&concat[..text_byte_end]);
+        fragments.push(ConcatFragment {
+            block_line_idx,
+            text_start,
+            text_end,
+        });
+        if block_line_idx == hit.block_line_idx {
+            hit_concat_col = Some(map_local_hit_to_concat_col(
+                &concat[text_byte_start..text_byte_end],
+                text_start,
+                text_end,
+                hit.col_within_range,
+            ));
+        }
+    }
+
+    let (sel, text) = word_or_url_slice(&concat, hit_concat_col?, separators)?;
+    let last_col = sel.end.saturating_sub(1);
+    let anchor = map_inclusive_concat_col(&fragments, sel.start, JoinerColSnap::Forward)?;
+    let head = map_inclusive_concat_col(&fragments, last_col, JoinerColSnap::Backward)?;
+    if (anchor.block_line_idx, anchor.col_within_range)
+        > (head.block_line_idx, head.col_within_range)
+    {
+        return None;
+    }
+
+    Some(SemanticSelection { anchor, head, text })
+}
+
+/// Map a fragment-local click column into concat display columns.
+///
+/// When a wrap splits a grapheme, the continuation still has local width but
+/// adds little or none in concat. Those absorbed columns snap to the last
+/// concat column of the split cluster instead of drifting into later text.
+fn map_local_hit_to_concat_col(
+    local_text: &str,
+    text_start: u16,
+    text_end: u16,
+    col_within_range: u16,
+) -> u16 {
+    let local_width = display_width(local_text);
+    let concat_width = text_end.saturating_sub(text_start);
+    let absorbed = local_width.saturating_sub(concat_width);
+    if col_within_range < absorbed {
+        text_start.saturating_sub(1)
+    } else {
+        text_start.saturating_add(col_within_range - absorbed)
+    }
+}
+
+/// Whether any row in the wrap group `[lo, hi]` needs bidi reordering. Rows are
+/// painted per row, so a whole-group concat would reorder differently than the
+/// screen; when reordering applies we resolve the word on the hit row alone.
+fn wrap_group_needs_bidi(lines: &[ResolvedSelectableLine], lo: usize, hi: usize) -> bool {
+    lines[lo..=hi]
+        .iter()
+        .any(|l| crate::render::bidi::needs_bidi(&l.text))
+}
+
+fn word_or_url_slice(text: &str, col: u16, separators: &str) -> Option<(Range<u16>, String)> {
+    // Word boundaries follow visual cells when RTL is present; clipboard is logical.
+    let display = display_text_for_cols(text);
+    let range = url_range_at_col(display.as_ref(), col)
+        .unwrap_or_else(|| word_boundaries_at_col(display.as_ref(), col, separators));
+    if range.is_empty() {
+        return None;
+    }
+    let sliced = if crate::render::bidi::needs_bidi(text) {
+        slice_text_cols(text, range.clone())
+    } else {
+        crate::scrollback::types::slice_display_cols(text, range.start, range.end)
+    };
+    if sliced.is_empty() {
+        return None;
+    }
+    Some((range, sliced))
+}
+
+fn fragment_last_col(frag: &ConcatFragment) -> Option<SelectionEndpoint> {
+    let width = frag.text_end.saturating_sub(frag.text_start);
+    (width > 0).then_some(SelectionEndpoint {
+        block_line_idx: frag.block_line_idx,
+        col_within_range: width.saturating_sub(1),
+    })
+}
+
+fn map_inclusive_concat_col(
+    fragments: &[ConcatFragment],
+    col: u16,
+    snap: JoinerColSnap,
+) -> Option<SelectionEndpoint> {
+    for (i, frag) in fragments.iter().enumerate() {
+        if col < frag.text_start {
+            return match snap {
+                JoinerColSnap::Forward => Some(SelectionEndpoint {
+                    block_line_idx: frag.block_line_idx,
+                    col_within_range: 0,
+                }),
+                JoinerColSnap::Backward => fragment_last_col(fragments.get(i.checked_sub(1)?)?),
+            };
+        }
+        if col < frag.text_end {
+            return Some(SelectionEndpoint {
+                block_line_idx: frag.block_line_idx,
+                col_within_range: col.saturating_sub(frag.text_start),
+            });
+        }
+    }
+
+    match snap {
+        JoinerColSnap::Forward => None,
+        JoinerColSnap::Backward => fragment_last_col(fragments.last()?),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1269,6 +1575,7 @@ mod tests {
                 screen_x: 0,
                 selectable_cols: 0..5,
                 text: text.to_string(),
+                painted_region: None,
                 joiner_to_previous: joiner.clone(),
             });
             assert!(boundaries.is_empty());
@@ -1297,6 +1604,282 @@ mod tests {
         }
     }
 
+    // Serialize the process-global bidi latch; restore it on scope exit even if
+    // `f` panics, so a failed assertion can't leak `rtl_bidi = true` into other
+    // tests in the process. LTR cases need no reorder so only these RTL cases
+    // need the guard. "خوب" avoids the lam-alef ligature so columns map 1:1.
+    static BIDI_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    struct BidiLatchGuard(bool);
+    impl Drop for BidiLatchGuard {
+        fn drop(&mut self) {
+            crate::render::bidi::set_enabled(self.0);
+        }
+    }
+    fn with_rtl_bidi<R>(f: impl FnOnce() -> R) -> R {
+        let _g = BIDI_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _latch = BidiLatchGuard(crate::render::bidi::is_enabled());
+        crate::render::bidi::set_enabled(true);
+        f()
+    }
+
+    /// A drag over painted (visual) RTL cells copies the logical text, not a
+    /// mismapped substring of the trailing-trimmed derived text.
+    #[test]
+    fn rtl_drag_copies_logical_text_from_painted_cells() {
+        use crate::scrollback::types::{BlockLine, Selectable};
+        with_rtl_bidi(|| {
+            let make = |s: &str| BlockLine {
+                content: ratatui::text::Line::from(s.to_string()),
+                selectable: Selectable::All,
+                selection_range: Some(0),
+                ..Default::default()
+            };
+            let drag_cols = |a: u16, h: u16| ActiveTextDrag {
+                anchor: RangeHit {
+                    entry_idx: 0,
+                    range_id: 0,
+                    block_line_idx: 0,
+                    col_within_range: a,
+                },
+                head: RangeHit {
+                    entry_idx: 0,
+                    range_id: 0,
+                    block_line_idx: 0,
+                    col_within_range: h,
+                },
+                kind: SelectionKind::Linear,
+                anchor_content_width: None,
+            };
+
+            // "Hi خوب" paints "Hi بوخ"; dragging the Persian cells (visual 3..=5)
+            // copies logical "خوب".
+            assert_eq!(
+                reconstruct_full_selection_text(&[make("Hi خوب")], &drag_cols(3, 5)),
+                Some("خوب".to_string()),
+            );
+            // A trailing-padded pure-RTL row copies logical order with the pad
+            // trimmed.
+            assert_eq!(
+                reconstruct_full_selection_text(&[make("خوب  ")], &drag_cols(0, 4)),
+                Some("خوب".to_string()),
+            );
+        });
+    }
+
+    /// A truncated RTL row paints `content + "…"` where the ellipsis is not
+    /// selectable. Under an RTL base the ellipsis reorders to the visual left,
+    /// shifting the selectable region right, so the stored hit box must be the
+    /// region's visual span (past the ellipsis), not its logical columns.
+    #[test]
+    fn visual_selectable_cols_shifts_region_past_rtl_ellipsis() {
+        use crate::scrollback::types::{
+            BlockLine, Selectable, selectable_cols, visual_selectable_cols,
+        };
+        let line = BlockLine {
+            content: ratatui::text::Line::from(vec![
+                ratatui::text::Span::raw("خوب"),
+                ratatui::text::Span::raw("…"),
+            ]),
+            selectable: Selectable::Spans(0..1),
+            selection_range: Some(0),
+            ..Default::default()
+        };
+        // Region is logical columns 0..3 (the "…" span is excluded).
+        assert_eq!(selectable_cols(&line.content, &line.selectable), Some(0..3));
+        // Reordering off: identity.
+        assert_eq!(visual_selectable_cols(&line), Some(0..3));
+        with_rtl_bidi(|| {
+            // Painted "خوب…" -> "…بوخ"; the word occupies visual cells 1..4.
+            assert_eq!(visual_selectable_cols(&line), Some(1..4));
+        });
+    }
+
+    /// The overlay copy path (single-line, resolved-model) maps drag columns
+    /// against the painted region, not the trailing-trimmed `text`. On a padded
+    /// RTL row the pad paints at the left, so dragging the visible letters must
+    /// copy the word — slicing the narrower `text` dropped letters.
+    #[test]
+    fn rtl_overlay_slice_maps_painted_region_not_trimmed_text() {
+        with_rtl_bidi(|| {
+            let mut model = ResolvedSelectionModel::default();
+            model.push_line(ResolvedSelectableLine {
+                entry_idx: 0,
+                range_id: 0,
+                block_line_idx: 0,
+                screen_y: 0,
+                screen_x: 0,
+                selectable_cols: 0..5,
+                text: "خوب".to_string(),
+                painted_region: Some("خوب  ".to_string()),
+                joiner_to_previous: None,
+            });
+            // Painted "خوب  " reorders to "  بوخ"; the Persian letters occupy
+            // visual cells 2..5. Dragging them copies the logical word.
+            let drag = ActiveTextDrag {
+                anchor: RangeHit {
+                    entry_idx: 0,
+                    range_id: 0,
+                    block_line_idx: 0,
+                    col_within_range: 2,
+                },
+                head: RangeHit {
+                    entry_idx: 0,
+                    range_id: 0,
+                    block_line_idx: 0,
+                    col_within_range: 4,
+                },
+                kind: SelectionKind::Linear,
+                anchor_content_width: None,
+            };
+            assert_eq!(
+                reconstruct_selection_text(&model, &drag),
+                Some("خوب".to_string()),
+            );
+        });
+    }
+
+    /// The overlay copy path honors the tool-header override the same way the
+    /// multi-row path does: a divergent stored string is copied whole under RTL.
+    #[test]
+    fn rtl_overlay_override_row_copies_whole_stored_text() {
+        with_rtl_bidi(|| {
+            let mut model = ResolvedSelectionModel::default();
+            model.push_line(ResolvedSelectableLine {
+                entry_idx: 0,
+                range_id: 0,
+                block_line_idx: 0,
+                screen_y: 0,
+                screen_x: 0,
+                selectable_cols: 0..3,
+                text: "/path/خوب/file".to_string(),
+                painted_region: Some("خوب".to_string()),
+                joiner_to_previous: None,
+            });
+            let drag = ActiveTextDrag {
+                anchor: RangeHit {
+                    entry_idx: 0,
+                    range_id: 0,
+                    block_line_idx: 0,
+                    col_within_range: 0,
+                },
+                head: RangeHit {
+                    entry_idx: 0,
+                    range_id: 0,
+                    block_line_idx: 0,
+                    col_within_range: 1,
+                },
+                kind: SelectionKind::Linear,
+                anchor_content_width: None,
+            };
+            assert_eq!(
+                reconstruct_selection_text(&model, &drag),
+                Some("/path/خوب/file".to_string()),
+            );
+        });
+    }
+
+    /// An override row (tool header) paints a display that differs from its
+    /// stored copy text. With `rtl_bidi` on, the visual drag columns index the
+    /// painted display, not the override, so a partial drag copies the whole
+    /// override rather than a mismapped, reversed substring of it.
+    #[test]
+    fn rtl_override_row_copies_whole_stored_text() {
+        use crate::scrollback::types::{BlockLine, Selectable};
+        with_rtl_bidi(|| {
+            let line = BlockLine {
+                content: ratatui::text::Line::from("خوب".to_string()),
+                selectable: Selectable::All,
+                selection_range: Some(0),
+                selection_text: Some("/path/خوب/file".to_string()),
+                ..Default::default()
+            };
+            let drag = ActiveTextDrag {
+                anchor: RangeHit {
+                    entry_idx: 0,
+                    range_id: 0,
+                    block_line_idx: 0,
+                    col_within_range: 0,
+                },
+                head: RangeHit {
+                    entry_idx: 0,
+                    range_id: 0,
+                    block_line_idx: 0,
+                    col_within_range: 1,
+                },
+                kind: SelectionKind::Linear,
+                anchor_content_width: None,
+            };
+            assert_eq!(
+                reconstruct_full_selection_text(&[line], &drag),
+                Some("/path/خوب/file".to_string()),
+            );
+        });
+    }
+
+    /// A line containing a ligature (lam-alef `لا`) still selects its last cell.
+    /// `UnicodeWidthStr` reports `سلام` as 3 wide but ratatui paints 4 cells, so
+    /// the selectable width must count painted cells or the last cell is dropped.
+    #[test]
+    fn ligature_line_selects_last_cell() {
+        use crate::scrollback::types::{BlockLine, Selectable};
+        let line = BlockLine {
+            content: ratatui::text::Line::from("Hello سلام world".to_string()),
+            selectable: Selectable::All,
+            selection_range: Some(0),
+            ..Default::default()
+        };
+        // 16 painted cells (one per grapheme); drag the whole row (0..=15).
+        let drag = ActiveTextDrag {
+            anchor: RangeHit {
+                entry_idx: 0,
+                range_id: 0,
+                block_line_idx: 0,
+                col_within_range: 0,
+            },
+            head: RangeHit {
+                entry_idx: 0,
+                range_id: 0,
+                block_line_idx: 0,
+                col_within_range: 15,
+            },
+            kind: SelectionKind::Linear,
+            anchor_content_width: None,
+        };
+        assert_eq!(
+            reconstruct_full_selection_text(&[line], &drag),
+            Some("Hello سلام world".to_string()),
+        );
+    }
+
+    /// Double-click on a painted RTL word copies it in logical order: the click
+    /// lands on a visual cell ("خوب" paints as "بوخ") and the word maps back.
+    #[test]
+    fn rtl_double_click_selects_logical_word_from_painted_cells() {
+        with_rtl_bidi(|| {
+            let mut model = ResolvedSelectionModel::default();
+            model.push_line(ResolvedSelectableLine {
+                entry_idx: 0,
+                range_id: 0,
+                block_line_idx: 0,
+                screen_y: 0,
+                screen_x: 0,
+                selectable_cols: 0..3,
+                text: "خوب".to_string(),
+                painted_region: None,
+                joiner_to_previous: None,
+            });
+            let hit = RangeHit {
+                entry_idx: 0,
+                range_id: 0,
+                block_line_idx: 0,
+                col_within_range: 1,
+            };
+            let sel = semantic_selection_at(&model, &hit, DEFAULT_WORD_SEPARATORS)
+                .expect("word selection");
+            assert_eq!(sel.text, "خوب");
+        });
+    }
+
     #[test]
     fn edit_boundaries_apply_only_at_selected_path_edges() {
         use crate::scrollback::types::{
@@ -1317,6 +1900,7 @@ mod tests {
                 screen_x: 0,
                 selectable_cols: 0..3,
                 text: text.to_string(),
+                painted_region: None,
                 joiner_to_previous: joiner,
             };
             resolved_boundaries.push(
@@ -1392,6 +1976,7 @@ mod tests {
             screen_x: 10,
             selectable_cols: 2..6,
             text: "body".to_string(),
+            painted_region: None,
             joiner_to_previous: None,
         });
 
@@ -1413,6 +1998,7 @@ mod tests {
             screen_x: 10,
             selectable_cols: 2..6,
             text: "body".to_string(),
+            painted_region: None,
             joiner_to_previous: None,
         });
 
@@ -1442,6 +2028,7 @@ mod tests {
             screen_x: 4,
             selectable_cols,
             text: "text".to_string(),
+            painted_region: None,
             joiner_to_previous: None,
         }
     }
@@ -1723,6 +2310,7 @@ mod tests {
                 screen_x: 0,
                 selectable_cols: 0..(text.len() as u16),
                 text: text.to_string(),
+                painted_region: None,
                 joiner_to_previous: if i > 0 { Some("\n".to_string()) } else { None },
             });
         }
@@ -1768,6 +2356,7 @@ mod tests {
                 screen_x: 0,
                 selectable_cols: 0..(line_text.len() as u16),
                 text: line_text.to_string(),
+                painted_region: None,
                 joiner_to_previous: if i > 0 { Some("\n".to_string()) } else { None },
             });
         }
@@ -2255,6 +2844,460 @@ mod tests {
         assert_eq!(wb(text, non_url_col), 34..43);
     }
 
+    fn wrap_model(fragments: &[(&str, Option<&str>)]) -> ResolvedSelectionModel {
+        let mut model = ResolvedSelectionModel::default();
+        for (i, (text, joiner)) in fragments.iter().enumerate() {
+            model.push_line(ResolvedSelectableLine {
+                entry_idx: 0,
+                range_id: 0,
+                block_line_idx: i,
+                screen_y: i as u16,
+                screen_x: 0,
+                selectable_cols: 0..display_width(text),
+                text: (*text).to_string(),
+                painted_region: None,
+                joiner_to_previous: joiner.map(str::to_string),
+            });
+        }
+        model
+    }
+
+    fn wrap_hit(block_line_idx: usize, col_within_range: u16) -> RangeHit {
+        RangeHit {
+            entry_idx: 0,
+            range_id: 0,
+            block_line_idx,
+            col_within_range,
+        }
+    }
+
+    fn semantic(model: &ResolvedSelectionModel, line: usize, col: u16) -> SemanticSelection {
+        semantic_selection_at(model, &wrap_hit(line, col), DEFAULT_WORD_SEPARATORS)
+            .expect("semantic selection")
+    }
+
+    fn ep(block_line_idx: usize, col_within_range: u16) -> SelectionEndpoint {
+        SelectionEndpoint {
+            block_line_idx,
+            col_within_range,
+        }
+    }
+
+    #[test]
+    fn semantic_selection_mid_word_wrap_selects_full_identifier() {
+        let model = wrap_model(&[("hello_world_", None), ("identifier", Some(""))]);
+        let expected = SemanticSelection {
+            anchor: ep(0, 0),
+            head: ep(1, 9),
+            text: "hello_world_identifier".to_string(),
+        };
+        assert_eq!(semantic(&model, 0, 0), expected);
+        assert_eq!(semantic(&model, 0, 11), expected);
+        assert_eq!(semantic(&model, 1, 0), expected);
+        assert_eq!(semantic(&model, 1, 5), expected);
+    }
+
+    #[test]
+    fn semantic_selection_space_wrap_does_not_cross() {
+        let model = wrap_model(&[("hello", None), ("world", Some(" "))]);
+        assert_eq!(
+            semantic(&model, 0, 1),
+            SemanticSelection {
+                anchor: ep(0, 0),
+                head: ep(0, 4),
+                text: "hello".to_string(),
+            }
+        );
+        assert_eq!(
+            semantic(&model, 1, 0),
+            SemanticSelection {
+                anchor: ep(1, 0),
+                head: ep(1, 4),
+                text: "world".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn semantic_selection_hard_break_does_not_cross() {
+        let model = wrap_model(&[("hello", None), ("hello", None)]);
+        let first = SemanticSelection {
+            anchor: ep(0, 0),
+            head: ep(0, 4),
+            text: "hello".to_string(),
+        };
+        let second = SemanticSelection {
+            anchor: ep(1, 0),
+            head: ep(1, 4),
+            text: "hello".to_string(),
+        };
+        assert_eq!(semantic(&model, 0, 2), first);
+        assert_eq!(semantic(&model, 1, 2), second);
+    }
+
+    #[test]
+    fn semantic_selection_wrapped_url_spans_fragments() {
+        let model = wrap_model(&[
+            ("https://example.", None),
+            ("com/very/long/", Some("")),
+            ("path", Some("")),
+        ]);
+        let expected = SemanticSelection {
+            anchor: ep(0, 0),
+            head: ep(2, 3),
+            text: "https://example.com/very/long/path".to_string(),
+        };
+        assert_eq!(semantic(&model, 0, 2), expected);
+        assert_eq!(semantic(&model, 1, 3), expected);
+        assert_eq!(semantic(&model, 2, 0), expected);
+    }
+
+    #[test]
+    fn semantic_selection_custom_separators_across_wrap() {
+        let model = wrap_model(&[("hello-", None), ("world", Some(""))]);
+        let grouped = semantic_selection_at(&model, &wrap_hit(0, 1), "").expect("grouped");
+        assert_eq!(
+            grouped,
+            SemanticSelection {
+                anchor: ep(0, 0),
+                head: ep(1, 4),
+                text: "hello-world".to_string(),
+            }
+        );
+        assert_eq!(
+            semantic_selection_at(&model, &wrap_hit(1, 0), "").expect("grouped from row 1"),
+            grouped
+        );
+
+        let split = semantic_selection_at(&model, &wrap_hit(0, 1), "-").expect("split");
+        assert_eq!(
+            split,
+            SemanticSelection {
+                anchor: ep(0, 0),
+                head: ep(0, 4),
+                text: "hello".to_string(),
+            }
+        );
+        assert_eq!(
+            semantic_selection_at(&model, &wrap_hit(1, 2), "-").expect("world side"),
+            SemanticSelection {
+                anchor: ep(1, 0),
+                head: ep(1, 4),
+                text: "world".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn semantic_selection_single_row_word_and_url() {
+        let words = wrap_model(&[("hello world", None)]);
+        assert_eq!(
+            semantic(&words, 0, 1),
+            SemanticSelection {
+                anchor: ep(0, 0),
+                head: ep(0, 4),
+                text: "hello".to_string(),
+            }
+        );
+        assert_eq!(
+            semantic(&words, 0, 7),
+            SemanticSelection {
+                anchor: ep(0, 6),
+                head: ep(0, 10),
+                text: "world".to_string(),
+            }
+        );
+
+        let urls = wrap_model(&[("see https://x.ai now", None)]);
+        assert_eq!(
+            semantic(&urls, 0, 6),
+            SemanticSelection {
+                anchor: ep(0, 4),
+                head: ep(0, 15),
+                text: "https://x.ai".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn semantic_selection_three_fragment_mid_word_click_middle() {
+        let model = wrap_model(&[
+            ("hello_", None),
+            ("world_", Some("")),
+            ("identifier", Some("")),
+        ]);
+        let expected = SemanticSelection {
+            anchor: ep(0, 0),
+            head: ep(2, 9),
+            text: "hello_world_identifier".to_string(),
+        };
+        assert_eq!(semantic(&model, 1, 0), expected);
+        assert_eq!(semantic(&model, 1, 5), expected);
+    }
+
+    #[test]
+    fn semantic_selection_partial_first_row_then_wrap() {
+        let model = wrap_model(&[("foo bar_very", None), ("long", Some(""))]);
+        let wrapped = SemanticSelection {
+            anchor: ep(0, 4),
+            head: ep(1, 3),
+            text: "bar_verylong".to_string(),
+        };
+        assert_eq!(semantic(&model, 0, 4), wrapped);
+        assert_eq!(semantic(&model, 0, 11), wrapped);
+        assert_eq!(semantic(&model, 1, 1), wrapped);
+        assert_eq!(
+            semantic(&model, 0, 1),
+            SemanticSelection {
+                anchor: ep(0, 0),
+                head: ep(0, 2),
+                text: "foo".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn semantic_selection_head_stops_mid_continuation_row() {
+        let model = wrap_model(&[("foo bar_very", None), ("long baz", Some(""))]);
+        let wrapped = SemanticSelection {
+            anchor: ep(0, 4),
+            head: ep(1, 3),
+            text: "bar_verylong".to_string(),
+        };
+        assert_eq!(semantic(&model, 0, 4), wrapped);
+        assert_eq!(semantic(&model, 1, 0), wrapped);
+        assert_eq!(
+            semantic(&model, 1, 5),
+            SemanticSelection {
+                anchor: ep(1, 5),
+                head: ep(1, 7),
+                text: "baz".to_string(),
+            }
+        );
+
+        let one_char = wrap_model(&[("hello_", None), ("x", Some(""))]);
+        assert_eq!(
+            semantic(&one_char, 0, 0),
+            SemanticSelection {
+                anchor: ep(0, 0),
+                head: ep(1, 0),
+                text: "hello_x".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn semantic_selection_mid_word_wrap_wide_glyphs() {
+        let cjk = wrap_model(&[("你", None), ("好世界", Some(""))]);
+        let expected = SemanticSelection {
+            anchor: ep(0, 0),
+            head: ep(1, 5),
+            text: "你好世界".to_string(),
+        };
+        assert_eq!(semantic(&cjk, 0, 0), expected);
+        assert_eq!(semantic(&cjk, 0, 1), expected);
+        assert_eq!(semantic(&cjk, 1, 0), expected);
+        assert_eq!(semantic(&cjk, 1, 4), expected);
+
+        let mixed = wrap_model(&[("hello_", None), ("世界", Some(""))]);
+        let expected = SemanticSelection {
+            anchor: ep(0, 0),
+            head: ep(1, 3),
+            text: "hello_世界".to_string(),
+        };
+        assert_eq!(semantic(&mixed, 0, 3), expected);
+        assert_eq!(semantic(&mixed, 1, 1), expected);
+    }
+
+    #[test]
+    fn semantic_selection_wrap_split_cluster_uses_concat_width() {
+        // Per-fragment widths are 2+2; concatenated ZWJ pair is width 2.
+        let model = wrap_model(&[("👨", None), ("\u{200d}👩", Some(""))]);
+        let from_first = semantic(&model, 0, 0);
+        assert_eq!(from_first.text, "👨‍👩");
+        assert_eq!(from_first.anchor, ep(0, 0));
+        // Finished-concat widths assign both columns to the first fragment.
+        assert_eq!(from_first.head, ep(0, 1));
+        assert_eq!(semantic(&model, 1, 0), from_first);
+
+        // Local col 1 on the continuation is still the cluster, not `tail`.
+        let with_tail = wrap_model(&[("👨", None), ("\u{200d}👩 tail", Some(""))]);
+        assert_eq!(semantic(&with_tail, 1, 1).text, "👨‍👩");
+        assert_eq!(semantic(&with_tail, 1, 3).text, "tail");
+    }
+
+    #[test]
+    fn semantic_selection_joiner_only_range_returns_none() {
+        let model = wrap_model(&[("ab", None), ("cd", Some(" "))]);
+        // Past-end col is not hit-testable when selectable_cols matches text width.
+        assert_eq!(
+            semantic_selection_at(&model, &wrap_hit(0, 2), DEFAULT_WORD_SEPARATORS),
+            None
+        );
+
+        let mut padded = ResolvedSelectionModel::default();
+        padded.push_line(ResolvedSelectableLine {
+            entry_idx: 0,
+            range_id: 0,
+            block_line_idx: 0,
+            screen_y: 0,
+            screen_x: 0,
+            selectable_cols: 0..5,
+            text: "ab".to_string(),
+            painted_region: None,
+            joiner_to_previous: None,
+        });
+        padded.push_line(ResolvedSelectableLine {
+            entry_idx: 0,
+            range_id: 0,
+            block_line_idx: 1,
+            screen_y: 1,
+            screen_x: 0,
+            selectable_cols: 0..2,
+            text: "cd".to_string(),
+            painted_region: None,
+            joiner_to_previous: Some(" ".to_string()),
+        });
+        assert_eq!(
+            semantic_selection_at(&padded, &wrap_hit(0, 2), DEFAULT_WORD_SEPARATORS),
+            None
+        );
+
+        assert_eq!(
+            semantic_selection_at(
+                &wrap_model(&[("", None), ("", Some(" "))]),
+                &wrap_hit(0, 0),
+                DEFAULT_WORD_SEPARATORS,
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn semantic_selection_multi_space_and_newline_joiners_do_not_merge() {
+        let spaces = wrap_model(&[("hello", None), ("world", Some("   "))]);
+        assert_eq!(
+            semantic(&spaces, 0, 1),
+            SemanticSelection {
+                anchor: ep(0, 0),
+                head: ep(0, 4),
+                text: "hello".to_string(),
+            }
+        );
+        assert_eq!(
+            semantic(&spaces, 1, 0),
+            SemanticSelection {
+                anchor: ep(1, 0),
+                head: ep(1, 4),
+                text: "world".to_string(),
+            }
+        );
+
+        let newline = wrap_model(&[("https://ex", None), ("ample.com", Some("\n"))]);
+        assert_eq!(
+            semantic(&newline, 0, 0),
+            SemanticSelection {
+                anchor: ep(0, 0),
+                head: ep(0, 9),
+                text: "https://ex".to_string(),
+            }
+        );
+        assert_eq!(
+            semantic(&newline, 1, 0),
+            SemanticSelection {
+                anchor: ep(1, 0),
+                head: ep(1, 4),
+                text: "ample".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn semantic_selection_empty_wrap_fragments() {
+        let trailing = wrap_model(&[("hello_world", None), ("", Some(""))]);
+        let expected = SemanticSelection {
+            anchor: ep(0, 0),
+            head: ep(0, 10),
+            text: "hello_world".to_string(),
+        };
+        assert_eq!(semantic(&trailing, 0, 0), expected);
+        assert_eq!(semantic(&trailing, 1, 0), expected);
+
+        let middle = wrap_model(&[("hello_", None), ("", Some("")), ("world", Some(""))]);
+        let expected = SemanticSelection {
+            anchor: ep(0, 0),
+            head: ep(2, 4),
+            text: "hello_world".to_string(),
+        };
+        assert_eq!(semantic(&middle, 0, 0), expected);
+        assert_eq!(semantic(&middle, 1, 0), expected);
+        assert_eq!(semantic(&middle, 2, 0), expected);
+    }
+
+    #[test]
+    fn semantic_selection_wrapped_url_among_words() {
+        let model = wrap_model(&[("see https://ex", None), ("ample.com please", Some(""))]);
+        assert_eq!(
+            semantic(&model, 0, 0),
+            SemanticSelection {
+                anchor: ep(0, 0),
+                head: ep(0, 2),
+                text: "see".to_string(),
+            }
+        );
+        let url = SemanticSelection {
+            anchor: ep(0, 4),
+            head: ep(1, 8),
+            text: "https://example.com".to_string(),
+        };
+        assert_eq!(semantic(&model, 0, 12), url);
+        assert_eq!(semantic(&model, 1, 0), url);
+        assert_eq!(
+            semantic(&model, 1, 10),
+            SemanticSelection {
+                anchor: ep(1, 10),
+                head: ep(1, 15),
+                text: "please".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn semantic_selection_from_word_wrap_joiners() {
+        let source = ratatui::text::Line::from("hello_world_identifier");
+        let (wrapped, joiners) = crate::render::wrapping::word_wrap_line_with_joiners(&source, 12);
+        let mut model = ResolvedSelectionModel::default();
+        let mut last_width = 0u16;
+        for (i, (line, joiner)) in wrapped.iter().zip(joiners).enumerate() {
+            let text = crate::scrollback::types::line_plain_text(line);
+            last_width = display_width(&text);
+            model.push_line(ResolvedSelectableLine {
+                entry_idx: 0,
+                range_id: 0,
+                block_line_idx: i,
+                screen_y: i as u16,
+                screen_x: 0,
+                selectable_cols: 0..last_width,
+                text,
+                painted_region: None,
+                joiner_to_previous: joiner,
+            });
+        }
+        let expected = SemanticSelection {
+            anchor: ep(0, 0),
+            head: ep(
+                model.ranges[0].lines.len() - 1,
+                last_width.saturating_sub(1),
+            ),
+            text: "hello_world_identifier".to_string(),
+        };
+        for line in &model.ranges[0].lines {
+            if !line.text.is_empty() {
+                assert_eq!(semantic(&model, line.block_line_idx, 0), expected);
+            }
+        }
+    }
+
     // -----------------------------------------------------------------------
     // selected_cols_for_endpoints tests
     // -----------------------------------------------------------------------
@@ -2271,6 +3314,7 @@ mod tests {
             screen_x: 0,
             selectable_cols,
             text: String::new(),
+            painted_region: None,
             joiner_to_previous: None,
         }
     }
@@ -2463,6 +3507,7 @@ mod tests {
                 screen_x: 2,
                 selectable_cols: 0..10,
                 text: format!("line {i}"),
+                painted_region: None,
                 joiner_to_previous: if i > 0 { Some("\n".into()) } else { None },
             });
         }
@@ -2552,6 +3597,7 @@ mod tests {
             screen_x: 5,
             selectable_cols: 0..20,
             text: "hello world foo bar".into(),
+            painted_region: None,
             joiner_to_previous: None,
         });
         // Selecting cols 6..11 ("world") on a line at screen_x=5.
@@ -2599,6 +3645,7 @@ mod tests {
                 screen_x: 0,
                 selectable_cols: 0..15,
                 text: format!("line {i} content"),
+                painted_region: None,
                 joiner_to_previous: if i > 0 { Some("\n".into()) } else { None },
             });
         }
@@ -2660,6 +3707,7 @@ mod tests {
             screen_x: 4,
             selectable_cols: 2..10,
             text: "hello wo".to_string(),
+            painted_region: None,
             joiner_to_previous: None,
         });
 
@@ -2686,6 +3734,7 @@ mod tests {
             screen_x: 4,
             selectable_cols: 2..6,
             text: "body".to_string(),
+            painted_region: None,
             joiner_to_previous: None,
         });
 
@@ -2711,6 +3760,7 @@ mod tests {
             screen_x: 10,
             selectable_cols: 2..6,
             text: "body".to_string(),
+            painted_region: None,
             joiner_to_previous: None,
         });
 
@@ -2736,6 +3786,7 @@ mod tests {
             screen_x: 0,
             selectable_cols: 0..5,
             text: "hello".to_string(),
+            painted_region: None,
             joiner_to_previous: None,
         });
         model.push_line(ResolvedSelectableLine {
@@ -2746,6 +3797,7 @@ mod tests {
             screen_x: 10,
             selectable_cols: 0..5,
             text: "world".to_string(),
+            painted_region: None,
             joiner_to_previous: None,
         });
 
@@ -2795,6 +3847,7 @@ mod tests {
                 screen_x: 0,
                 selectable_cols: 0..(text.chars().count() as u16),
                 text: text.to_string(),
+                painted_region: None,
                 joiner_to_previous: None,
             });
         }

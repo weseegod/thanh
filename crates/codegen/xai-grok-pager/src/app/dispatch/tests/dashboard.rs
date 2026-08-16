@@ -2700,8 +2700,8 @@ fn dashboard_attach_subagent_lazily_replays_deferred_transcript() {
         agent
             .subagent_sessions
             .get(&child_sid)
-            .is_some_and(|i| i.child_updates_replayed),
-        "dashboard attach must mark the child as replayed"
+            .is_some_and(|i| !i.transcript.needs_replay()),
+        "dashboard attach must settle the child transcript state"
     );
     crate::app::subagent::set_replay_grok_home_for_tests(None);
 }
@@ -5087,6 +5087,51 @@ fn dashboard_stop_bg_work_row_stops_without_arming() {
     let d = app.dashboard.as_ref().unwrap();
     assert!(d.delete_confirm.is_none(), "must not arm delete");
     assert!(d.error_toast.is_none(), "stopped work, so no toast");
+}
+/// Reverting stop-all to the wire default (`ClientUi`) would auto-wake.
+#[serial_test::serial(GROK_AGENT_DASHBOARD)]
+#[test]
+fn dashboard_stop_running_bg_task_emits_teardown_kill() {
+    use xai_grok_shell::extensions::task::TaskKillSource;
+    let mut app = test_app();
+    let _ = dispatch_new_session_inner(&mut app, None);
+    let _ = dispatch_new_session_inner(&mut app, None);
+    let target = *app.agents.keys().next().unwrap();
+    {
+        let agent = app.agents.get_mut(&target).unwrap();
+        agent.session.session_id = Some(acp::SessionId::new("bg-stop"));
+        agent.session.state = AgentState::Idle;
+        agent
+            .session
+            .bg_tasks
+            .insert("bg-1".into(), super::make_bg_task("bg-1"));
+    }
+    open_dashboard(&mut app);
+    if let Some(d) = app.dashboard.as_mut() {
+        d.selected = Some(crate::views::dashboard::DashboardRowId::TopLevel(target));
+    }
+    let effects = dispatch_dashboard_stop(&mut app);
+    assert!(
+        effects.iter().any(|e| matches!(
+            e,
+            Effect::KillBgTask {
+                task_id,
+                source: TaskKillSource::Teardown,
+                ..
+            } if task_id == "bg-1"
+        )),
+        "dashboard stop-all must emit Teardown, got {effects:?}"
+    );
+    assert!(
+        !effects.iter().any(|e| matches!(
+            e,
+            Effect::KillBgTask {
+                source: TaskKillSource::ClientUi,
+                ..
+            }
+        )),
+        "dashboard stop-all must not emit ClientUi, got {effects:?}"
+    );
 }
 /// A row that's `Working` only because of a queued (unsent) prompt: Ctrl+X
 /// drops the queue (local, no effect) rather than toasting, and never arms

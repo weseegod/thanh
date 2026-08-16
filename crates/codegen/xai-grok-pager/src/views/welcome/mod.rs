@@ -15,9 +15,11 @@ use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
 use crate::app::app_view::{AuthMode, AuthState, SessionPickerEntry, TrustState};
+use crate::app::consent::ConsentState;
 use crate::startup::StartupWarning;
 use crate::theme::Theme;
 use crate::views::prompt_widget::{PromptFlag, PromptInfo, PromptWidget};
+mod consent;
 mod hero_box;
 pub(crate) mod logo;
 mod menu;
@@ -73,6 +75,25 @@ pub(super) fn hover_style(theme: &Theme, hovered: bool, base: Style) -> Style {
     }
 }
 
+/// Takes the version badge's row on screens with no shortcuts bar.
+pub(super) fn render_pending_hint(
+    area: Rect,
+    buf: &mut Buffer,
+    theme: &Theme,
+    pending: &crate::views::shortcuts_bar::PendingHint,
+) {
+    let key_style = Style::default()
+        .fg(theme.text_primary)
+        .add_modifier(Modifier::BOLD);
+    let action_style = Style::default().fg(theme.gray);
+    let line = Line::from(vec![
+        Span::styled(format!("  {}", pending.shortcut.display()), key_style),
+        Span::styled(":", action_style),
+        Span::styled(format!("press again to {}", pending.label), action_style),
+    ]);
+    buf.set_line(area.x, area.y, &line, area.width);
+}
+
 /// Horizontal margin (left and right) in normal mode.
 const H_MARGIN: u16 = 2;
 /// Horizontal margin in compact mode.
@@ -114,6 +135,8 @@ pub struct WelcomeRenderResult {
     pub refresh_rect: Option<Rect>,
     /// Hit-test rect for the gate URL link (click to open in browser).
     pub gate_url_rect: Option<Rect>,
+    /// `None` when this frame did not paint the notice.
+    pub consent_legibility: Option<crate::app::consent::ConsentLegibility>,
     /// Whether a "Changelog" menu action was rendered (above Quit), so the
     /// input handler can map the extra menu row to the release-notes action
     /// once markdown is available.
@@ -187,6 +210,9 @@ struct WelcomeLayoutInput<'a> {
     expanded: bool,
     /// Whether the info slot reserves a promo upgrade CTA (spacer + button).
     has_upgrade_cta: bool,
+    /// Rows reserved for the prompt box. `None` keeps the default; the blocking screens that paint
+    /// no prompt pass 0 to give the rows back to their message.
+    prompt_height: Option<u16>,
 }
 
 impl WelcomeLayout {
@@ -196,8 +222,12 @@ impl WelcomeLayout {
     }
 
     pub(super) fn fixed_below(tip_height: u16) -> u16 {
+        Self::fixed_below_with_prompt(tip_height, PROMPT_HEIGHT)
+    }
+
+    fn fixed_below_with_prompt(tip_height: u16, prompt_height: u16) -> u16 {
         let tip_gap = if tip_height > 0 { 1u16 } else { 0 };
-        tip_height + tip_gap + PROMPT_HEIGHT + VERSION_GAP + 1
+        tip_height + tip_gap + prompt_height + VERSION_GAP + 1
     }
 
     pub(super) fn effective_changelog(
@@ -249,6 +279,7 @@ impl WelcomeLayout {
             announcement,
             expanded,
             has_upgrade_cta,
+            prompt_height,
         } = input;
         let zero = Rect::default();
         // Pick hero vs stacked first, independent of the announcement's height:
@@ -311,7 +342,8 @@ impl WelcomeLayout {
 
         let gap_after_logo = if error_height > 0 { 1 } else { 0 };
         let tip_gap = if tip_height > 0 { 1u16 } else { 0 };
-        let fixed_below = Self::fixed_below(tip_height);
+        let prompt_height = prompt_height.unwrap_or(PROMPT_HEIGHT);
+        let fixed_below = Self::fixed_below_with_prompt(tip_height, prompt_height);
         let fixed_above = logo_rows + 1 + gap_after_logo + error_height; // +1 for gap after logo
         // The stacked info slot below the menu holds whichever block is shown
         // (announcement or changelog), matching the hero box's single-slot rule.
@@ -369,7 +401,7 @@ impl WelcomeLayout {
             Constraint::Min(flex_gap),
             Constraint::Length(tip_height),
             Constraint::Length(tip_gap),
-            Constraint::Length(PROMPT_HEIGHT),
+            Constraint::Length(prompt_height),
             Constraint::Length(VERSION_GAP),
             Constraint::Length(1), // version
         ])
@@ -551,23 +583,7 @@ fn render_prompt_and_version(
         prompt::render_prompt(prompt_centered, buf, focus, prompt, info, 2, 2, compact);
 
     if let Some(pending) = &pending_hint {
-        let key_style = Style::default()
-            .fg(theme.text_primary)
-            .add_modifier(Modifier::BOLD);
-        let action_style = Style::default().fg(theme.gray);
-        let key_text = pending.shortcut.display();
-        let label = format!("press again to {}", pending.label);
-        let line = Line::from(vec![
-            Span::styled(format!("  {key_text}"), key_style),
-            Span::styled(":", action_style),
-            Span::styled(label, action_style),
-        ]);
-        buf.set_line(
-            layout.version.x,
-            layout.version.y,
-            &line,
-            layout.version.width,
-        );
+        render_pending_hint(layout.version, buf, theme, pending);
     } else if !skip_version {
         render_version_badge(
             layout.version,
@@ -602,6 +618,7 @@ pub struct WelcomeRenderParams<'a> {
     /// Folder-trust state. When `Pending` (auth done, access granted), the
     /// welcome screen renders the trust question instead of the normal prompt.
     pub trust_state: &'a TrustState,
+    pub consent_state: &'a crate::app::consent::ConsentState,
     pub login_label: Option<&'a str>,
     pub auth_code_input: &'a str,
     pub auth_code_cursor_byte: usize,
@@ -624,7 +641,7 @@ pub struct WelcomeRenderParams<'a> {
     pub startup_warnings: &'a [StartupWarning],
     pub pending_update_version: Option<&'a str>,
     /// Recent foreign session offered on ctrl+u, suppressed by a pending update.
-    pub foreign_resume_hint: Option<&'a xai_grok_workspace::foreign_sessions::RecentForeignSession>,
+    pub foreign_resume_hint: Option<&'a xai_grok_foreign_sessions::RecentForeignSession>,
     pub is_api_key_auth: bool,
     pub session_picker_content_results:
         Option<&'a [xai_grok_shell::extensions::session_search::SearchSessionHit]>,
@@ -782,7 +799,19 @@ pub fn render_welcome(
         // sessions. The `if let` destructure makes the `Pending`-only render
         // structurally exhaustive (no `unreachable!`).
         AuthState::Done if params.has_access => {
-            if let TrustState::Pending { workspace } = params.trust_state {
+            // Consent is account-level, so it resolves before the workspace-level trust question.
+            if let ConsentState::Pending { notice, .. } = params.consent_state {
+                consent::render_consent(
+                    content_area,
+                    buf,
+                    &theme,
+                    notice,
+                    params.selected,
+                    params.pending_hint,
+                    h_margin,
+                    params.compact,
+                )
+            } else if let TrustState::Pending { workspace } = params.trust_state {
                 render_welcome_trust(
                     content_area,
                     buf,
@@ -1811,6 +1840,7 @@ fn render_welcome_done(
         announcement: p.announcement,
         expanded: p.welcome_announcement_expanded,
         has_upgrade_cta: p.upgrade_cta.is_some(),
+        prompt_height: None,
     });
 
     // Render startup warning in the error area (same slot as auth errors).
@@ -2226,6 +2256,7 @@ fn render_welcome_done(
         auth_fallback_rect: None,
         refresh_rect: refresh_hit_rect,
         gate_url_rect: gate_url_hit_rect,
+        consent_legibility: None,
         changelog_action_present: show_changelog_action,
         changelog_cta_rect,
         announcement_truncated,
@@ -2822,6 +2853,7 @@ mod tests {
             repo_name: repo_name.into(),
             worktree_label: None,
             last_turn_summary: None,
+            last_recap: None,
             card_detail: None,
         }
     }
@@ -2835,6 +2867,7 @@ mod tests {
             prompt_focus: WelcomePromptFocus::Unfocused,
             auth_state,
             trust_state,
+            consent_state: &ConsentState::Done,
             login_label: None,
             auth_code_input: "",
             auth_code_cursor_byte: 0,
@@ -2894,7 +2927,7 @@ mod tests {
 
     #[test]
     fn foreign_resume_tip_names_each_tool_and_age() {
-        use xai_grok_workspace::foreign_sessions::ForeignSessionTool;
+        use xai_grok_foreign_sessions::ForeignSessionTool;
 
         let auth = AuthState::Done;
         let trust = TrustState::Done;
@@ -2903,7 +2936,7 @@ mod tests {
             (ForeignSessionTool::Codex, "Codex"),
             (ForeignSessionTool::Cursor, "Cursor"),
         ] {
-            let hint = xai_grok_workspace::foreign_sessions::RecentForeignSession {
+            let hint = xai_grok_foreign_sessions::RecentForeignSession {
                 tool,
                 native_id: "native-id".into(),
                 age: std::time::Duration::from_secs(125),
@@ -2921,8 +2954,8 @@ mod tests {
     fn pending_update_suppresses_foreign_resume_tip() {
         let auth = AuthState::Done;
         let trust = TrustState::Done;
-        let hint = xai_grok_workspace::foreign_sessions::RecentForeignSession {
-            tool: xai_grok_workspace::foreign_sessions::ForeignSessionTool::Cursor,
+        let hint = xai_grok_foreign_sessions::RecentForeignSession {
+            tool: xai_grok_foreign_sessions::ForeignSessionTool::Cursor,
             native_id: "native-id".into(),
             age: std::time::Duration::from_secs(30),
         };

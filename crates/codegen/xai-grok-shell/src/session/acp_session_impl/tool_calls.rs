@@ -361,20 +361,27 @@ impl SessionActor {
         }
         let mut final_result: Option<ToolLoop> = None;
         let mut deferred_followups: Vec<ConversationItem> = Vec::new();
-        if tool_calls.len() > 1 {
-            let kind_of = |name: &str| self.agent.borrow().tool_bridge().tool_kind(name);
-            let (body, tail) = split_exit_plan_tail(tool_calls, kind_of);
-            if !body.is_empty() {
-                self.execute_tool_calls_batch(body, &mut deferred_followups, &mut final_result)
-                    .await?;
-            }
-            if !tail.is_empty() {
-                self.execute_tool_calls_batch(tail, &mut deferred_followups, &mut final_result)
-                    .await?;
-            }
-        } else {
-            self.execute_tool_calls_batch(tool_calls, &mut deferred_followups, &mut final_result)
+        let tool_calls = self.reject_excess_media_gen_calls(tool_calls).await?;
+        if !tool_calls.is_empty() {
+            if tool_calls.len() > 1 {
+                let kind_of = |name: &str| self.agent.borrow().tool_bridge().tool_kind(name);
+                let (body, tail) = split_exit_plan_tail(tool_calls, kind_of);
+                if !body.is_empty() {
+                    self.execute_tool_calls_batch(body, &mut deferred_followups, &mut final_result)
+                        .await?;
+                }
+                if !tail.is_empty() {
+                    self.execute_tool_calls_batch(tail, &mut deferred_followups, &mut final_result)
+                        .await?;
+                }
+            } else {
+                self.execute_tool_calls_batch(
+                    tool_calls,
+                    &mut deferred_followups,
+                    &mut final_result,
+                )
                 .await?;
+            }
         }
         {
             let _span = if !deferred_followups.is_empty() {
@@ -392,12 +399,94 @@ impl SessionActor {
                 self.chat_state_handle.push_user_message(chat);
             }
         }
-        self.drain_pending_interjections().await;
+        self.drain_interjections_at_safe_point().await;
         self.flush_pending_skill_reminders().await;
         if let Some(final_result) = final_result {
             return Ok(final_result);
         }
         Ok(ToolLoop::Continue)
+    }
+    /// Per-name media-gen counts that exceed this session's cap.
+    pub(super) fn media_gen_over_cap(
+        &self,
+        calls: &[xai_grok_sampling_types::ToolCall],
+    ) -> Vec<xai_grok_tools::media_gen_limits::MediaGenOverCap> {
+        let kind_of = |name: &str| self.agent.borrow().tool_bridge().tool_kind(name);
+        xai_grok_tools::media_gen_limits::over_cap_by_name(
+            calls.iter().map(|c| (c.name.as_str(), kind_of(&c.name))),
+            &self.rebuild_spec.media_gen_batch_limits,
+        )
+    }
+    /// Every rejected tool_use id still gets a tool_result so the provider batch stays paired.
+    /// Registers Pending `ToolCall` then Failed `ToolCallUpdate` (via
+    /// `handle_tool_not_executed`) so clients do not orphan the update.
+    async fn reject_excess_media_gen_calls(
+        &self,
+        tool_calls: Vec<crate::sampling::types::ToolCallResponse>,
+    ) -> Result<Vec<crate::sampling::types::ToolCallResponse>, acp::Error> {
+        let kind_of = |name: &str| self.agent.borrow().tool_bridge().tool_kind(name);
+        let (allowed, rejected) = xai_grok_tools::media_gen_limits::partition_media_gen_batch(
+            tool_calls,
+            |c| c.function.name.as_str(),
+            |c| kind_of(&c.function.name),
+            &self.rebuild_spec.media_gen_batch_limits,
+        );
+        if rejected.is_empty() {
+            return Ok(allowed);
+        }
+        let rejected_count = rejected.len();
+        let mut rejected_by_name: std::collections::HashMap<String, usize> =
+            std::collections::HashMap::new();
+        for (call, reason) in rejected {
+            let tool_name = call.function.name.clone();
+            *rejected_by_name.entry(tool_name.clone()).or_default() += 1;
+            let tool_call_id = acp::ToolCallId::new(std::sync::Arc::from(call.id.clone()));
+            let early_raw_input =
+                serde_json::from_str::<serde_json::Value>(&call.function.arguments).ok();
+            let meta = self.stamp_tool_meta(None, &tool_name, None);
+            self.send_update(
+                acp::SessionUpdate::ToolCall(
+                    acp::ToolCall::new(tool_call_id.clone(), tool_name.clone())
+                        .kind(acp::ToolKind::Other)
+                        .status(acp::ToolCallStatus::Pending)
+                        .raw_input(early_raw_input)
+                        .meta(meta),
+                ),
+                None,
+            )
+            .await;
+            self.handle_tool_not_executed(&call.id, &tool_call_id, reason)
+                .await?;
+        }
+        let limits = &self.rebuild_spec.media_gen_batch_limits;
+        for (name, rejected_n) in &rejected_by_name {
+            let max = self
+                .agent
+                .borrow()
+                .tool_bridge()
+                .tool_kind(name)
+                .and_then(|k| xai_grok_tools::media_gen_limits::max_calls_per_batch(k, limits))
+                .unwrap_or(0);
+            let admitted = allowed.iter().filter(|c| c.function.name == *name).count();
+            xai_grok_telemetry::unified_log::info(
+                "shell.media_gen.batch_rejected",
+                Some(self.session_info.id.0.as_ref()),
+                Some(serde_json::json!({
+                    "tool_name": name,
+                    "total": admitted + rejected_n,
+                    "rejected": rejected_n,
+                    "max": max,
+                    "disposition": "first_k_tail",
+                })),
+            );
+        }
+        tracing::warn!(
+            session_id = %self.session_info.id.0,
+            rejected = rejected_count,
+            allowed = allowed.len(),
+            "media_gen batch limit rejected tool calls"
+        );
+        Ok(allowed)
     }
     /// Prepare → dispatch → post-flight. Caller owns the outer tail flush.
     async fn execute_tool_calls_batch(
@@ -406,6 +495,10 @@ impl SessionActor {
         deferred_followups: &mut Vec<ConversationItem>,
         final_result: &mut Option<ToolLoop>,
     ) -> Result<(), acp::Error> {
+        if self.permissions.is_auto_mode() {
+            let conversation = self.chat_state_handle.get_conversation().await;
+            super::refresh_classifier_transcript(&self.permissions, &conversation);
+        }
         let mut approved: Vec<PreparedToolCall> = Vec::new();
         for call in tool_calls.into_iter() {
             if final_result.is_some() {
@@ -465,7 +558,7 @@ impl SessionActor {
                             }
                             other => format!("{other:?}"),
                         };
-                        self.emit_event(xai_file_utils::events::Event::McpToolCallCompleted {
+                        self.emit_event(xai_grok_session_events::Event::McpToolCallCompleted {
                             server_name: server.to_string(),
                             tool_name: tool.to_string(),
                             call_id: format!(
@@ -668,7 +761,7 @@ impl SessionActor {
                         .unwrap_or_else(|| prepared.tool_name.clone());
                     let drained = DrainedToolSuccess::new(tool_result);
                     post_tool_use_result = self
-                        .hook_event_active(xai_grok_hooks::event::HookEventName::PostToolUse)
+                        .may_have_hooks_for(xai_grok_hooks::event::HookEventName::PostToolUse)
                         .then(|| {
                             serde_json::to_value(drained.output())
                                 .unwrap_or(serde_json::Value::Null)
@@ -706,9 +799,9 @@ impl SessionActor {
                         )
                         .await;
                     deferred_followups.extend(err_followups);
-                    if self
-                        .hook_event_active(xai_grok_hooks::event::HookEventName::PostToolUseFailure)
-                    {
+                    if self.may_have_hooks_for(
+                        xai_grok_hooks::event::HookEventName::PostToolUseFailure,
+                    ) {
                         let raw_input: serde_json::Value =
                             serde_json::from_str(&prepared.raw_arguments)
                                 .unwrap_or(serde_json::Value::Null);
@@ -931,7 +1024,7 @@ impl SessionActor {
         );
         let parse_result = serde_json::from_str::<serde_json::Value>(args_str);
         let mut concatenated_json_count: usize = 0;
-        let raw_input = match &parse_result {
+        let mut raw_input = match &parse_result {
             Ok(value) => value.clone(),
             Err(e) => {
                 if let Some(objects) = crate::session::helpers::tool_input_parsing::try_extract_concatenated_json_objects(
@@ -979,13 +1072,11 @@ impl SessionActor {
                 }
             }
         };
-        let tool_input = match self
-            .agent
-            .borrow()
-            .tool_bridge()
+        let parsed = self
+            .tool_bridge_handle()
             .try_parse(&call.function.name, raw_input.clone())
-            .await
-        {
+            .await;
+        let mut tool_input = match parsed {
             Ok(input) => input,
             Err(err) => {
                 self.handle_tool_parse_error(
@@ -1000,49 +1091,19 @@ impl SessionActor {
                 return Ok(Err(ToolLoop::ToolParsingError));
             }
         };
-        let access_kind = AccessKind::from(&tool_input);
-        let plan_gate = plan_mode_edit_gate(&self.plan_mode.lock(), &tool_input, &access_kind);
-        if plan_gate != PlanEditGate::Allow {
-            tracing::info_span!(
-                "tool.decision",
-                tool_name = %call.function.name,
-                tool_use_id = %call.id,
-                decision = "deny",
-                source = "plan_mode",
-                wait_ms = 0_i64,
-            )
-            .in_scope(|| {});
-            let msg = self.plan_mode_edit_rejected_message().await;
-            self.handle_tool_not_executed(&call.id, &tool_call_id, msg)
-                .await?;
-            return Ok(Err(ToolLoop::Continue));
-        }
-        let tool_call_display = self
-            .send_tool_call_start(&tool_call_id, &call.function.name, tool_input.clone())
-            .await;
         let _recovered_raw_input = if concatenated_json_count > 0 {
             Some(raw_input.clone())
         } else {
             None
         };
-        let dispatch_target_name = tool_input.dispatch_target_name();
-        let resolved_tool_name = dispatch_target_name
+        let mut dispatch_target_name = tool_input.dispatch_target_name();
+        let mut resolved_tool_name = dispatch_target_name
             .clone()
             .unwrap_or_else(|| call.function.name.clone());
-        if self.hook_event_active(xai_grok_hooks::event::HookEventName::PreToolUse) {
-            let (hook_tool_input, hook_tool_input_truncated) =
-                xai_grok_hooks::event::truncate_payload(raw_input.clone());
-            let envelope = self.make_hook_envelope(
-                xai_grok_hooks::event::HookEventName::PreToolUse,
-                None,
-                xai_grok_hooks::event::HookPayload::PreToolUse {
-                    tool_name: resolved_tool_name.clone(),
-                    tool_use_id: call.id.clone(),
-                    tool_input: hook_tool_input,
-                    tool_input_truncated: hook_tool_input_truncated,
-                    subagent_type: self.subagent_type_label(),
-                },
-            );
+        let mut raw_arguments = call.function.arguments.clone();
+        if self.may_have_hooks_for(xai_grok_hooks::event::HookEventName::PreToolUse) {
+            let mut envelope =
+                self.make_pre_tool_use_envelope(&resolved_tool_name, &call.id, &raw_input);
             let hook_registry_snapshot = self.hook_registry.borrow().clone();
             if let Some(registry) = hook_registry_snapshot {
                 let ctx = self.hook_run_ctx();
@@ -1075,6 +1136,35 @@ impl SessionActor {
                         )
                         .await?));
                 }
+                if let Some(rewrite) = pre_result.updated_input {
+                    let updated = rewrite.input;
+                    let updated_args = updated.to_string();
+                    let parsed = self
+                        .tool_bridge_handle()
+                        .try_parse(&call.function.name, updated.clone())
+                        .await;
+                    tool_input = match parsed {
+                        Ok(input) => input,
+                        Err(err) => {
+                            let msg = format!(
+                                "PreToolUse hook '{}' returned an invalid updatedInput: {err}",
+                                rewrite.hook_name
+                            );
+                            self.handle_tool_not_executed(&call.id, &tool_call_id, msg)
+                                .await?;
+                            return Ok(Err(ToolLoop::ToolParsingError));
+                        }
+                    };
+                    dispatch_target_name = tool_input.dispatch_target_name();
+                    resolved_tool_name = dispatch_target_name
+                        .clone()
+                        .unwrap_or_else(|| call.function.name.clone());
+                    raw_arguments = updated_args;
+                    raw_input = updated;
+                    concatenated_json_count = 0;
+                    envelope =
+                        self.make_pre_tool_use_envelope(&resolved_tool_name, &call.id, &raw_input);
+                }
             }
             if let Some(denied) = self
                 .run_pre_tool_use_client_hook(&call, &tool_call_id, &envelope)
@@ -1083,6 +1173,26 @@ impl SessionActor {
                 return Ok(Err(denied));
             }
         }
+        let access_kind = AccessKind::from(&tool_input);
+        let plan_gate = plan_mode_edit_gate(&self.plan_mode.lock(), &tool_input, &access_kind);
+        if plan_gate != PlanEditGate::Allow {
+            tracing::info_span!(
+                "tool.decision",
+                tool_name = %call.function.name,
+                tool_use_id = %call.id,
+                decision = "deny",
+                source = "plan_mode",
+                wait_ms = 0_i64,
+            )
+            .in_scope(|| {});
+            let msg = self.plan_mode_edit_rejected_message().await;
+            self.handle_tool_not_executed(&call.id, &tool_call_id, msg)
+                .await?;
+            return Ok(Err(ToolLoop::Continue));
+        }
+        let tool_call_display = self
+            .send_tool_call_start(&tool_call_id, &call.function.name, tool_input.clone())
+            .await;
         let plan_file_auto_approve = if let AccessKind::Edit(ref path) = access_kind {
             self.plan_mode
                 .lock()
@@ -1165,13 +1275,6 @@ impl SessionActor {
                 !self.session_info.id.0.is_empty(),
                 "permission reverse-request must carry a non-empty sessionId (design §5.4)"
             );
-            if self.permissions.is_auto_mode() {
-                let conv = self.chat_state_handle.get_conversation().await;
-                let turns = super::build_classifier_turns(&conv, super::CLASSIFIER_REFRESH_TURNS);
-                if !turns.is_empty() {
-                    self.permissions.set_classifier_transcript(turns);
-                }
-            }
             let path_context = Some(xai_grok_workspace::permission::types::RequestPathContext {
                 real_cwd: std::path::PathBuf::from(self.session_info.cwd.as_str()),
                 display_cwd: self
@@ -1205,16 +1308,16 @@ impl SessionActor {
                 &call.function.name,
                 match &decision {
                     Decision::Allow | Decision::Ask => {
-                        xai_file_utils::events::types::PermissionDecision::Allow
+                        xai_grok_session_events::types::PermissionDecision::Allow
                     }
                     Decision::Reject(_) | Decision::PolicyDeny(_) => {
-                        xai_file_utils::events::types::PermissionDecision::Deny
+                        xai_grok_session_events::types::PermissionDecision::Deny
                     }
                     Decision::Cancelled => {
-                        xai_file_utils::events::types::PermissionDecision::Cancelled
+                        xai_grok_session_events::types::PermissionDecision::Cancelled
                     }
                     Decision::FollowupMessage(_) => {
-                        xai_file_utils::events::types::PermissionDecision::Followup
+                        xai_grok_session_events::types::PermissionDecision::Followup
                     }
                 },
                 perm_start,
@@ -1449,7 +1552,7 @@ impl SessionActor {
             call_id: call.id.clone(),
             tool_call_id,
             tool_name: call.function.name.clone(),
-            raw_arguments: call.function.arguments.clone(),
+            raw_arguments,
             parsed_args: raw_input.clone(),
             model_id: model_id_str,
             concatenated_json_count,
@@ -1613,7 +1716,7 @@ impl SessionActor {
         let prompt_blocks = vec![acp::ContentBlock::Text(acp::TextContent::new(text))];
         let (respond_to, _rx) = oneshot::channel();
         let _ = self
-            .queue_input(QueueInputRequest::new(
+            .queue_input(QueueInputRequest::from_legacy_prompt_id(
                 prompt_blocks,
                 prompt_id,
                 mode,
@@ -2028,6 +2131,26 @@ impl SessionActor {
             trigger: xai_grok_telemetry::events::SkillTrigger::SkillMdRead,
         });
     }
+    fn make_pre_tool_use_envelope(
+        &self,
+        resolved_tool_name: &str,
+        call_id: &str,
+        input: &serde_json::Value,
+    ) -> xai_grok_hooks::event::HookEventEnvelope {
+        let (tool_input, tool_input_truncated) =
+            xai_grok_hooks::event::truncate_payload(input.clone());
+        self.make_hook_envelope(
+            xai_grok_hooks::event::HookEventName::PreToolUse,
+            None,
+            xai_grok_hooks::event::HookPayload::PreToolUse {
+                tool_name: resolved_tool_name.to_string(),
+                tool_use_id: call_id.to_string(),
+                tool_input,
+                tool_input_truncated,
+                subagent_type: self.subagent_type_label(),
+            },
+        )
+    }
     async fn handle_tool_parse_error(
         &self,
         tool_call_id: &acp::ToolCallId,
@@ -2093,7 +2216,7 @@ impl SessionActor {
         }
         let mut state = self.state.lock().await;
         let dropped = state.sweep_pending_inputs(|i| {
-            i.origin
+            i.input_origin
                 .completion_id()
                 .is_some_and(|id| consumed_ids.contains(&id))
         });
@@ -2107,7 +2230,7 @@ impl SessionActor {
         if let Some(reservations) = &self.tool_context.task_completion_reservations {
             for task_id in dropped
                 .iter()
-                .filter_map(|input| input.origin.completion_id())
+                .filter_map(|input| input.input_origin.completion_id())
             {
                 reservations.release(task_id);
             }
@@ -2121,23 +2244,21 @@ impl SessionActor {
             );
         }
     }
-    /// Drain all queued synthetic prompts (auto-wake task/subagent
-    /// completions, notification-drain batches, and goal-summary turns —
-    /// every `PromptOrigin` variant where `is_synthetic()` returns
-    /// `true`) from `pending_inputs`, and clear ALL
-    /// `pending_notifications` unconditionally (every current
-    /// `NotificationSource` variant is sourced from a synthetic event).
+    /// Drain queued runtime producer wakes (non-`ShutdownPolicy::Drain`
+    /// origins: auto-wake task/subagent completions, notification-drain
+    /// batches, goal-summary turns, etc.) from `pending_inputs`, and clear
+    /// ALL `pending_notifications` unconditionally.
     ///
-    /// Called from `SessionCommand::Shutdown` as a defensive backstop
-    /// so a synthetic prompt that slipped past the per-tool-result
-    /// sweep cannot be flushed to `chat_history.jsonl` after the actor
-    /// returns. Real user inputs are preserved.
+    /// Called from `SessionCommand::Shutdown` as a defensive backstop so a
+    /// runtime wake that slipped past the per-tool-result sweep cannot be
+    /// flushed to `chat_history.jsonl` after the actor returns. Drain-policy
+    /// rows are preserved.
     pub(super) async fn drop_pending_synthetic_items(&self) {
         let mut state = self.state.lock().await;
         let mut kept = VecDeque::with_capacity(state.pending_inputs.len());
         let mut dropped = Vec::new();
         for input in std::mem::take(&mut state.pending_inputs) {
-            if input.origin.is_synthetic() {
+            if input.input_origin.is_preemptible_runtime_wake() {
                 dropped.push(input);
             } else {
                 kept.push_back(input);
@@ -2149,7 +2270,7 @@ impl SessionActor {
         if let Some(reservations) = &self.tool_context.task_completion_reservations {
             for task_id in dropped
                 .iter()
-                .filter_map(|input| input.origin.completion_id())
+                .filter_map(|input| input.input_origin.completion_id())
             {
                 reservations.release(task_id);
             }
@@ -2434,14 +2555,14 @@ impl SessionActor {
                 std::mem::take(&mut norm_result.dropped),
                 is_cursor_for_tool_result,
             ) {
-                deferred_followups.push(ConversationItem::user(notice));
+                deferred_followups.push(ConversationItem::system_reminder(notice));
                 self.send_xai_notification(XaiSessionUpdate::ImageDropped { notes })
                     .await;
             }
             for norm in norm_result.images {
                 let url = format!("data:{};base64,{}", norm.mime_type, norm.data);
                 let mut image_msg =
-                    ConversationItem::user("[Image extracted from tool result above]");
+                    ConversationItem::system_reminder("[Image extracted from tool result above]");
                 image_msg.add_image(url);
                 deferred_followups.push(image_msg);
             }
@@ -2646,11 +2767,18 @@ impl SessionActor {
                 .await;
             }
             SamplingEvent::Completed {
-                response, metrics, ..
+                request_id,
+                response,
+                metrics,
             } => {
                 if let Some(tx) = self.turn_stream_drained.lock().take() {
                     let _ = tx.send(());
                 }
+                let session = Arc::clone(self);
+                let rid = request_id.clone();
+                tokio::task::spawn_local(async move {
+                    session.apply_pending_image_strip(&rid).await;
+                });
                 if let Some(policy) = self.doom_loop_recovery {
                     let triggers = policy.confident_triggers(&response.doom_loop_signals);
                     if !triggers.is_empty() {
@@ -2684,6 +2812,14 @@ impl SessionActor {
             }
             SamplingEvent::ModelMetadata { metadata, .. } => {
                 self.handle_model_metadata_update(metadata).await;
+            }
+            SamplingEvent::ImagesStripped {
+                request_id,
+                stripped_urls,
+                reason,
+            } => {
+                self.handle_images_stripped(request_id, stripped_urls, reason)
+                    .await;
             }
             SamplingEvent::Retrying {
                 request_id,
@@ -2734,6 +2870,7 @@ impl SessionActor {
                 .await;
             }
             SamplingEvent::Failed { request_id, error } => {
+                self.drop_pending_image_strip(&request_id);
                 xai_grok_telemetry::unified_log::error(
                     "shell.turn.inference_failed",
                     Some(self.session_info.id.0.as_ref()),

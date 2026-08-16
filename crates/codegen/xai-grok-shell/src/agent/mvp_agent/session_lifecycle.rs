@@ -1,6 +1,17 @@
 //! Session lifecycle, roster deltas, and the idle-session supervisor for [`MvpAgent`].
 //! Co-located `#[path]`-style child of `mvp_agent` (`use super::*`) so the `impl`
 //! block keeps access to `MvpAgent`'s private fields.
+#![cfg_attr(
+    not(test),
+    deny(
+        clippy::unwrap_used,
+        clippy::expect_used,
+        clippy::panic,
+        clippy::unreachable,
+        clippy::todo,
+        clippy::unimplemented
+    )
+)]
 use super::*;
 /// Bound on close's wait for a prompt still in intake.
 pub(super) const CLOSE_INTAKE_WAIT: std::time::Duration = std::time::Duration::from_secs(2);
@@ -481,6 +492,7 @@ impl MvpAgent {
             resident_resources: counts.resident_resources,
             retained_resources: counts.retained_resources,
             dispatch_locks: counts.dispatch_locks,
+            live_orphan_heal_locks: counts.live_orphan_heal_locks,
             session_turn_numbers: counts.session_turn_numbers,
             permission_event_receivers: counts.permission_event_receivers,
             model_unavailable_sessions: counts.model_unavailable_sessions,
@@ -509,6 +521,7 @@ pub(crate) struct RegistrySnapshot {
     pub resident_resources: usize,
     pub retained_resources: usize,
     pub dispatch_locks: usize,
+    pub live_orphan_heal_locks: usize,
     pub session_turn_numbers: usize,
     pub permission_event_receivers: usize,
     pub model_unavailable_sessions: usize,
