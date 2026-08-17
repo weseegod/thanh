@@ -906,7 +906,7 @@ impl SessionActor {
                 let percentage = xai_token_estimation::usage_percentage_u8(total_tokens, cw);
                 if let Some(mut cfg) = self.chat_state_handle.get_sampling_config().await
                     && let Some(new_cw) = std::num::NonZeroU64::new(cw)
-                    && self.compaction.context_window_override.is_none()
+                    && self.compaction.context_window_override.get().is_none()
                 {
                     cfg.context_window = new_cw;
                     self.chat_state_handle.update_sampling_config(cfg);

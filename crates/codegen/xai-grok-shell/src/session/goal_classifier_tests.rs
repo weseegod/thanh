@@ -3555,17 +3555,17 @@ fn cfg_strategist(config: Option<u32>, remote: Option<u32>) -> crate::agent::con
 fn resolve_goal_verifier_count_env_clamps() {
     unsafe { std::env::set_var("GROK_GOAL_VERIFIER_N", "0") };
     assert_eq!(
-        cfg_verifier(None, None).resolve_goal_verifier_count().value,
+        cfg_verifier(None, None).resolve_goal_verifier_count(&Default::default(), false).value,
         GOAL_VERIFIER_SKEPTIC_MIN
     );
     unsafe { std::env::set_var("GROK_GOAL_VERIFIER_N", "99") };
     assert_eq!(
-        cfg_verifier(None, None).resolve_goal_verifier_count().value,
+        cfg_verifier(None, None).resolve_goal_verifier_count(&Default::default(), false).value,
         GOAL_VERIFIER_SKEPTIC_MAX
     );
     unsafe { std::env::set_var("GROK_GOAL_VERIFIER_N", "garbage") };
     assert_eq!(
-        cfg_verifier(None, None).resolve_goal_verifier_count().value,
+        cfg_verifier(None, None).resolve_goal_verifier_count(&Default::default(), false).value,
         GOAL_VERIFIER_SKEPTIC_COUNT,
         "invalid env falls through to the default"
     );
@@ -3579,7 +3579,7 @@ fn resolve_goal_verifier_count_default_when_nothing_set() {
     // Literal 3 (not the const) so a regression that flips the production
     // default fails LOUDLY here, where a `== CONST` tautology would pass.
     assert_eq!(
-        cfg_verifier(None, None).resolve_goal_verifier_count().value,
+        cfg_verifier(None, None).resolve_goal_verifier_count(&Default::default(), false).value,
         3
     );
 }
@@ -3596,32 +3596,32 @@ fn prod_default_skeptic_count_is_three() {
 fn resolve_goal_verifier_count_precedence_and_clamp() {
     unsafe { std::env::remove_var("GROK_GOAL_VERIFIER_N") };
     // config > remote.
-    let r = cfg_verifier(Some(4), Some(2)).resolve_goal_verifier_count();
+    let r = cfg_verifier(Some(4), Some(2)).resolve_goal_verifier_count(&Default::default(), false);
     assert_eq!(r.value, 4);
     assert_eq!(r.source, ConfigSource::Config);
     // remote when no config.
     assert_eq!(
         cfg_verifier(None, Some(4))
-            .resolve_goal_verifier_count()
+            .resolve_goal_verifier_count(&Default::default(), false)
             .value,
         4
     );
     // env > config.
     unsafe { std::env::set_var("GROK_GOAL_VERIFIER_N", "2") };
-    let r = cfg_verifier(Some(4), None).resolve_goal_verifier_count();
+    let r = cfg_verifier(Some(4), None).resolve_goal_verifier_count(&Default::default(), false);
     assert_eq!(r.value, 2);
     assert_eq!(r.source, ConfigSource::Env);
     unsafe { std::env::remove_var("GROK_GOAL_VERIFIER_N") };
     // config is clamped to [MIN, MAX].
     assert_eq!(
         cfg_verifier(Some(99), None)
-            .resolve_goal_verifier_count()
+            .resolve_goal_verifier_count(&Default::default(), false)
             .value,
         GOAL_VERIFIER_SKEPTIC_MAX
     );
     assert_eq!(
         cfg_verifier(Some(0), None)
-            .resolve_goal_verifier_count()
+            .resolve_goal_verifier_count(&Default::default(), false)
             .value,
         GOAL_VERIFIER_SKEPTIC_MIN
     );
@@ -3704,14 +3704,14 @@ fn resolve_strategist_every_default_tracks_cap_floored_at_one() {
     // Default N = max(1, cap / 2).
     assert_eq!(
         cfg_strategist(None, None)
-            .resolve_goal_strategist_every(10)
+            .resolve_goal_strategist_every(10, &Default::default(), 2, false)
             .value,
         5
     );
     for cap in [1, 2, 3] {
         assert_eq!(
             cfg_strategist(None, None)
-                .resolve_goal_strategist_every(cap)
+                .resolve_goal_strategist_every(cap, &Default::default(), 2, false)
                 .value,
             1,
             "cap={cap} must floor N to 1"
@@ -3723,26 +3723,26 @@ fn resolve_strategist_every_default_tracks_cap_floored_at_one() {
 #[serial]
 fn resolve_strategist_every_precedence_and_floor() {
     // config > remote.
-    let r = cfg_strategist(Some(3), Some(4)).resolve_goal_strategist_every(10);
+    let r = cfg_strategist(Some(3), Some(4)).resolve_goal_strategist_every(10, &Default::default(), 2, false);
     assert_eq!(r.value, 3);
     assert_eq!(r.source, ConfigSource::Config);
     // remote when no config.
     assert_eq!(
         cfg_strategist(None, Some(4))
-            .resolve_goal_strategist_every(10)
+            .resolve_goal_strategist_every(10, &Default::default(), 2, false)
             .value,
         4
     );
     // env > config + remote.
     unsafe { std::env::set_var("GROK_GOAL_STRATEGIST_EVERY", "7") };
-    let r = cfg_strategist(Some(3), Some(4)).resolve_goal_strategist_every(10);
+    let r = cfg_strategist(Some(3), Some(4)).resolve_goal_strategist_every(10, &Default::default(), 2, false);
     assert_eq!(r.value, 7);
     assert_eq!(r.source, ConfigSource::Env);
     // invalid env falls through to the default (cap/2).
     unsafe { std::env::set_var("GROK_GOAL_STRATEGIST_EVERY", "not-a-number") };
     assert_eq!(
         cfg_strategist(None, None)
-            .resolve_goal_strategist_every(10)
+            .resolve_goal_strategist_every(10, &Default::default(), 2, false)
             .value,
         5
     );
@@ -3750,13 +3750,13 @@ fn resolve_strategist_every_precedence_and_floor() {
     // 0 from config/remote floors to 1 (the `every > 0` trigger guard).
     assert_eq!(
         cfg_strategist(Some(0), None)
-            .resolve_goal_strategist_every(10)
+            .resolve_goal_strategist_every(10, &Default::default(), 2, false)
             .value,
         1
     );
     assert_eq!(
         cfg_strategist(None, Some(0))
-            .resolve_goal_strategist_every(10)
+            .resolve_goal_strategist_every(10, &Default::default(), 2, false)
             .value,
         1
     );

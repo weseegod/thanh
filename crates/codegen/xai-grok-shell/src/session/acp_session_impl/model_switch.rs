@@ -11,7 +11,15 @@ impl SessionActor {
         auto_compact_threshold_percent: u8,
     ) -> Result<acp::ModelId, acp::Error> {
         let model_id = acp::ModelId::new(sampling_config.model.clone());
-        let new_context_window = self.compaction.context_window_override.unwrap_or_else(|| {
+        let pin = self
+            .models_manager
+            .context_window_pin(model_id.0.as_ref())
+            .or_else(|| {
+                self.models_manager
+                    .context_window_pin(&sampling_config.model)
+            });
+        self.compaction.context_window_override.set(pin);
+        let new_context_window = pin.unwrap_or_else(|| {
             std::num::NonZeroU64::new(sampling_config.context_window).unwrap_or_else(|| {
                 std::num::NonZeroU64::new(DEFAULT_CONTEXT_WINDOW)
                     .expect("DEFAULT_CONTEXT_WINDOW is non-zero")

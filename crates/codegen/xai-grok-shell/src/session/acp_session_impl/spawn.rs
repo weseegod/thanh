@@ -460,20 +460,26 @@ pub(crate) async fn spawn_session_actor(
         },
         |mc| mc.pruning.clone(),
     );
-    let context_window_override = std::env::var("GROK_DEBUG_CONTEXT_WINDOW")
-        .ok()
-        .and_then(|v| v.parse::<u64>().ok())
-        .and_then(std::num::NonZeroU64::new);
+    let context_window_override = models_manager
+        .context_window_pin(session_model_id.0.as_ref())
+        .or_else(|| models_manager.context_window_pin(&sampling_config.model));
     let baseline_context_window = std::num::NonZeroU64::new(sampling_config.context_window)
         .unwrap_or_else(|| {
             std::num::NonZeroU64::new(DEFAULT_CONTEXT_WINDOW)
                 .expect("DEFAULT_CONTEXT_WINDOW is non-zero")
         });
-    if let Some(cw) = context_window_override {
+    if let Some(cw) = crate::util::config::debug_context_window_override() {
         tracing::warn!(
             override_context_window = cw.get(),
             original_context_window = baseline_context_window.get(),
             "GROK_DEBUG_CONTEXT_WINDOW override active"
+        );
+    } else if let Some(cw) = context_window_override {
+        tracing::info!(
+            override_context_window = cw.get(),
+            original_context_window = baseline_context_window.get(),
+            model = %session_model_id.0,
+            "pinning context_window from [model] config against header upgrades"
         );
     }
     let chat_state_sampling_config = xai_grok_sampling_types::SamplingConfig {
@@ -1614,7 +1620,7 @@ pub(crate) async fn spawn_session_actor(
         compaction: super::compaction_config::CompactionConfig {
             threshold_percent: std::cell::Cell::new(auto_compact_threshold_percent),
             force_compact: force_compact.clone(),
-            context_window_override,
+            context_window_override: std::cell::Cell::new(context_window_override),
             count: std::sync::atomic::AtomicU64::new(0),
             auto_compact_suppressed: std::sync::atomic::AtomicU8::new(0),
             previous_model: std::cell::Cell::new(None),

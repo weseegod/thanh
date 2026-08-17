@@ -602,6 +602,11 @@ impl ModelsManager {
             .and_then(|e| e.info().compaction_at_tokens)
     }
 
+    /// Debug env, else an explicit user/managed `[model.<id>].context_window`.
+    pub(crate) fn context_window_pin(&self, model_id: &str) -> Option<std::num::NonZeroU64> {
+        crate::util::config::resolve_context_window_pin(&self.inner.cfg.read(), model_id)
+    }
+
     /// Catalog opt-in to display the served-checkpoint fingerprint for this model.
     pub(crate) fn model_show_model_fingerprint(&self, model_id: &str) -> bool {
         self.with_catalog_entry(model_id, |e| e.info().show_model_fingerprint)

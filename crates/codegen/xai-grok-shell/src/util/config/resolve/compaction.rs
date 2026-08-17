@@ -1,6 +1,45 @@
 /// Default auto-compact threshold (% of context window) when no source sets it.
 pub const DEFAULT_AUTO_COMPACT_THRESHOLD_PERCENT: u8 = 85;
 
+/// Env pin for the session context window (tokens). Wins over user TOML.
+pub(crate) const ENV_DEBUG_CONTEXT_WINDOW: &str = "GROK_DEBUG_CONTEXT_WINDOW";
+
+/// Process-wide context-window pin from [`ENV_DEBUG_CONTEXT_WINDOW`].
+pub(crate) fn debug_context_window_override() -> Option<std::num::NonZeroU64> {
+    std::env::var(ENV_DEBUG_CONTEXT_WINDOW)
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .and_then(std::num::NonZeroU64::new)
+}
+
+/// Explicit `[model.<id>].context_window` from user/managed TOML, if set.
+///
+/// Lookup is by catalog key first, then by routing slug (`model = "..."`).
+/// Used to pin auto-compact against `x-grok-context-window` header upgrades.
+pub(crate) fn user_context_window_override(
+    cfg: &crate::agent::config::Config,
+    model_id: &str,
+) -> Option<std::num::NonZeroU64> {
+    let from_entry = |m: &crate::agent::config::ConfigModelOverride| {
+        m.context_window.and_then(std::num::NonZeroU64::new)
+    };
+    if let Some(cw) = cfg.config_models.get(model_id).and_then(from_entry) {
+        return Some(cw);
+    }
+    cfg.config_models.iter().find_map(|(key, m)| {
+        let slug = m.model.as_deref().unwrap_or(key.as_str());
+        (slug == model_id).then(|| from_entry(m)).flatten()
+    })
+}
+
+/// Debug env wins; otherwise a user/managed `[model.<id>].context_window`.
+pub(crate) fn resolve_context_window_pin(
+    cfg: &crate::agent::config::Config,
+    model_id: &str,
+) -> Option<std::num::NonZeroU64> {
+    debug_context_window_override().or_else(|| user_context_window_override(cfg, model_id))
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum CompactionToolChoice {
     #[default]
@@ -215,5 +254,61 @@ mod compaction_tool_choice_tests {
         assert_eq!("AUTO".parse(), Ok(CompactionToolChoice::Auto));
         assert_eq!(" None ".parse(), Ok(CompactionToolChoice::None));
         assert!("required".parse::<CompactionToolChoice>().is_err());
+    }
+}
+
+#[cfg(test)]
+mod user_context_window_override_tests {
+    use super::user_context_window_override;
+    use crate::agent::config::Config;
+
+    fn cfg(toml: &str) -> Config {
+        let raw: toml::Value = toml::from_str(toml).expect("toml");
+        Config::new_from_toml_cfg(&raw).expect("config")
+    }
+
+    #[test]
+    fn catalog_key_pin() {
+        let c = cfg(
+            r#"
+            [model."grok-4.6"]
+            context_window = 300000
+            "#,
+        );
+        assert_eq!(
+            user_context_window_override(&c, "grok-4.6").map(|n| n.get()),
+            Some(300_000)
+        );
+        assert_eq!(user_context_window_override(&c, "grok-4.5"), None);
+    }
+
+    #[test]
+    fn routing_slug_pin() {
+        let c = cfg(
+            r#"
+            [model."deepseek/flash"]
+            model = "deepseek-v4-flash"
+            context_window = 128000
+            "#,
+        );
+        assert_eq!(
+            user_context_window_override(&c, "deepseek-v4-flash").map(|n| n.get()),
+            Some(128_000)
+        );
+        assert_eq!(
+            user_context_window_override(&c, "deepseek/flash").map(|n| n.get()),
+            Some(128_000)
+        );
+    }
+
+    #[test]
+    fn missing_field_is_not_a_pin() {
+        let c = cfg(
+            r#"
+            [model."grok-4.6"]
+            input = ["text"]
+            "#,
+        );
+        assert_eq!(user_context_window_override(&c, "grok-4.6"), None);
     }
 }

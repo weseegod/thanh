@@ -117,7 +117,7 @@ async fn create_test_actor(
         compaction: crate::session::compaction_config::CompactionConfig {
             threshold_percent: std::cell::Cell::new(threshold_percent),
             force_compact: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            context_window_override: None,
+            context_window_override: std::cell::Cell::new(None),
             count: std::sync::atomic::AtomicU64::new(0),
             auto_compact_suppressed: std::sync::atomic::AtomicU8::new(0),
             previous_model: std::cell::Cell::new(None),
@@ -414,6 +414,139 @@ async fn test_response_header_context_window_downgrade_rejected() {
         })
         .await;
 }
+
+/// A user/debug pin must block `x-grok-context-window` upgrades so
+/// `[model.<id>].context_window` stays the auto-compact threshold.
+#[tokio::test(flavor = "current_thread")]
+async fn test_pinned_context_window_rejects_header_upgrade() {
+    let local = tokio::task::LocalSet::new();
+    local
+        .run_until(async {
+            let (gateway_tx, _gateway_rx) =
+                mpsc::unbounded_channel::<xai_acp_lib::AcpClientMessage>();
+            let (persistence_tx, _persistence_rx) = mpsc::unbounded_channel::<PersistenceMsg>();
+            let actor = create_test_actor(285_000, 300_000, 80, gateway_tx, persistence_tx).await;
+            actor
+                .compaction
+                .context_window_override
+                .set(std::num::NonZeroU64::new(300_000));
+            actor
+                .handle_model_metadata_update(crate::sampling::ResponseModelMetadata {
+                    context_window: Some(1_000_000),
+                    max_completion_tokens: None,
+                    models_etag: None,
+                })
+                .await;
+            let cfg = actor.chat_state_handle.get_sampling_config().await.unwrap();
+            assert_eq!(
+                cfg.context_window.get(),
+                300_000,
+                "pinned context_window must not be upgraded by response header"
+            );
+            let trigger = actor.check_auto_compact_needed().await;
+            assert!(
+                trigger.is_some(),
+                "285k / 300k at 80% threshold must auto-compact"
+            );
+            assert_eq!(trigger.unwrap().percentage, 95);
+        })
+        .await;
+}
+
+/// Switching to a model without a user pin clears the previous pin
+/// so the new model's window (and later header upgrades) apply.
+#[tokio::test(flavor = "current_thread")]
+async fn test_model_switch_clears_user_context_window_pin() {
+    let local = tokio::task::LocalSet::new();
+    local
+        .run_until(async {
+            let (gateway_tx, _gateway_rx) =
+                mpsc::unbounded_channel::<xai_acp_lib::AcpClientMessage>();
+            let (persistence_tx, _persistence_rx) = mpsc::unbounded_channel::<PersistenceMsg>();
+            let actor = create_test_actor(0, 300_000, 80, gateway_tx, persistence_tx).await;
+            actor
+                .compaction
+                .context_window_override
+                .set(std::num::NonZeroU64::new(300_000));
+            let mut sampling = xai_grok_sampler::SamplerConfig::default();
+            sampling.model = "unpinned-model".to_string();
+            sampling.context_window = 500_000;
+            let switched = actor
+                .handle_set_session_model(sampling, false, false, true, 80)
+                .await
+                .expect("model switch");
+            assert_eq!(switched.0.as_ref(), "unpinned-model");
+            assert!(
+                actor.compaction.context_window_override.get().is_none(),
+                "pin must clear when the destination model has no [model] context_window"
+            );
+            let cfg = actor.chat_state_handle.get_sampling_config().await.unwrap();
+            assert_eq!(cfg.context_window.get(), 500_000);
+        })
+        .await;
+}
+
+/// Switching onto a model with `[model.<id>].context_window` pins that window.
+#[tokio::test(flavor = "current_thread")]
+async fn test_model_switch_pins_destination_context_window() {
+    let local = tokio::task::LocalSet::new();
+    local
+        .run_until(async {
+            let (gateway_tx, _gateway_rx) =
+                mpsc::unbounded_channel::<xai_acp_lib::AcpClientMessage>();
+            let (persistence_tx, _persistence_rx) = mpsc::unbounded_channel::<PersistenceMsg>();
+            let mut actor = create_test_actor(0, 500_000, 80, gateway_tx, persistence_tx).await;
+            let raw: toml::Value = toml::from_str(
+                r#"
+                [model."pinned-model"]
+                context_window = 200000
+                "#,
+            )
+            .unwrap();
+            let cfg = crate::agent::config::Config::new_from_toml_cfg(&raw).unwrap();
+            let grok_home = crate::util::grok_home::grok_home();
+            let auth_manager = std::sync::Arc::new(crate::auth::AuthManager::new(
+                &grok_home,
+                crate::auth::GrokComConfig::default(),
+            ));
+            actor.models_manager = crate::agent::models::ModelsManager::new(
+                None,
+                indexmap::IndexMap::new(),
+                acp::ModelId::new("pinned-model"),
+                auth_manager,
+                cfg,
+            );
+            let mut sampling = xai_grok_sampler::SamplerConfig::default();
+            sampling.model = "pinned-model".to_string();
+            sampling.context_window = 200_000;
+            actor
+                .handle_set_session_model(sampling, false, false, true, 80)
+                .await
+                .expect("model switch");
+            assert_eq!(
+                actor
+                    .compaction
+                    .context_window_override
+                    .get()
+                    .map(|n| n.get()),
+                Some(200_000)
+            );
+            actor
+                .handle_model_metadata_update(crate::sampling::ResponseModelMetadata {
+                    context_window: Some(1_000_000),
+                    max_completion_tokens: None,
+                    models_etag: None,
+                })
+                .await;
+            let session_cfg = actor.chat_state_handle.get_sampling_config().await.unwrap();
+            assert_eq!(
+                session_cfg.context_window.get(),
+                200_000,
+                "destination pin must block header upgrade"
+            );
+        })
+        .await;
+}
 #[test]
 fn initial_injection_backend_params_use_override_min_score() {
     let params = crate::session::memory::MemoryBackendParams {
@@ -580,7 +713,7 @@ async fn create_test_actor_with_memory(
         compaction: crate::session::compaction_config::CompactionConfig {
             threshold_percent: std::cell::Cell::new(threshold_percent),
             force_compact: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            context_window_override: None,
+            context_window_override: std::cell::Cell::new(None),
             count: std::sync::atomic::AtomicU64::new(0),
             auto_compact_suppressed: std::sync::atomic::AtomicU8::new(0),
             previous_model: std::cell::Cell::new(None),
@@ -1384,7 +1517,7 @@ async fn test_e2e_idle_resume_refreshes_model_metadata() {
                 compaction: crate::session::compaction_config::CompactionConfig {
                     threshold_percent: std::cell::Cell::new(85),
                     force_compact: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
-                    context_window_override: None,
+                    context_window_override: std::cell::Cell::new(None),
                     count: std::sync::atomic::AtomicU64::new(0),
                     auto_compact_suppressed: std::sync::atomic::AtomicU8::new(0),
                     previous_model: std::cell::Cell::new(None),
