@@ -2,3 +2,6 @@
 **/*.rs.bk
 .DS_Store
 
+
+# Local release artifacts produced by scripts/publish_release.sh
+/dist/
