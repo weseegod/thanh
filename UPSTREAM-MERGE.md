@@ -332,3 +332,18 @@ Sync #6 (merge `a45c679`, direct local merge into `main`):
 - Full `./build.sh` not run yet (waive or run before release)
 - Delivered via **direct merge** into local `main` (not pushed; push + release when requested)
 - Fork had 34 commits ahead of upstream at merge time; version crates followed upstream to `1.0.4` (pending post-sync bump + publish)
+
+Sync #7 (merge `d2f91f6`, direct local merge into `main`):
+- 4 upstream commits (`9fabade`..`19d42e3`, "Synced from monorepo"); 539 files, ~32k insertions, ~7.9k deletions
+- Pre-merge cleanup: finished the half-wired OpenCode Zen vendor-trailer fix (`is_vendor_trailer` now consulted in the Chat Completions SSE decode), committed on `main`; deleted stale untracked leftovers identical to `upstream/main`; gitignored `dist/`
+- **8 conflicts**, resolved by combining:
+  - `docs/custom-hooks.md`: upstream PowerShell troubleshooting row + fork `~/.thanh/logs` wording
+  - `pty_e2e_clipboard.rs`: kept fork's `thanh wrap ssh <host>` assertion (matches `SSH_WRAP_ONE_OFF`)
+  - `app_view.rs` / test ctx structs: adopted new upstream `workspace_dashboard_enabled`; dropped reintroduced `usage_visible` (no consumer billing surface)
+  - `event_loop.rs`: adopted upstream status-line refresh timer; dropped billing poll + `subscription_watch` arm
+  - `mvp_agent/mod.rs` (+ `agent_ops.rs`, `acp_agent.rs`, `tests.rs`): removed upstream's tier-recheck/subscription machinery (`retry_subscription_check`, `spawn_tier_recheck`, `TierRecheckInFlightGuard`) per the no-billing policy; kept deleted `subscription_check.rs`
+- Merge fallout fixed in follow-up commits: `expired_removed` widened to `u64` in gc integration tests; `handle_set_session_model` now called through `Arc` with the new `skip_prompt_rewrite` arg; added `docs/internal/25-enterprise.md` + `22-environment-variables.md` (upstream's `registered_features_are_documented` tripwire referenced files that were never committed anywhere); shell-alias fix test isolated from user rc files (a real installed `thanh` shadowed its stub)
+- Fork markers: 113/113 preserved (content identical; line numbers shifted)
+- `cargo check --workspace --all-targets` clean; sampler suite fully green; pager/shell suites green except **pre-existing** failures only (paste file-URL probe family ×18; scrollback teal + cursor tests fail under this environment's `NO_COLOR=1`; hooks `omits_session_id_when_none` needs `GROK_SESSION_ID` unset — it is set inside thanh sessions; shell `auth_retry_budget_tests::authenticated_401s_still_exhaust_after_three_retries` stack-overflows identically at pre-merge HEAD)
+- Note for future syncs: never point a worktree/baseline build at the main checkout's shared `target/` dir — same-version path crates collide and produce phantom missing-symbol errors; `touch` the crate sources to invalidate
+- Delivered via direct merge into local `main` (not pushed; push + release when requested); version crates remain at upstream's `1.0.6` pending post-sync bump + publish
