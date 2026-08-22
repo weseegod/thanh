@@ -228,11 +228,20 @@ impl CancelTrigger {
         }
     }
 }
+/// What a cancel does to the in-memory conversation history.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub enum CancelHistoryDisposition {
+    /// Leave the cancelled turn's user message in history.
+    #[default]
+    Keep,
+    /// Pop the named front if the no-output window is still open. `None` is a legacy client.
+    RewindIfNoOutput { prompt_id: Option<String> },
+}
 #[derive(Debug, Clone, Default)]
 pub struct CancelOptions {
     pub cancel_subagents: bool,
     pub kill_background_tasks: bool,
-    pub rewind_if_no_output: bool,
+    pub history: CancelHistoryDisposition,
     pub trigger: Option<CancelTrigger>,
     /// Drives the cancel-rate metric, and marks an untriggered cancel as the user's.
     pub user_initiated: bool,
@@ -248,6 +257,10 @@ pub enum SessionCommand {
     ReplaceSystemPrompt {
         system_prompt: String,
     },
+    /// Push a fresh status-line snapshot. Sent when a client attaches to a
+    /// resident session, which the transient `SessionStatus` notification would
+    /// otherwise never reach.
+    EmitStatusSnapshot,
     /// Resume hook: after a session is restored with
     /// `awaiting_plan_approval == true`, re-issue the `exit_plan_mode`
     /// reverse-request so the client re-shows approval chrome over a real live
@@ -314,6 +327,8 @@ pub enum SessionCommand {
     SetSessionModel {
         sampling_config: xai_grok_sampler::SamplerConfig,
         use_concise: bool,
+        /// Models declare differing `model_family`s → compact (lossy) at switch end.
+        is_family_switch: bool,
         /// When `false`, skip the system prompt rewrite (concise/default swap).
         /// Set to `false` for forked sessions so mid-session model switches
         /// cannot contaminate the inherited prompt configuration.

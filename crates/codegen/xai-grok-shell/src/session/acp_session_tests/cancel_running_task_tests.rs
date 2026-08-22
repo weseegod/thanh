@@ -112,6 +112,7 @@ async fn persist_ack_waits_for_disk_flush_before_success() {
                 tokio_util::sync::CancellationToken::new(),
             );
             let actor = Arc::new(SessionActor {
+                status_wake: Default::default(),
                 session_info,
                 auth_method_id: test_auth_method_id("test-auth"),
                 model_auth_memo: std::cell::RefCell::new(None),
@@ -217,6 +218,7 @@ async fn persist_ack_waits_for_disk_flush_before_success() {
                 agent: std::cell::RefCell::new(test_agent_default().await),
                 last_reported_branch: std::sync::Arc::new(parking_lot::Mutex::new(None)),
                 git_head_enabled: false,
+                status_line_enabled: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
                 models_manager: Default::default(),
                 provider_context: Default::default(),
                 compaction_model_slug: None,
@@ -600,6 +602,7 @@ async fn first_turn_memory_injection_disabled_does_not_persist_to_chat_history()
             };
             let (event_tx, _event_rx) = tokio::sync::mpsc::unbounded_channel::<SessionEvent>();
             let actor = Arc::new(SessionActor {
+                status_wake: Default::default(),
                 session_info: session_info.clone(),
                 auth_method_id: test_auth_method_id("test-auth"),
                 model_auth_memo: std::cell::RefCell::new(None),
@@ -708,6 +711,7 @@ async fn first_turn_memory_injection_disabled_does_not_persist_to_chat_history()
                 agent: std::cell::RefCell::new(test_agent_default().await),
                 last_reported_branch: std::sync::Arc::new(parking_lot::Mutex::new(None)),
                 git_head_enabled: false,
+                status_line_enabled: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
                 models_manager: Default::default(),
                 provider_context: Default::default(),
                 compaction_model_slug: None,
@@ -899,6 +903,7 @@ async fn cancel_running_task_teardown_clears_running_and_pending_work() {
                 )
                 .await;
             let actor = SessionActor {
+                status_wake: Default::default(),
                 session_info: SessionInfo {
                     id: acp::SessionId::new("test-cancel"),
                     cwd: cwd.as_str().to_string(),
@@ -1010,6 +1015,9 @@ async fn cancel_running_task_teardown_clears_running_and_pending_work() {
                 agent: std::cell::RefCell::new(agent),
                 last_reported_branch: std::sync::Arc::new(parking_lot::Mutex::new(None)),
                 git_head_enabled: false,
+                status_line_enabled: std::sync::Arc::new(
+                    std::sync::atomic::AtomicBool::new(false),
+                ),
                 models_manager: Default::default(),
                 provider_context: Default::default(),
                 compaction_model_slug: None,
@@ -1256,13 +1264,9 @@ async fn cancel_records_mid_turn_abort_interrupt_marker() {
         })
         .await;
 }
-/// A mid-stream abort with NO tool in flight leaves the model with no visible
-/// signal: the partial assistant text is discarded out-of-band and there is no
-/// dangling tool call to repair into a "cancelled" tool-result. So
-/// `cancel_running_task` must arm the one-shot `pending_interrupt_reminder` that
-/// the next real user prompt frames as an interjection-shaped envelope.
+/// No assistant text → do not arm the interrupt reminder.
 #[tokio::test(flavor = "current_thread")]
-async fn cancel_without_active_tool_arms_interrupt_reminder() {
+async fn cancel_without_assistant_text_skips_interrupt_reminder() {
     let local = tokio::task::LocalSet::new();
     local
         .run_until(async {
@@ -1296,8 +1300,8 @@ async fn cancel_without_active_tool_arms_interrupt_reminder() {
                 })
                 .await;
             assert!(
-                actor.events.take_pending_interrupt_reminder(),
-                "a no-active-tool abort must arm the interrupt reminder"
+                !actor.events.take_pending_interrupt_reminder(),
+                "an abort with no assistant text must NOT arm the interrupt reminder"
             );
         })
         .await;
@@ -2442,6 +2446,7 @@ async fn cancel_propagates_to_sampler_handle_so_no_further_emission() {
                 )
                 .await;
             let actor = SessionActor {
+                status_wake: Default::default(),
                 session_info: SessionInfo {
                     id: acp::SessionId::new("test-cancel-sampler"),
                     cwd: cwd.as_str().to_string(),
@@ -2553,6 +2558,9 @@ async fn cancel_propagates_to_sampler_handle_so_no_further_emission() {
                 agent: std::cell::RefCell::new(agent),
                 last_reported_branch: std::sync::Arc::new(parking_lot::Mutex::new(None)),
                 git_head_enabled: false,
+                status_line_enabled: std::sync::Arc::new(
+                    std::sync::atomic::AtomicBool::new(false),
+                ),
                 models_manager: Default::default(),
                 provider_context: Default::default(),
                 compaction_model_slug: None,

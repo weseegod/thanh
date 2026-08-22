@@ -2214,10 +2214,12 @@ impl Drop for PostUnblockJwtRetryInFlightGuard {
     }
 }
 /// Background retry when post-unblock JWT lacks a tier claim that matches
-/// the live `/user` tier. Re-attempts `refresh_chain` and only treats an
-/// attempt as success when [`jwt_claim_matches_user_subscription_tier`]
-/// holds (bare refresh Ok, free token, or a *stale older* paid claim are
-/// all misses). Then refreshes the model catalog.
+/// the live `/user` tier. Each attempt first re-checks the current JWT (the
+/// bounded refresh's detached mint may have landed a matching claim already)
+/// and only then re-attempts `refresh_chain`; an attempt succeeds only when
+/// [`jwt_claim_matches_user_subscription_tier`] holds (bare refresh Ok, free
+/// token, or a *stale older* paid claim are all misses). Then refreshes the
+/// model catalog.
 ///
 /// Gate lift already happened; this only recovers the tier-targeted catalog.
 ///
@@ -2262,6 +2264,18 @@ fn spawn_post_unblock_jwt_and_catalog_retry(
                     let auth_manager = auth_manager.clone();
                     let new_tier = new_tier.clone();
                     async move {
+                        let pre_refresh_claim = auth_manager
+                            .current_or_expired()
+                            .and_then(|auth| jwt_tier_claim(&auth.key));
+                        let already_current = pre_refresh_claim
+                            .as_ref()
+                            .is_some_and(|claim| jwt_claim_matches_user_subscription_tier(
+                                claim,
+                                &new_tier,
+                            ));
+                        if already_current {
+                            return Ok(());
+                        }
                         let refresh_result = auth_manager
                             .refresh_chain(
                                 crate::auth::token_type::TokenType::OidcSession,

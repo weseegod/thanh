@@ -166,6 +166,11 @@ pub static USER_GUIDE: &[Doc] = &[
         "Monitoring Usage (External OpenTelemetry)",
         "Export usage metrics to a customer OpenTelemetry collector"
     ),
+    guide!(
+        "25-status-line.md",
+        "Status Line",
+        "A bottom row of live session context, or the output of your own script"
+    ),
 ];
 
 /// Non-user-guide reference docs. Separate from USER_GUIDE because they

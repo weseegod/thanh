@@ -1550,12 +1550,9 @@ mod tests {
             Some("draft")
         );
     }
-    /// Clicking `[edit]` on a server row still awaiting its enqueue
-    /// confirmation (an optimistic echo) is ignored: the shell has no row to
-    /// hold yet, so the `hold_edit` would no-op and the later-confirmed row
-    /// could be absorbed mid-edit.
+    /// Mouse edit on an optimistic server row toasts and does not emit HoldEdit.
     #[test]
-    fn mouse_edit_click_on_optimistic_server_row_is_ignored() {
+    fn mouse_edit_click_on_optimistic_server_row_toasts() {
         let mut agent = make_running_agent();
         agent.optimistic_queue_ids.insert("p1".into());
         let ids = agent.queue.entry_ids();
@@ -1566,6 +1563,10 @@ mod tests {
             "an unconfirmed echo must not be editable"
         );
         assert_eq!(agent.prompt.text(), "");
+        assert_eq!(
+            agent.toast.as_ref().map(|(message, _)| message.as_str()),
+            Some(crate::app::queue_edit::STILL_QUEUEING_TOAST),
+        );
         assert!(
             agent.pending_effects.is_empty(),
             "no QueueHoldEdit may be emitted for a row the shell doesn't have"

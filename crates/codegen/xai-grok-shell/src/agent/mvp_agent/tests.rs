@@ -1188,6 +1188,7 @@ fn make_test_handle(
         chat_state_handle: xai_chat_state::ChatStateHandle::noop(),
         signals_handle: crate::session::signals::SessionSignalsHandle::new(),
         gateway_enabled: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true)),
+        status_line_enabled: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
         mcp_servers: vec![],
         initial_client_mcp_servers: vec![],
         display_cwd: None,
@@ -4826,11 +4827,17 @@ fn explicit_close_finalizes_the_replica() {
             (
                 options.cancel_subagents,
                 options.kill_background_tasks,
-                options.rewind_if_no_output,
+                options.history.clone(),
                 options.trigger.as_ref().map(|t| t.as_str()),
                 options.user_initiated
             ),
-            (true, true, false, Some("session_close"), false),
+            (
+                true,
+                true,
+                crate::session::CancelHistoryDisposition::Keep,
+                Some("session_close"),
+                false
+            ),
         );
         assert!(
             matches!(
@@ -6473,3 +6480,129 @@ mod soft_default_settings_emit {
 }
 #[cfg(feature = "dhat-heap")]
 mod dhat_soak;
+/// A leader multiplexes many clients behind one `initialize`, so the answer
+/// has to travel with the session: without the session-meta read, one terminal
+/// with the row off decides for every other terminal sharing the leader.
+/// Silence means off, since the payload costs a git discovery and three round
+/// trips.
+#[test]
+fn session_meta_outranks_the_client_that_started_the_process() {
+    let says_nothing = || {
+        acp::InitializeRequest::new(acp::ProtocolVersion::V1).client_capabilities(
+            acp::ClientCapabilities::new()
+                .fs(acp::FileSystemCapabilities::new())
+                .terminal(false),
+        )
+    };
+    let wants_a_row = |meta: Option<acp::Meta>, init: acp::InitializeRequest| {
+        MvpAgent::resolve_status_line_capability(meta.as_ref(), &init)
+    };
+    let on = init_advertising_status_line(true);
+    let off = init_advertising_status_line(false);
+    assert!(
+        wants_a_row(Some(status_line_meta(true)), off),
+        "a leader that wants a row outranks the client that started the process"
+    );
+    assert!(
+        !wants_a_row(Some(status_line_meta(false)), on),
+        "a `/minimal` client attaching to a leader a full-screen pager started \
+         was charged for a row it cannot draw"
+    );
+    assert!(
+        wants_a_row(None, init_advertising_status_line(true)),
+        "with no leader the client that initialized is the client that asked"
+    );
+    assert!(!wants_a_row(None, init_advertising_status_line(false)));
+    assert!(
+        !wants_a_row(Some(acp::Meta::new()), says_nothing()),
+        "a leader that injected nothing leaves a silent client off"
+    );
+    assert!(!wants_a_row(None, says_nothing()));
+}
+#[tokio::test(flavor = "current_thread")]
+async fn an_attach_that_draws_a_row_switches_it_on_and_asks_for_a_fill() {
+    let agent = build_minimal_agent_for_tests();
+    let session_id = acp::SessionId::new("status-line-attach");
+    let (cmd_tx, mut commands) =
+        tokio::sync::mpsc::unbounded_channel::<crate::session::SessionCommand>();
+    let mut handle = make_test_handle("test-model", false, None);
+    handle.cmd_tx = cmd_tx;
+    let row = handle.status_line_enabled.clone();
+    agent.insert_resident(&session_id, handle);
+    let init = init_advertising_status_line(false);
+    agent.attach_status_line(&session_id, Some(&status_line_meta(false)), &init);
+    assert!(
+        !row.load(std::sync::atomic::Ordering::Relaxed),
+        "an attach that cannot draw a row switched it on"
+    );
+    assert!(
+        commands.try_recv().is_err(),
+        "an attach that cannot draw a row asked the actor to build one"
+    );
+    agent.attach_status_line(&session_id, Some(&status_line_meta(true)), &init);
+    assert!(
+        row.load(std::sync::atomic::Ordering::Relaxed),
+        "the attach left the row off, so the emitter wakes and builds nothing"
+    );
+    assert!(
+        matches!(
+            commands.try_recv(),
+            Ok(crate::session::SessionCommand::EmitStatusSnapshot)
+        ),
+        "the attach never asked for a snapshot, so the transient row never fills"
+    );
+}
+/// A resident session outlives the client that drew its row, and the emitter
+/// re-reads the flag on every wake, so a latch that only ever rose would keep
+/// building payloads for a row nobody paints. Driven through the real
+/// disconnect, not the setter, since the wiring is the part that can rot.
+#[test]
+fn a_disconnect_switches_the_row_off_and_the_next_attach_switches_it_on() {
+    run_local_for_bridge_test(|| async {
+        let agent = build_minimal_agent_for_tests();
+        let sid = acp::SessionId::new("sess-status-line-busy");
+        let (handle, _tx, rx) = make_live_session_handle(&sid, None);
+        let row = handle.status_line_enabled.clone();
+        agent.insert_resident(&sid, handle);
+        let _actor = spawn_fake_actor(rx, true);
+        let init = init_advertising_status_line(true);
+        agent.attach_status_line(&sid, Some(&status_line_meta(true)), &init);
+        assert!(row.load(std::sync::atomic::Ordering::Relaxed));
+        drive_disconnect_many(&agent, &[&sid]).await;
+        assert!(
+            agent.is_resident(&sid),
+            "the busy session must stay resident"
+        );
+        assert!(
+            !row.load(std::sync::atomic::Ordering::Relaxed),
+            "the last client that could draw the row is gone, so the agent is \
+             still assembling payloads nobody paints"
+        );
+        agent.attach_status_line(&sid, Some(&status_line_meta(true)), &init);
+        assert!(
+            row.load(std::sync::atomic::Ordering::Relaxed),
+            "the row has to come back with the next client"
+        );
+    });
+}
+fn status_line_meta(enabled: bool) -> acp::Meta {
+    let mut meta = acp::Meta::new();
+    meta.insert(
+        xai_grok_status_line::CLIENT_STATUS_LINE_META.to_string(),
+        serde_json::json!(enabled),
+    );
+    meta
+}
+fn init_advertising_status_line(enabled: bool) -> acp::InitializeRequest {
+    let mut meta = serde_json::Map::new();
+    meta.insert(
+        xai_grok_status_line::STATUS_LINE_CAPABILITY.to_string(),
+        serde_json::json!(enabled),
+    );
+    acp::InitializeRequest::new(acp::ProtocolVersion::V1).client_capabilities(
+        acp::ClientCapabilities::new()
+            .fs(acp::FileSystemCapabilities::new())
+            .terminal(false)
+            .meta(meta),
+    )
+}

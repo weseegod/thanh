@@ -15,6 +15,8 @@ mod agent_response;
 mod auto_compact_top_row;
 #[path = "pty_e2e/basename_path_demo_pty.rs"]
 mod basename_path_demo_pty;
+#[path = "pty_e2e/connect_ui_timeout_env_override.rs"]
+mod connect_ui_timeout_env_override;
 #[path = "pty_e2e/doubled_lines_out_of_band_repro.rs"]
 mod doubled_lines_out_of_band_repro;
 #[path = "pty_e2e/embedded_mode_boots_without_hanging_on_blocked_backend.rs"]
@@ -33,6 +35,8 @@ mod question_tab_cycles_answers;
 mod renders_on_action;
 #[path = "pty_e2e/requirements_version_failure_exits_2_with_guidance.rs"]
 mod requirements_version_failure_exits_2_with_guidance;
+#[path = "pty_e2e/shift_selection_key_encodings.rs"]
+mod shift_selection_key_encodings;
 #[path = "pty_e2e/shift_tab_in_session_cycles_mode.rs"]
 mod shift_tab_in_session_cycles_mode;
 #[path = "pty_e2e/shift_tab_on_welcome_starts_session_in_plan_mode.rs"]

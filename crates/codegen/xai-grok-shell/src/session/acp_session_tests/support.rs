@@ -255,6 +255,7 @@ pub(crate) async fn create_test_actor_with_terminal(
     );
     chat_state_handle.record_token_usage(total_tokens);
     let actor = SessionActor {
+        status_wake: Default::default(),
         session_info: SessionInfo {
             id: acp::SessionId::new("test-actor"),
             cwd: cwd.as_str().to_string(),
@@ -351,6 +352,7 @@ pub(crate) async fn create_test_actor_with_terminal(
         agent: std::cell::RefCell::new(test_agent_default().await),
         last_reported_branch: std::sync::Arc::new(parking_lot::Mutex::new(None)),
         git_head_enabled: false,
+        status_line_enabled: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
         models_manager: Default::default(),
         provider_context: Default::default(),
         compaction_model_slug: None,
