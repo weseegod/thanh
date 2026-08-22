@@ -1138,6 +1138,25 @@ impl SamplingClient {
         // stream (`None`). The first transport error is emitted to the consumer,
         // then subsequent polls return `None` -- preventing an infinite busy-loop
         // when the HTTP/2 connection drops and h2 keeps producing errors.
+        // Gateway side events (e.g. OpenCode Zen's post-`[DONE]` billing
+        // notice) are dropped before the strict chunk parse so they cannot
+        // fail the whole turn; real chunks always carry chunk identity fields
+        // and pass through untouched.
+        let event_stream = event_stream.filter_map(|event_res| async move {
+            if let Ok(event) = &event_res {
+                let data = event.data.as_str();
+                if data != "[DONE]" && crate::stream::vendor_trailer::is_vendor_trailer(data) {
+                    tracing::info!(
+                        target: crate::sampling_log::TARGET,
+                        event = "sse_vendor_trailer_skipped",
+                        backend = "chat_completions",
+                        data = %data,
+                    );
+                    return None;
+                }
+            }
+            Some(event_res)
+        });
         let chunks = event_stream
             .scan(false, |had_transport_error, event_res| {
                 if *had_transport_error {
