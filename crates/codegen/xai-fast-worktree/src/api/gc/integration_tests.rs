@@ -951,7 +951,7 @@ fn per_kind_age_expiry_reclaims_listed_kinds_and_keeps_the_rest() {
         records: Vec<(&'static str, WorktreeKind, i64)>,
         opts: gc::GcOptions,
         survivors: Vec<&'static str>,
-        expired_removed: usize,
+        expired_removed: u64,
     }
     let cases = vec![
         Case {

@@ -465,7 +465,8 @@ async fn test_model_switch_clears_user_context_window_pin() {
             let (gateway_tx, _gateway_rx) =
                 mpsc::unbounded_channel::<xai_acp_lib::AcpClientMessage>();
             let (persistence_tx, _persistence_rx) = mpsc::unbounded_channel::<PersistenceMsg>();
-            let actor = create_test_actor(0, 300_000, 80, gateway_tx, persistence_tx).await;
+            let actor =
+                std::sync::Arc::new(create_test_actor(0, 300_000, 80, gateway_tx, persistence_tx).await);
             actor
                 .compaction
                 .context_window_override
@@ -474,7 +475,7 @@ async fn test_model_switch_clears_user_context_window_pin() {
             sampling.model = "unpinned-model".to_string();
             sampling.context_window = 500_000;
             let switched = actor
-                .handle_set_session_model(sampling, false, false, true, 80)
+                .handle_set_session_model(sampling, false, false, true, false, 80)
                 .await
                 .expect("model switch");
             assert_eq!(switched.0.as_ref(), "unpinned-model");
@@ -497,7 +498,8 @@ async fn test_model_switch_pins_destination_context_window() {
             let (gateway_tx, _gateway_rx) =
                 mpsc::unbounded_channel::<xai_acp_lib::AcpClientMessage>();
             let (persistence_tx, _persistence_rx) = mpsc::unbounded_channel::<PersistenceMsg>();
-            let mut actor = create_test_actor(0, 500_000, 80, gateway_tx, persistence_tx).await;
+            let mut actor =
+                std::sync::Arc::new(create_test_actor(0, 500_000, 80, gateway_tx, persistence_tx).await);
             let raw: toml::Value = toml::from_str(
                 r#"
                 [model."pinned-model"]
@@ -511,7 +513,9 @@ async fn test_model_switch_pins_destination_context_window() {
                 &grok_home,
                 crate::auth::GrokComConfig::default(),
             ));
-            actor.models_manager = crate::agent::models::ModelsManager::new(
+            std::sync::Arc::get_mut(&mut actor)
+                .expect("sole Arc holder")
+                .models_manager = crate::agent::models::ModelsManager::new(
                 None,
                 indexmap::IndexMap::new(),
                 acp::ModelId::new("pinned-model"),
@@ -522,7 +526,7 @@ async fn test_model_switch_pins_destination_context_window() {
             sampling.model = "pinned-model".to_string();
             sampling.context_window = 200_000;
             actor
-                .handle_set_session_model(sampling, false, false, true, 80)
+                .handle_set_session_model(sampling, false, false, true, false, 80)
                 .await
                 .expect("model switch");
             assert_eq!(
