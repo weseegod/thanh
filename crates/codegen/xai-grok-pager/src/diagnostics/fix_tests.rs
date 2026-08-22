@@ -1062,7 +1062,7 @@ fn configured_report_reaches_pass_state_only_for_exact_managed_alias() {
 fn shell_aliases_expand_to_exact_argv_and_bypass_is_explicit() {
     let temp = tempfile::tempdir().unwrap();
     let capture = temp.path().join("capture");
-    let grok = temp.path().join("grok");
+    let grok = temp.path().join("thanh");
     std::fs::write(
         &grok,
         format!(
@@ -1073,6 +1073,11 @@ fn shell_aliases_expand_to_exact_argv_and_bypass_is_explicit() {
     .unwrap();
     use std::os::unix::fs::PermissionsExt as _;
     std::fs::set_permissions(&grok, std::fs::Permissions::from_mode(0o755)).unwrap();
+    // Isolate interactive shells from user rc files: a real `thanh` on the
+    // machine's PATH would otherwise shadow this test's stub once ~/.bashrc
+    // reorders PATH.
+    let empty_rc = temp.path().join("empty-bashrc");
+    std::fs::write(&empty_rc, "").unwrap();
 
     if let Some(bash) = find_on_path("bash") {
         let rc = temp.path().join("bashrc");
@@ -1084,7 +1089,7 @@ fn shell_aliases_expand_to_exact_argv_and_bypass_is_explicit() {
         );
         let mut shell = std::process::Command::new(bash);
         shell
-            .args(["-ic", &command])
+            .args(["--rcfile", empty_rc.to_str().unwrap(), "-ic", &command])
             .env(
                 "PATH",
                 format!(
@@ -1115,7 +1120,7 @@ fn shell_aliases_expand_to_exact_argv_and_bypass_is_explicit() {
         );
         let mut shell = std::process::Command::new(zsh);
         shell
-            .args(["-dfc", &command])
+            .args(["-fc", &command])
             .env(
                 "PATH",
                 format!(
@@ -1147,7 +1152,12 @@ fn shell_aliases_expand_to_exact_argv_and_bypass_is_explicit() {
     };
     let mut shell = std::process::Command::new(bash);
     shell
-        .args(["-ic", "alias ssh='thanh wrap ssh'; command ssh host"])
+        .args([
+            "--rcfile",
+            empty_rc.to_str().unwrap(),
+            "-ic",
+            "alias ssh='thanh wrap ssh'; command ssh host",
+        ])
         .env("CAPTURE", &capture)
         .env(
             "PATH",
