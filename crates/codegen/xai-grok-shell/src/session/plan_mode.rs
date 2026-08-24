@@ -372,6 +372,9 @@ impl PlanModeTracker {
 ///
 /// Tool name placeholders (`${{ tools.by_kind.edit }}`, etc.) are resolved
 /// automatically from the registry's `ToolKind` \u{2192} client-facing name mapping.
+/// When a task (subagent) tool is registered, the reminder also states the
+/// subagent policy: read-only `explore` spawns are allowed for parallel
+/// exploration, write-capable spawns are not.
 pub(crate) fn plan_mode_reminder_full_template() -> &'static str {
     "\
 Plan mode is active. Do not make any edits or writes to the system.
@@ -387,6 +390,14 @@ ${%- endif %}
 
 You should build your plan by writing to or editing this file. \
 Note that this is the only file you are allowed to edit.
+
+${%- if tools.by_kind.task %}
+You may spawn read-only subagents (subagent_type=\"explore\") using the \
+${{ tools.by_kind.task }} tool to explore the codebase in parallel; they \
+do not edit files. Do not spawn write-capable subagents (general-purpose) \
+while plan mode is active - they are not covered by this gate, so defer \
+file changes beyond the plan file until after you exit plan mode.
+${%- endif %}
 
 Your turn should only end with either ${{ tools.by_kind.ask_user }} to clarify \
 requirements or ${{ tools.by_kind.exit_plan }} to present your plan to the user."
@@ -410,6 +421,14 @@ pub(crate) fn plan_mode_reentry_reminder_template() -> &'static str {
 
 You are entering plan mode again after having previously exited it. \
 A plan file exists at ${{ plan_path }} from your previous planning session.
+
+${%- if tools.by_kind.task %}
+You may spawn read-only subagents (subagent_type=\"explore\") using the \
+${{ tools.by_kind.task }} tool to explore the codebase in parallel; they \
+do not edit files. Do not spawn write-capable subagents (general-purpose) \
+while plan mode is active - they are not covered by this gate, so defer \
+file changes beyond the plan file until after you exit plan mode.
+${%- endif %}
 
 Your turn should only end with either ${{ tools.by_kind.ask_user }} to clarify requirements or ${{ tools.by_kind.exit_plan }} to present your plan to the user."
 }
@@ -764,16 +783,30 @@ mod tests {
         assert!(!text.contains("exit_plan_mode"));
     }
     #[test]
-    fn full_reminder_has_no_subagent_guidance() {
+    fn full_reminder_includes_subagent_guidance_when_task_registered() {
         let r = test_renderer_with_task();
         let text = render(&r, plan_mode_reminder_full_template(), "/tmp/plan.md", true);
         assert!(
-            !text.contains("subagent_type"),
-            "full reminder should not include subagent guidance: {text}"
+            text.contains("subagent_type=\"explore\""),
+            "full reminder should allow read-only explore subagents: {text}"
         );
+        assert!(
+            text.contains("Do not spawn write-capable subagents"),
+            "full reminder should forbid write-capable subagents: {text}"
+        );
+        assert!(
+            text.contains("task tool"),
+            "task tool name hint should resolve from the registry: {text}"
+        );
+        assert!(!text.contains("${{"), "unresolved placeholder: {text}");
+    }
+    #[test]
+    fn full_reminder_omits_subagent_guidance_when_task_missing() {
         let r = test_renderer();
         let text = render(&r, plan_mode_reminder_full_template(), "/tmp/plan.md", true);
         assert!(!text.contains("subagent_type"));
+        assert!(!text.contains("task tool"));
+        assert!(!text.contains("${{"));
     }
     #[test]
     fn full_reminder_has_no_phase_workflow() {
@@ -843,6 +876,34 @@ mod tests {
         assert!(text.contains("AskUser to clarify requirements"));
         assert!(!text.contains("exit_plan_mode"));
         assert!(!text.contains("ask_user_question"));
+    }
+    #[test]
+    fn reentry_reminder_includes_subagent_guidance_when_task_registered() {
+        let r = test_renderer_with_task();
+        let text = render(
+            &r,
+            plan_mode_reentry_reminder_template(),
+            "/tmp/plan.md",
+            false,
+        );
+        assert!(text.contains("Returning to Plan Mode"));
+        assert!(text.contains("subagent_type=\"explore\""));
+        assert!(text.contains("Do not spawn write-capable subagents"));
+        assert!(text.contains("task tool"));
+        assert!(!text.contains("${{"));
+    }
+    #[test]
+    fn reentry_reminder_omits_subagent_guidance_when_task_missing() {
+        let r = test_renderer();
+        let text = render(
+            &r,
+            plan_mode_reentry_reminder_template(),
+            "/tmp/plan.md",
+            false,
+        );
+        assert!(text.contains("Returning to Plan Mode"));
+        assert!(!text.contains("subagent_type"));
+        assert!(!text.contains("task tool"));
     }
     #[test]
     fn exit_reminder_renders() {

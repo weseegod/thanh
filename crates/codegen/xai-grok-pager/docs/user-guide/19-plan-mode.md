@@ -134,7 +134,7 @@ This enforcement is independent of the permission mode:
 
 - **Always-approve (yolo) stays armed underneath plan mode.** Non-edit tools (bash commands, reads, MCP tools) still auto-run, but file edits are blocked until you approve exiting plan mode. Once the plan is approved, always-approve resumes for implementation.
 - Bash commands are not inspected for file writes — plan mode blocks the edit tools, not shell redirection.
-- Subagents are not covered by the parent session's plan-mode edit gate. Each subagent starts with a fresh plan-mode tracker (`Inactive`), so a `general-purpose` (or other write-capable) subagent can edit files while the parent is still in plan mode — and it inherits the parent's permission mode (including always-approve). Read-only types such as `explore` remain limited by their own toolset.
+- Subagents are not covered by the parent session's plan-mode edit gate: each subagent starts with a fresh plan-mode tracker (`Inactive`), so a `general-purpose` (or other write-capable) subagent that does get spawned can still edit files while the parent is in plan mode — and it inherits the parent's permission mode (including always-approve). The plan-mode reminder instructs the agent accordingly: during plan mode it may spawn read-only subagents (`explore`) to explore the codebase in parallel, and it should not spawn write-capable subagents while plan mode is active — file changes beyond the plan file are deferred until after exiting plan mode. Read-only types such as `explore` remain limited by their own toolset.
 
 The status flag shows `plan` while plan mode is active. If always-approve is enabled underneath, its flag reappears when plan mode exits.
 
