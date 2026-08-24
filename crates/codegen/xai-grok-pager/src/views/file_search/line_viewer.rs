@@ -657,6 +657,8 @@ pub struct PlanViewerExtras {
     pub feedback_active: bool,
     pub approve_button_area: Option<Rect>,
     pub approve_hovered: bool,
+    pub goal_button_area: Option<Rect>,
+    pub goal_hovered: bool,
     pub comment_button_area: Option<Rect>,
     pub comment_hovered: bool,
     pub abandon_button_area: Option<Rect>,
@@ -1648,6 +1650,7 @@ pub fn render_line_viewer(
     if let Some(plan) = viewer.plan.as_mut() {
         plan.send_button_area = None;
         plan.approve_button_area = None;
+        plan.goal_button_area = None;
         plan.abandon_button_area = None;
     }
 
@@ -1725,6 +1728,7 @@ pub fn render_line_viewer(
         let abandon_hovered = viewer.plan_ref().is_some_and(|p| p.abandon_hovered);
         let comment_hovered = viewer.plan_ref().is_some_and(|p| p.comment_hovered);
         let approve_hovered = viewer.plan_ref().is_some_and(|p| p.approve_hovered);
+        let goal_hovered = viewer.plan_ref().is_some_and(|p| p.goal_hovered);
         let copy_hovered = viewer.plan_ref().is_some_and(|p| p.copy_hovered);
         let is_approval = viewer.feedback_active();
 
@@ -1755,6 +1759,16 @@ pub fn render_line_viewer(
             ("send", w, Some(spans))
         } else {
             ("", 0, None)
+        };
+
+        // `g run as goal` button — approval mode only. Approves the plan
+        // AND hands it to an autonomous goal run instead of an implement turn.
+        let (goal_w, goal_spans): (u16, Option<Vec<Span>>) = if is_approval {
+            let spans = build_shortcut_button('g', "run as goal", goal_hovered, theme);
+            let w: u16 = spans.iter().map(|s| s.width() as u16).sum();
+            (w, Some(spans))
+        } else {
+            (0, None)
         };
 
         // `s revise` button — always visible in approval mode so the
@@ -1796,6 +1810,9 @@ pub fn render_line_viewer(
         if action_w > 0 {
             base_w = base_w.saturating_add(action_w).saturating_add(sep_w);
         }
+        if goal_w > 0 {
+            base_w = base_w.saturating_add(goal_w).saturating_add(sep_w);
+        }
         if revise_w > 0 {
             base_w = base_w.saturating_add(revise_w).saturating_add(sep_w);
         }
@@ -1825,6 +1842,21 @@ pub fn render_line_viewer(
                 x += sep_w;
             } else {
                 viewer.plan_mut().approve_button_area = None;
+            }
+
+            // Goal button — approval mode only (after approve).
+            if let Some(spans) = &goal_spans {
+                buf.set_string(x, bottom_y, separator, sep_style);
+                x += sep_w;
+                let goal_x = x;
+                for span in spans {
+                    let w = span.width() as u16;
+                    buf.set_span(x, bottom_y, span, w);
+                    x += w;
+                }
+                viewer.plan_mut().goal_button_area = Some(Rect::new(goal_x, bottom_y, goal_w, 1));
+            } else {
+                viewer.plan_mut().goal_button_area = None;
             }
 
             // Revise button — approval mode with comments.
@@ -1892,6 +1924,7 @@ pub fn render_line_viewer(
             // from a previous render don't fire.
             let plan = viewer.plan_mut();
             plan.approve_button_area = None;
+            plan.goal_button_area = None;
             plan.comment_button_area = None;
             plan.copy_button_area = None;
             plan.abandon_button_area = None;
@@ -1948,6 +1981,68 @@ mod tests {
         assert_eq!(
             viewer.markdown_content_for_feedback().as_deref(),
             Some(body)
+        );
+    }
+
+    #[test]
+    fn plan_approval_footer_renders_goal_button_only_in_approval_mode() {
+        let mut viewer = LineViewerState::open_markdown_content(
+            "plan.md",
+            "# Plan\n\n- Do the thing\n- Then ship".to_owned(),
+            None,
+        )
+        .expect("markdown content should open");
+        viewer.kind = LineViewerKind::PlanPreview;
+        let theme = Theme::default();
+        let render_and_scan = |viewer: &mut LineViewerState| {
+            viewer.prepare_layout(140, 24);
+            let mut buf = Buffer::empty(Rect::new(0, 0, 140, 24));
+            render_line_viewer(
+                &mut buf,
+                Rect::new(0, 0, 140, 24),
+                viewer,
+                std::path::Path::new("/tmp"),
+                &theme,
+                0,
+            );
+            let mut has_goal = false;
+            for y in 0..24 {
+                if row_text(&buf, y).contains("run as goal") {
+                    has_goal = true;
+                    break;
+                }
+            }
+            (buf, has_goal)
+        };
+
+        // Approval mode: the `g run as goal` button is drawn and its hit
+        // area is published for mouse handling.
+        viewer.plan = Some(PlanViewerExtras {
+            feedback_active: true,
+            ..Default::default()
+        });
+        let (buf, has_goal) = render_and_scan(&mut viewer);
+        assert!(has_goal, "approval footer must show `g run as goal`");
+        let goal_area = viewer
+            .plan_ref()
+            .and_then(|p| p.goal_button_area)
+            .expect("goal button hit area must be published");
+        assert!(
+            row_text(&buf, goal_area.y).contains("run as goal"),
+            "published hit area must sit on the row rendering the button"
+        );
+
+        // Casual preview (footer, but not approval): no goal button.
+        viewer.plan = Some(PlanViewerExtras {
+            feedback_active: false,
+            show_action_buttons: true,
+            ..Default::default()
+        });
+        let (_buf, has_goal) = render_and_scan(&mut viewer);
+        assert!(!has_goal, "casual preview must NOT show `g run as goal`");
+        assert!(
+            viewer.plan_ref().and_then(|p| p.goal_button_area).is_none(),
+            "no goal hit area outside approval mode"
         );
     }
 

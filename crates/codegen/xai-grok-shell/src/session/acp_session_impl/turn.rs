@@ -422,9 +422,10 @@ impl SessionActor {
                     BuiltinAction::GoalSet {
                         objective,
                         token_budget,
+                        plan_source,
                     } => {
                         xai_grok_telemetry::session_ctx::log_event(slash_used);
-                        let reminder = self.setup_goal(&objective, token_budget).await;
+                        let reminder = self.setup_goal(&objective, token_budget, plan_source).await;
                         vec![text_block(reminder)]
                     }
                     BuiltinAction::GoalResume => {

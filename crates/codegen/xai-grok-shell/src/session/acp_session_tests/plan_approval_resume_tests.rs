@@ -421,3 +421,91 @@ async fn resume_no_plan_md_clears_flag_without_request() {
         })
         .await;
 }
+
+/// `approved_as_goal` on the resume re-park: leave plan mode, seed a goal
+/// with the approved plan body, and queue the goal-reminder turn instead of
+/// an implement turn.
+#[tokio::test(flavor = "current_thread")]
+async fn resume_approved_as_goal_seeds_goal_with_plan() {
+    const PLAN_FOR_GOAL: &str = "# Plan: Ship the widget\n\n## Steps\n1. do it\n";
+    let local = tokio::task::LocalSet::new();
+    local
+        .run_until(async {
+            let (gateway_tx, mut gateway_rx) = tokio::sync::mpsc::unbounded_channel();
+            let (persistence_tx, _persistence_rx) = tokio::sync::mpsc::unbounded_channel();
+            // Mutate goal harness before the Arc wrap (matching
+            // `make_planner_actor`): the resume path seeds the goal with the
+            // approved plan body.
+            let (mut actor, _ev) =
+                create_test_actor_ex(0, 256_000, 85, gateway_tx, persistence_tx).await;
+
+            let plan_dir = tempfile::tempdir().unwrap();
+            std::fs::write(plan_dir.path().join("plan.md"), PLAN_FOR_GOAL).unwrap();
+            {
+                let mut tracker = actor.plan_mode.lock();
+                *tracker =
+                    crate::session::plan_mode::PlanModeTracker::new(plan_dir.path().to_path_buf());
+                tracker.activate_from_tool();
+                tracker.set_awaiting_plan_approval(true);
+            }
+
+            let goal_dir = tempfile::tempdir().unwrap();
+            actor.goal_enabled = true;
+            set_goal_harness_for_tests(&actor);
+            actor.goal_tracker = std::sync::Arc::new(parking_lot::Mutex::new(
+                crate::session::goal_tracker::GoalTracker::new(goal_dir.path().to_path_buf()),
+            ));
+            let actor = std::sync::Arc::new(actor);
+
+            // Stand in for the pager: answer the exit_plan_mode re-park with
+            // the goal outcome; ack fire-and-forget broadcasts.
+            let responder = tokio::task::spawn_local(async move {
+                while let Some(msg) = gateway_rx.recv().await {
+                    match msg {
+                        xai_acp_lib::AcpClientMessage::ExtMethod(args) => {
+                            let _ = args
+                                .response_tx
+                                .send(Ok(acp::ExtResponse::new(ext_response("approved_as_goal"))));
+                            break;
+                        }
+                        xai_acp_lib::AcpClientMessage::SessionNotification(args) => {
+                            let _ = args.response_tx.send(Ok(()));
+                        }
+                        _ => {}
+                    }
+                }
+            });
+
+            let (completion_tx, _completion_rx) = tokio::sync::mpsc::unbounded_channel();
+            actor.clone().resume_plan_approval(completion_tx).await;
+
+            assert!(
+                !actor.plan_mode.lock().is_awaiting_plan_approval(),
+                "approve-as-goal must clear the awaiting bit like approve"
+            );
+            let snap = actor.goal_tracker.lock().snapshot().cloned().unwrap();
+            let plan_path = actor.goal_tracker.lock().plan_path();
+            assert_eq!(
+                snap.plan_file.as_deref(),
+                Some(plan_path.as_path()),
+                "goal must publish the user-approved plan"
+            );
+            assert_eq!(
+                std::fs::read_to_string(&plan_path).unwrap(),
+                PLAN_FOR_GOAL,
+                "goal plan.md must carry the approved plan body"
+            );
+            assert_eq!(
+                std::fs::read_to_string(actor.goal_tracker.lock().plan_baseline_path()).unwrap(),
+                PLAN_FOR_GOAL,
+                "baseline must snapshot the identical body"
+            );
+            assert_eq!(
+                snap.objective, "Ship the widget",
+                "objective derives from the plan title"
+            );
+
+            responder.await.unwrap();
+        })
+        .await;
+}

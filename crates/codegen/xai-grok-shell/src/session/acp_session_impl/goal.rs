@@ -1,6 +1,7 @@
 //! Goal-orchestration concern for `SessionActor`.
 
 use super::*;
+use crate::session::slash_commands::GoalPlanSource;
 
 /// Per-role toolset capability requirement for the parent-side gate.
 ///
@@ -856,7 +857,51 @@ impl SessionActor {
         )
     }
 
-    pub(super) async fn setup_goal(&self, objective: &str, token_budget: Option<i64>) -> String {
+    /// Read the plan body for a `/goal` plan source. `Ok` only for a
+    /// non-empty body; `Err` carries a user-facing detail (the goal is not
+    /// created on failure).
+    async fn read_goal_plan_source(&self, source: GoalPlanSource) -> Result<String, String> {
+        let content = match source {
+            GoalPlanSource::Content(content) => content,
+            GoalPlanSource::SessionPlan => {
+                let path = self.goal_tracker.lock().plan_mode_plan_path();
+                tokio::fs::read_to_string(&path).await.map_err(|err| {
+                    format!(
+                        "failed to read the session plan at {}: {err}",
+                        path.display()
+                    )
+                })?
+            }
+            GoalPlanSource::Path(path) => {
+                let full = self
+                    .tool_context
+                    .cwd
+                    .as_path()
+                    .join(std::path::Path::new(&path));
+                tokio::fs::read_to_string(&full).await.map_err(|err| {
+                    format!("failed to read the plan at {}: {err}", full.display())
+                })?
+            }
+        };
+        if content.trim().is_empty() {
+            return Err("the plan is empty; a goal needs plan content to execute".to_string());
+        }
+        Ok(content)
+    }
+
+    pub(super) async fn setup_goal(
+        &self,
+        objective: &str,
+        token_budget: Option<i64>,
+        plan_source: Option<GoalPlanSource>,
+    ) -> String {
+        let plan_seed = match plan_source {
+            None => None,
+            Some(source) => match self.read_goal_plan_source(source).await {
+                Ok(content) => Some(content),
+                Err(detail) => return format!("Cannot start the goal: {detail}"),
+            },
+        };
         let goal_id = uuid::Uuid::new_v4().to_string();
         let created_at = chrono::Utc::now().to_rfc3339();
         let token_baseline = self.chat_state_handle.get_total_tokens().await as i64;
@@ -871,6 +916,9 @@ impl SessionActor {
             created_at,
             baseline_commit,
         );
+        if let Some(content) = &plan_seed {
+            self.goal_tracker.lock().seed_plan(content);
+        }
         self.goal_turn_task_ids.lock().clear();
         self.clear_pending_classifier_completions();
         self.goal_continuation_streak

@@ -278,7 +278,7 @@ async fn send_now_restarts_planner_with_all_steering() {
 
             let planner = {
                 let actor = StdArc::clone(&actor);
-                tokio::task::spawn_local(async move { actor.setup_goal("do X", None).await })
+                tokio::task::spawn_local(async move { actor.setup_goal("do X", None, None).await })
             };
 
             for (spawn, text) in [(1, "first"), (2, "second")] {
@@ -1281,7 +1281,7 @@ async fn setup_goal_reminder_is_plan_aware_when_planner_enabled() {
             let (actor, _tmp) = make_planner_actor(Some(tx), true).await;
             let plan_path = actor.goal_tracker.lock().plan_path();
 
-            let reminder = actor.setup_goal("ship it", None).await;
+            let reminder = actor.setup_goal("ship it", None, None).await;
 
             let snap = actor.goal_tracker.lock().snapshot().cloned().unwrap();
             assert_eq!(snap.plan_file.as_deref(), Some(plan_path.as_path()));
@@ -1319,7 +1319,7 @@ async fn setup_goal_reminder_is_no_plan_when_planner_disabled() {
         .run_until(async {
             let (actor, _tmp) = make_planner_actor(None, false).await;
 
-            let reminder = actor.setup_goal("ship it", None).await;
+            let reminder = actor.setup_goal("ship it", None, None).await;
 
             let snap = actor.goal_tracker.lock().snapshot().cloned().unwrap();
             assert!(snap.plan_file.is_none(), "planner off writes no plan");

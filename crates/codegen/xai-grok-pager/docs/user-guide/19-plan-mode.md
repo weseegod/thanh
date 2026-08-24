@@ -75,6 +75,7 @@ Scroll the plan with the arrow keys or `j`/`k`. The action bar shows these short
 | Shortcut | Action                                                                                               |
 | -------- | ---------------------------------------------------------------------------------------------------- |
 | `a`      | Approve the plan and start building. With pending comments, this reads `approve w/ comments` and sends them alongside the approval. |
+| `g`      | Approve the plan AND run it as an autonomous goal: plan mode exits and the goal loop takes over with your approved plan as the contract (its baseline snapshot), instead of a normal interactive implement turn. Requires goal mode; if goal mode is disabled the plan falls back to a normal approve. |
 | `s`      | Request changes. Focus moves to the prompt so you can type revision notes; press `Enter` to send them. |
 | `c`      | Comment on the selected line or line range.                                                          |
 | `y`      | Copy the full plan to the clipboard.                                                                 |

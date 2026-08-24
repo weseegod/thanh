@@ -276,13 +276,16 @@ Set, manage, or check an autonomous goal. Grok works across rounds and only mark
 
 ```
 /goal Migrate the auth module to the new API
+/goal Migrate the auth module --budget 500000
+/goal Migrate the auth module --plan ./docs/migration-plan.md
+/goal Migrate the auth module --from-plan
 /goal status
 /goal pause
 /goal resume
 /goal clear
 ```
 
-Arguments are `<objective> [--budget <tokens>]`, or one of `status`, `pause`, `resume`, `clear`. The `--budget` here is a **token** budget for the goal run, separate from the agent-count budgets that workflows use. `/goal` appears when goal mode is enabled for the session. Which driver runs it depends on background workflows: with them on, the host evaluates each model round and runs adversarial verification on completion candidates; with them off, the legacy model-facing `update_goal` path reports progress and triggers verification.
+Arguments are `<objective> [--budget <tokens>] [--plan <path> | --from-plan]`, or one of `status`, `pause`, `resume`, `clear`. The `--budget` here is a **token** budget for the goal run, separate from the agent-count budgets that workflows use. `--plan <path>` seeds the goal with an existing plan file (resolved relative to the session's working directory) and `--from-plan` uses the current session's plan-mode `plan.md` — both skip the internal planner and hand the goal to the verifier with your plan as the immutable baseline it diffs later edits against. Only trailing standalone flags are consumed; anything else stays part of the objective. `/goal` appears when goal mode is enabled for the session. Which driver runs it depends on background workflows: with them on, the host evaluates each model round and runs adversarial verification on completion candidates; with them off, the legacy model-facing `update_goal` path reports progress and triggers verification.
 
 ### `/deep-research <query>`
 

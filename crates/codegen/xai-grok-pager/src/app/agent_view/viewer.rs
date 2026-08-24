@@ -152,6 +152,12 @@ impl AgentView {
             return self.approve_plan();
         }
 
+        // g: approve the plan and run it as an autonomous goal instead of
+        // a normal implement turn.
+        if in_plan_approval && key!('g').matches(key) {
+            return self.approve_plan_as_goal();
+        }
+
         // s: switch to prompt so the user can type an overall revision
         // message before submitting. Enter from Prompt does the actual send.
         if in_plan_approval && key!('s').matches(key) {
@@ -408,6 +414,7 @@ impl AgentView {
         let send_area = viewer.plan_ref().and_then(|p| p.send_button_area);
         let abandon_area = viewer.plan_ref().and_then(|p| p.abandon_button_area);
         let approve_area = viewer.plan_ref().and_then(|p| p.approve_button_area);
+        let goal_area = viewer.plan_ref().and_then(|p| p.goal_button_area);
         let comment_btn_area = viewer.plan_ref().and_then(|p| p.comment_button_area);
         let copy_btn_area = viewer.plan_ref().and_then(|p| p.copy_button_area);
         // Cached `is_plan_viewer()` so we don't need to call self while
@@ -479,6 +486,10 @@ impl AgentView {
                         return self.send_casual_plan_comments();
                     }
                     return InputOutcome::Changed;
+                }
+                if goal_area.is_some_and(|a| a.contains((mouse.column, mouse.row).into())) {
+                    // Only approval mode renders the goal button.
+                    return self.approve_plan_as_goal();
                 }
                 if comment_btn_area.is_some_and(|a| a.contains((mouse.column, mouse.row).into())) {
                     if self.plan_approval_view.is_some() {
@@ -608,6 +619,13 @@ impl AgentView {
                 let prev_approve = viewer.plan_ref().is_some_and(|p| p.approve_hovered);
                 if approve_hover != prev_approve {
                     viewer.plan_mut().approve_hovered = approve_hover;
+                    changed = true;
+                }
+                let goal_hover =
+                    goal_area.is_some_and(|a| a.contains((mouse.column, mouse.row).into()));
+                let prev_goal = viewer.plan_ref().is_some_and(|p| p.goal_hovered);
+                if goal_hover != prev_goal {
+                    viewer.plan_mut().goal_hovered = goal_hover;
                     changed = true;
                 }
                 let comment_btn_hover =

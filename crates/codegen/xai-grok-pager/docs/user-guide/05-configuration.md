@@ -353,6 +353,8 @@ To pin the model a subagent uses, set its entry under `[subagents.models]`.
 
 `/goal` has two drivers, chosen by the background-workflows setting. With workflows enabled, the host-owned workflow engine evaluates rounds and drives completion verification; with them disabled, `/goal` falls back to the legacy model-facing `update_goal` tool. Whether `/goal` is available at all is a separate switch (the goal feature setting).
 
+A goal can be seeded with an existing plan instead of the internal planner: `/goal <objective> --plan <path>` reads a plan file, and `/goal <objective> --from-plan` uses the session's plan-mode `plan.md`. The plan becomes the goal's contract — it is snapshotted to `goal/plan.baseline.md` and the verifier diffs later edits against that baseline — and the planner is skipped. The same happens when you press `g` (approve and run as goal) in the plan approval view: the approved plan body is handed to a goal run. Goal mode must be enabled for either path.
+
 BYOK and single-provider catalogs automatically enable `[goal] use_current_model_only` and lower the default skeptic count to 1. Override in config when you want multi-model verification on BYOK:
 
 ```toml

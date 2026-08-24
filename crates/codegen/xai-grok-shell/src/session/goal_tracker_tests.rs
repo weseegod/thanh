@@ -2259,10 +2259,51 @@ fn plan_baseline_path_is_session_scoped_sibling_of_plan() {
 }
 
 #[test]
+fn plan_mode_plan_path_is_session_scoped_plan_md() {
+    let t = GoalTracker::new(PathBuf::from("/tmp/plan-mode-session-xyz"));
+    assert_eq!(
+        t.plan_mode_plan_path(),
+        PathBuf::from("/tmp/plan-mode-session-xyz/plan.md"),
+    );
+}
+
+#[test]
 fn create_goal_initialises_plan_baseline_file_to_none() {
     let mut t = make_tracker();
     activate_tracker(&mut t);
     assert!(t.snapshot().unwrap().plan_baseline_file.is_none());
+}
+
+#[test]
+fn seed_plan_without_goal_returns_false() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut t = GoalTracker::new(dir.path().to_path_buf());
+    assert!(!t.seed_plan("# Plan\n"), "no goal -> no seed");
+}
+
+#[test]
+fn seed_plan_writes_plan_and_baseline_and_publishes_paths() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut t = GoalTracker::new(dir.path().to_path_buf());
+    t.create_goal("g-seed".into(), "obj".into(), None, 0, "now".into(), None);
+    let body = "# Plan\n\n1. do it\n";
+    assert!(t.seed_plan(body));
+    let snap = t.snapshot().unwrap();
+    assert_eq!(snap.plan_file.as_deref(), Some(t.plan_path().as_path()));
+    assert_eq!(
+        snap.plan_baseline_file.as_deref(),
+        Some(t.plan_baseline_path().as_path())
+    );
+    assert_eq!(
+        std::fs::read_to_string(t.plan_path()).unwrap(),
+        body,
+        "plan.md must carry the seeded body"
+    );
+    assert_eq!(
+        std::fs::read_to_string(t.plan_baseline_path()).unwrap(),
+        body,
+        "baseline must snapshot the identical body"
+    );
 }
 
 /// `plan_baseline_file` round-trips through serde when populated (it

@@ -2055,6 +2055,7 @@ fn goal_objective_resolves_to_set() {
         BuiltinAction::GoalSet {
             objective,
             token_budget,
+            ..
         } => {
             assert_eq!(objective, "implement auth module");
             assert_eq!(token_budget, None);
@@ -2079,6 +2080,7 @@ fn goal_set_trailing_budget_flag_parses() {
         BuiltinAction::GoalSet {
             objective,
             token_budget,
+            ..
         } => {
             assert_eq!(objective, "implement X");
             assert_eq!(token_budget, Some(500_000));
@@ -2098,6 +2100,7 @@ fn goal_set_budget_accepts_boundary_and_extra_whitespace() {
             BuiltinAction::GoalSet {
                 objective: o,
                 token_budget,
+                ..
             } => {
                 assert_eq!(o, objective);
                 assert_eq!(token_budget, Some(budget), "for {text:?}");
@@ -2128,9 +2131,98 @@ fn goal_set_malformed_budget_stays_in_objective() {
             BuiltinAction::GoalSet {
                 objective,
                 token_budget,
+                ..
             } => {
                 assert_eq!(objective, text, "objective must be preserved verbatim");
                 assert_eq!(token_budget, None, "no budget must be parsed from {text:?}");
+            }
+            other => panic!("expected GoalSet, got {}", other.command_name()),
+        }
+    }
+}
+
+#[test]
+fn goal_set_plan_flag_parses() {
+    match resolve_goal("implement auth module --plan ./docs/plan.md") {
+        BuiltinAction::GoalSet {
+            objective,
+            token_budget,
+            plan_source,
+        } => {
+            assert_eq!(objective, "implement auth module");
+            assert_eq!(token_budget, None);
+            assert_eq!(
+                plan_source,
+                Some(GoalPlanSource::Path("./docs/plan.md".into()))
+            );
+        }
+        other => panic!("expected GoalSet, got {}", other.command_name()),
+    }
+}
+
+#[test]
+fn goal_set_from_plan_flag_parses() {
+    match resolve_goal("implement auth module --from-plan") {
+        BuiltinAction::GoalSet {
+            objective,
+            token_budget,
+            plan_source,
+        } => {
+            assert_eq!(objective, "implement auth module");
+            assert_eq!(token_budget, None);
+            assert_eq!(plan_source, Some(GoalPlanSource::SessionPlan));
+        }
+        other => panic!("expected GoalSet, got {}", other.command_name()),
+    }
+}
+
+#[test]
+fn goal_set_plan_and_budget_combine_in_either_order() {
+    for text in [
+        "do x --plan ./p.md --budget 7",
+        "do x --budget 7 --plan ./p.md",
+        "do x --from-plan --budget 7",
+    ] {
+        match resolve_goal(text) {
+            BuiltinAction::GoalSet {
+                objective,
+                token_budget,
+                plan_source,
+            } => {
+                assert_eq!(objective, "do x", "for {text:?}");
+                assert_eq!(token_budget, Some(7), "for {text:?}");
+                assert!(plan_source.is_some(), "expected a plan source for {text:?}");
+            }
+            other => panic!("expected GoalSet, got {}", other.command_name()),
+        }
+    }
+}
+
+#[test]
+fn goal_set_conflicting_or_malformed_plan_flags_stay_in_objective() {
+    // A plan-source pair/duplicate is never silently resolved: both flags
+    // (and the budget) stay in the objective untouched.
+    for text in [
+        "do x --plan a --from-plan",
+        "do x --from-plan --plan a",
+        "do x --plan a --plan b",
+        "do x --plan",
+        "do x --plan a b",
+        "--plan x",
+        "--from-plan",
+    ] {
+        match resolve_goal(text) {
+            BuiltinAction::GoalSet {
+                objective,
+                token_budget,
+                plan_source,
+            } => {
+                assert_eq!(objective, text, "objective must be preserved verbatim");
+                assert_eq!(token_budget, None, "no budget must be parsed from {text:?}");
+                assert_eq!(
+                    plan_source, None,
+                    "no plan source must be parsed from {text:?}"
+                );
             }
             other => panic!("expected GoalSet, got {}", other.command_name()),
         }
@@ -2147,6 +2239,7 @@ fn goal_command_name_is_goal() {
         BuiltinAction::GoalSet {
             objective: "x".into(),
             token_budget: None,
+            plan_source: None,
         }
         .command_name(),
         "goal"
@@ -2159,6 +2252,7 @@ fn goal_args_provided() {
         BuiltinAction::GoalSet {
             objective: "x".into(),
             token_budget: None,
+            plan_source: None,
         }
         .args_provided()
     );

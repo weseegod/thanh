@@ -865,6 +865,13 @@ impl GoalTracker {
         self.goal_dir().join("plan.baseline.md")
     }
 
+    /// Path of the plan-mode plan file for this session
+    /// (`<session_dir>/plan.md`); may not exist. Reading it is the
+    /// `/goal --from-plan` source.
+    pub(crate) fn plan_mode_plan_path(&self) -> PathBuf {
+        self.session_dir.join("plan.md")
+    }
+
     /// Path to the strategist's advisory note (`<session_dir>/goal/strategy.md`).
     /// The strategist writes here, NOT `plan.md`. Its `PlanGuard` snapshots
     /// `plan.md` and restores it byte-for-byte (and on cancellation),
@@ -1025,6 +1032,41 @@ impl GoalTracker {
         });
         self.active_since = Some(Instant::now());
         self.record_event(GoalEvent::GoalCreated, None);
+    }
+
+    /// Seed the active goal with a user-provided plan body (`/goal --plan`,
+    /// `/goal --from-plan`, approve-as-goal). Writes `<session>/goal/plan.md`
+    /// plus its immutable baseline snapshot `<session>/goal/plan.baseline.md`
+    /// (identical body — the verifier diffs later edits against it), then
+    /// publishes `plan_file`/`plan_baseline_file`. Publishing `plan_file`
+    /// makes this "a goal that has a plan": the planner is skipped ("plan
+    /// present" gate in `maybe_run_goal_planner`) and the load-time
+    /// reconciler treats it as planned. Best-effort — on any write failure
+    /// nothing is published, and the planner runs normally instead. Returns
+    /// `true` when the seed was published.
+    pub(crate) fn seed_plan(&mut self, content: &str) -> bool {
+        if self.orchestration.is_none() {
+            return false;
+        }
+        let _ = std::fs::create_dir_all(self.goal_dir());
+        let plan_path = self.plan_path();
+        let baseline_path = self.plan_baseline_path();
+        if std::fs::write(&plan_path, content).is_err() {
+            tracing::warn!(path = %plan_path.display(), "goal seed: failed to write plan.md");
+            return false;
+        }
+        if std::fs::write(&baseline_path, content).is_err() {
+            tracing::warn!(
+                path = %baseline_path.display(),
+                "goal seed: failed to write plan.baseline.md"
+            );
+            return false;
+        }
+        if let Some(o) = &mut self.orchestration {
+            o.plan_file = Some(plan_path);
+            o.plan_baseline_file = Some(baseline_path);
+        }
+        true
     }
 
     pub fn set_phase(&mut self, phase: GoalPhase) {

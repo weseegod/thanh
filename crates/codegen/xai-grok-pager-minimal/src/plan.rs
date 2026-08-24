@@ -10,7 +10,7 @@
 //!
 //! Input routing is unchanged: while `line_viewer.is_some()` the agent's input
 //! handler already routes keys to `handle_line_viewer_key` (Preview focus:
-//! `a` approve / `s`/`Tab` revise / `q` keep planning) and `handle_plan_feedback_key`
+//! `a` approve / `g` run as goal / `s`/`Tab` revise / `q` keep planning) and `handle_plan_feedback_key`
 //! (Prompt focus: type feedback, `Enter` send, `Esc` back). Minimal keeps the
 //! line viewer open (so those keys fire) but renders this compact controls strip
 //! in place of the never-drawn fullscreen viewer.
@@ -196,7 +196,9 @@ pub fn render(
         }
         PlanApprovalFocus::Prompt => "enter approve \u{00b7} tab plan \u{00b7} esc back",
         PlanApprovalFocus::Commenting => "enter save comment \u{00b7} esc cancel",
-        PlanApprovalFocus::Preview => "a approve \u{00b7} s revise \u{00b7} q keep planning",
+        PlanApprovalFocus::Preview => {
+            "a approve \u{00b7} g run as goal \u{00b7} s revise \u{00b7} q keep planning"
+        }
     };
     let hint_style = theme.dim().bg(Color::Reset);
     let controls_rect = Rect {

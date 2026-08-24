@@ -221,6 +221,45 @@ impl AgentView {
         }
         InputOutcome::Changed
     }
+    /// Approve the plan AND run it as an autonomous goal: mirror of
+    /// [`Self::approve_plan`] except the shell receives
+    /// `approved_as_goal` and starts a goal seeded with the approved plan
+    /// body instead of a normal implement turn.
+    pub(crate) fn approve_plan_as_goal(&mut self) -> InputOutcome {
+        let Some(mut pav) = self.plan_approval_view.take() else {
+            return InputOutcome::Changed;
+        };
+        let freeform = {
+            let t = self.prompt.text_without_image_chips();
+            let trimmed = t.trim();
+            if trimmed.is_empty() {
+                None
+            } else {
+                Some(trimmed.to_owned())
+            }
+        };
+        Self::merge_live_images_into_stash(&mut self.prompt, &mut pav.stashed_prompt);
+        let review_comments = {
+            let formatted = pav.format_feedback(freeform.as_deref());
+            if formatted.trim().is_empty() {
+                None
+            } else {
+                Some(format!(
+                    "The user approved the plan with the following review comments:\n\n{}",
+                    formatted
+                ))
+            }
+        };
+        pav.send_approved_as_goal();
+        self.close_plan_review(pav, "build-as-goal");
+        if let Some(text) = review_comments {
+            return InputOutcome::Action(Action::Interject {
+                text,
+                images: vec![],
+            });
+        }
+        InputOutcome::Changed
+    }
     /// Fold freeform-only images into the session draft. Prefill clones share
     /// `display_number` *and* payload with the session image and are dropped;
     /// number reuse after freeform clear (Ctrl+C resets the counter) is not a
@@ -432,6 +471,14 @@ impl AgentView {
             && !self.prompt.file_search_visible()
         {
             return self.approve_plan();
+        }
+        if !is_commenting
+            && key.code == KeyCode::Char('g')
+            && key.modifiers.is_empty()
+            && self.prompt.text_without_image_chips().trim().is_empty()
+            && !self.prompt.file_search_visible()
+        {
+            return self.approve_plan_as_goal();
         }
         match self.prompt.route_enter(key) {
             EnterOutcome::NewlineInserted => return InputOutcome::Changed,
@@ -1149,6 +1196,32 @@ mod plan_approval_enter_tests {
             agent.prompt.text(),
             "session draft",
             "approve restores session draft after including freeform"
+        );
+    }
+    #[test]
+    fn approve_as_goal_sends_goal_outcome_with_freeform_notes() {
+        let mut agent = agent_with_revise_prompt();
+        if let Some(ref mut pav) = agent.plan_approval_view {
+            pav.stashed_prompt = crate::views::prompt_widget::StashedPrompt {
+                text: "session draft".into(),
+                cursor: 0,
+                images: Vec::new(),
+                chip_elements: Vec::new(),
+                image_counter: 0,
+                image_undo_stash: Vec::new(),
+            };
+        }
+        agent.prompt.set_text("also cover the auth flow");
+        let outcome = agent.approve_plan_as_goal();
+        assert!(matches!(
+            outcome,
+            InputOutcome::Action(Action::Interject { ref text, .. })
+                if text.contains("also cover the auth flow")
+        ));
+        assert_eq!(
+            agent.prompt.text(),
+            "session draft",
+            "approve-as-goal restores session draft after including freeform"
         );
     }
     #[test]

@@ -6,6 +6,7 @@
 //! `impl SessionActor` block retains access to the actor's private fields and
 //! the parent module's private helpers.
 use super::*;
+use crate::session::slash_commands::GoalPlanSource;
 use futures::StreamExt;
 use tracing::Instrument;
 /// Whether a tool name is an MCP `create_pull_request` (qualified
@@ -258,6 +259,9 @@ pub(super) fn plan_mode_edit_gate(
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum PlanApprovalOutcome {
     Approved,
+    /// Approved AND handed to an autonomous goal run seeded with the
+    /// approved plan body (the `g` decision in the plan approval surface).
+    ApprovedAsGoal,
     Cancelled,
     Abandoned,
 }
@@ -267,10 +271,29 @@ impl PlanApprovalOutcome {
     ) -> Self {
         match resp.outcome.as_str() {
             "approved" => Self::Approved,
+            "approved_as_goal" => Self::ApprovedAsGoal,
             "abandoned" => Self::Abandoned,
             _ => Self::Cancelled,
         }
     }
+}
+/// Object for a plan-driven goal: the plan's `# <title>` line, or a
+/// fixed fallback when the plan has no H1 heading.
+fn plan_title_or_default(plan: &str) -> String {
+    plan.lines()
+        .map(str::trim_start)
+        .find(|l| l.starts_with("# ") && l.len() > 2)
+        .map(|l| {
+            let title = l["# ".len()..].trim();
+            title
+                .strip_prefix("Plan:")
+                .map(str::trim)
+                .filter(|t| !t.is_empty())
+                .unwrap_or(title)
+        })
+        .filter(|t| !t.is_empty())
+        .map(str::to_owned)
+        .unwrap_or_else(|| "Implement the approved plan".to_string())
 }
 /// Classify an `ext_method` failure: `true` when the reverse-request could not
 /// be DELIVERED to any client (no interactive client wired — headless / SDK),
@@ -311,14 +334,24 @@ fn revise_plan_message(feedback: &str) -> String {
 pub(super) enum ResumeAction {
     /// Approved: leave plan mode and start an implement turn (Agent mode).
     LeaveAndImplement,
+    /// Approved as a goal: leave plan mode and start an autonomous goal
+    /// run seeded with the approved plan body.
+    LeaveAndStartGoal(String),
     /// Request changes: stay in plan mode and start a revise turn (Plan mode).
     StayAndRevise(String),
     /// Abandoned: leave plan mode and wait for the user (no turn).
     LeaveOnly,
 }
-fn resume_action_for(outcome: PlanApprovalOutcome, feedback: Option<String>) -> ResumeAction {
+fn resume_action_for(
+    outcome: PlanApprovalOutcome,
+    feedback: Option<String>,
+    plan_content: Option<String>,
+) -> ResumeAction {
     match outcome {
         PlanApprovalOutcome::Approved => ResumeAction::LeaveAndImplement,
+        PlanApprovalOutcome::ApprovedAsGoal => {
+            ResumeAction::LeaveAndStartGoal(plan_content.unwrap_or_default())
+        }
         PlanApprovalOutcome::Cancelled => {
             ResumeAction::StayAndRevise(revise_plan_message(feedback.as_deref().unwrap_or("")))
         }
@@ -949,6 +982,30 @@ impl SessionActor {
         }
         Ok(())
     }
+    /// Complete an intercepted `exit_plan_mode` tool call with `message` as
+    /// its result and let the model turn continue (plan mode was already
+    /// left by the caller). Mirrors the Abandoned/Cancelled intercept arms.
+    async fn complete_exit_plan_intercept(
+        &self,
+        call: &crate::sampling::types::ToolCallResponse,
+        tool_call_id: &acp::ToolCallId,
+        message: String,
+    ) -> Result<Result<PreparedToolCall, ToolLoop>, acp::Error> {
+        let tool_update = acp::ToolCallUpdate::new(
+            tool_call_id.clone(),
+            acp::ToolCallUpdateFields::new()
+                .status(Some(acp::ToolCallStatus::Completed))
+                .content(Some(vec![acp::ToolCallContent::from(
+                    acp::ContentBlock::Text(acp::TextContent::new(message.clone())),
+                )])),
+        );
+        self.send_update(acp::SessionUpdate::ToolCallUpdate(tool_update), None)
+            .await;
+        let tool_chat = ConversationItem::tool_result(call.id.clone(), message);
+        self.chat_state_handle.push_tool_result(tool_chat);
+        Ok(Err(ToolLoop::Continue))
+    }
+
     /// Phase 1: pre-flight (MCP, args, hooks, permission, ExitPlanMode).
     pub(crate) async fn prepare_tool_call(
         &self,
@@ -1500,6 +1557,53 @@ impl SessionActor {
                     PlanApprovalOutcome::Approved => {
                         tracing::info!("[exit_plan_mode] user approved — executing tool");
                     }
+                    PlanApprovalOutcome::ApprovedAsGoal => {
+                        tracing::info!("[exit_plan_mode] user approved plan as goal");
+                        self.leave_plan_mode_to_default();
+                        if !self.goal_enabled {
+                            return self
+                                .complete_exit_plan_intercept(
+                                    &call,
+                                    &tool_call_id,
+                                    format!(
+                                        "The plan was approved, but goal mode is disabled in this \
+                                         session, so it will be implemented here instead of as an \
+                                         autonomous goal.\n\n{}",
+                                        PLAN_APPROVED_IMPLEMENT_MESSAGE
+                                    ),
+                                )
+                                .await;
+                        }
+                        // A goal needs plan content; with none (absent or
+                        // unreadable plan.md) fall back to a normal implement
+                        // turn instead of claiming a goal started.
+                        let Some(plan_body) = plan_content.filter(|s| !s.trim().is_empty()) else {
+                            return self
+                                .complete_exit_plan_intercept(
+                                    &call,
+                                    &tool_call_id,
+                                    format!(
+                                        "The plan was approved, but it has no content to seed a \
+                                         goal with, so it will be implemented here instead of an \
+                                         autonomous goal.\n\n{}",
+                                        PLAN_APPROVED_IMPLEMENT_MESSAGE
+                                    ),
+                                )
+                                .await;
+                        };
+                        let objective = plan_title_or_default(&plan_body);
+                        let reminder = self
+                            .setup_goal(&objective, None, Some(GoalPlanSource::Content(plan_body)))
+                            .await;
+                        let message = format!(
+                            "The plan has been approved and started as an autonomous goal. \
+                             Do not implement it in this turn — the goal loop drives \
+                             execution.\n\n{reminder}"
+                        );
+                        return self
+                            .complete_exit_plan_intercept(&call, &tool_call_id, message)
+                            .await;
+                    }
                 },
                 Err(err) => {
                     if ext_method_no_client(&err) {
@@ -1674,7 +1778,7 @@ impl SessionActor {
             "[exit_plan_mode] re-parking approval after resume"
         );
         let parsed = match self
-            .request_plan_approval(&tool_call_id, Some(plan_content))
+            .request_plan_approval(&tool_call_id, Some(plan_content.clone()))
             .await
         {
             Ok(parsed) => parsed,
@@ -1683,7 +1787,11 @@ impl SessionActor {
                 return;
             }
         };
-        match resume_action_for(PlanApprovalOutcome::from_response(&parsed), parsed.feedback) {
+        match resume_action_for(
+            PlanApprovalOutcome::from_response(&parsed),
+            parsed.feedback,
+            Some(plan_content),
+        ) {
             ResumeAction::LeaveOnly => {
                 tracing::info!("[exit_plan_mode] resume: user abandoned plan");
                 self.leave_plan_mode_to_default();
@@ -1702,6 +1810,26 @@ impl SessionActor {
                     completion_tx,
                 )
                 .await;
+            }
+            ResumeAction::LeaveAndStartGoal(plan_body) => {
+                tracing::info!("[exit_plan_mode] resume: user approved plan as goal");
+                self.leave_plan_mode_to_default();
+                if !self.goal_enabled {
+                    let message = format!(
+                        "The plan was approved, but goal mode is disabled in this session, \
+                         so it will be implemented here instead of as an autonomous goal.\n\n{}",
+                        PLAN_APPROVED_IMPLEMENT_MESSAGE
+                    );
+                    self.start_resume_turn(message, PromptMode::Agent, completion_tx)
+                        .await;
+                    return;
+                }
+                let objective = plan_title_or_default(&plan_body);
+                let reminder = self
+                    .setup_goal(&objective, None, Some(GoalPlanSource::Content(plan_body)))
+                    .await;
+                self.start_resume_turn(reminder, PromptMode::Agent, completion_tx)
+                    .await;
             }
         }
     }
@@ -3287,8 +3415,8 @@ mod plan_mode_edit_gate_tests {
 #[cfg(test)]
 mod plan_approval_helper_tests {
     use super::{
-        PlanApprovalOutcome, ResumeAction, ext_method_no_client, resume_action_for,
-        revise_plan_message,
+        PlanApprovalOutcome, ResumeAction, ext_method_no_client, plan_title_or_default,
+        resume_action_for, revise_plan_message,
     };
     use xai_grok_tools::implementations::grok_build::exit_plan_mode::ExitPlanModeExtResponse;
     fn resp(outcome: &str) -> ExitPlanModeExtResponse {
@@ -3302,6 +3430,10 @@ mod plan_approval_helper_tests {
         assert_eq!(
             PlanApprovalOutcome::from_response(&resp("approved")),
             PlanApprovalOutcome::Approved
+        );
+        assert_eq!(
+            PlanApprovalOutcome::from_response(&resp("approved_as_goal")),
+            PlanApprovalOutcome::ApprovedAsGoal
         );
         assert_eq!(
             PlanApprovalOutcome::from_response(&resp("abandoned")),
@@ -3337,17 +3469,46 @@ mod plan_approval_helper_tests {
     #[test]
     fn resume_action_maps_each_outcome() {
         assert_eq!(
-            resume_action_for(PlanApprovalOutcome::Approved, None),
+            resume_action_for(PlanApprovalOutcome::Approved, None, None),
             ResumeAction::LeaveAndImplement
         );
+        match resume_action_for(
+            PlanApprovalOutcome::ApprovedAsGoal,
+            None,
+            Some("# Plan\n\n1. do it\n".into()),
+        ) {
+            ResumeAction::LeaveAndStartGoal(body) => assert_eq!(body, "# Plan\n\n1. do it\n"),
+            other => panic!("expected LeaveAndStartGoal, got {other:?}"),
+        }
+        match resume_action_for(PlanApprovalOutcome::ApprovedAsGoal, None, None) {
+            ResumeAction::LeaveAndStartGoal(body) => assert!(body.is_empty()),
+            other => panic!("expected LeaveAndStartGoal with empty plan, got {other:?}"),
+        }
         assert_eq!(
-            resume_action_for(PlanApprovalOutcome::Abandoned, Some("ignored".into())),
+            resume_action_for(PlanApprovalOutcome::Abandoned, Some("ignored".into()), None),
             ResumeAction::LeaveOnly
         );
-        match resume_action_for(PlanApprovalOutcome::Cancelled, Some("tweak it".into())) {
+        match resume_action_for(
+            PlanApprovalOutcome::Cancelled,
+            Some("tweak it".into()),
+            None,
+        ) {
             ResumeAction::StayAndRevise(text) => assert!(text.contains("tweak it")),
             other => panic!("expected StayAndRevise, got {other:?}"),
         }
+    }
+    #[test]
+    fn plan_title_falls_back_when_no_h1_or_blank() {
+        assert_eq!(plan_title_or_default("# Plan: Ship it"), "Ship it");
+        assert_eq!(
+            plan_title_or_default("## Plan: Ship it\n"),
+            "Implement the approved plan"
+        );
+        assert_eq!(plan_title_or_default(""), "Implement the approved plan");
+        assert_eq!(
+            plan_title_or_default("\n  \n"),
+            "Implement the approved plan"
+        );
     }
 }
 #[cfg(test)]
