@@ -1846,8 +1846,6 @@ pub fn render_line_viewer(
 
             // Goal button — approval mode only (after approve).
             if let Some(spans) = &goal_spans {
-                buf.set_string(x, bottom_y, separator, sep_style);
-                x += sep_w;
                 let goal_x = x;
                 for span in spans {
                     let w = span.width() as u16;
@@ -1855,6 +1853,9 @@ pub fn render_line_viewer(
                     x += w;
                 }
                 viewer.plan_mut().goal_button_area = Some(Rect::new(goal_x, bottom_y, goal_w, 1));
+
+                buf.set_string(x, bottom_y, separator, sep_style);
+                x += sep_w;
             } else {
                 viewer.plan_mut().goal_button_area = None;
             }
@@ -2030,6 +2031,22 @@ mod tests {
         assert!(
             row_text(&buf, goal_area.y).contains("run as goal"),
             "published hit area must sit on the row rendering the button"
+        );
+        // One separator between each button, no doubled `|`: regression for
+        // the goal button using a leading separator next to approve's trailing
+        // one (`approve | | run as goal request changes`).
+        let row = row_text(&buf, goal_area.y);
+        assert!(
+            row.contains("approve  |  g run as goal"),
+            "single separator between approve and run as goal: {row:?}"
+        );
+        assert!(
+            row.contains("g run as goal  |  s request changes"),
+            "single separator between run as goal and request changes: {row:?}"
+        );
+        assert!(
+            !row.contains("|    |") && !row.contains("| |"),
+            "no doubled separator in footer: {row:?}"
         );
 
         // Casual preview (footer, but not approval): no goal button.
