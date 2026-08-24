@@ -14,6 +14,9 @@ pub const VERSION: &str = match option_env!("GROK_VERSION") {
 /// User-facing CLI binary name for the thanh fork (pasteable hints, errors, docs).
 pub const CLI_BINARY_NAME: &str = "thanh";
 
+/// The release pipeline always injects `GROK_VERSION`; without it the build is from source.
+pub const IS_DEV_BUILD: bool = option_env!("GROK_VERSION").is_none();
+
 /// Runtime-injected `"<version> (<shortcommit>)"` string. Only the release
 /// binary stamps the commit hash in its own build.rs and injects it here at
 /// startup, so the big lib crates don't recompile on every commit.

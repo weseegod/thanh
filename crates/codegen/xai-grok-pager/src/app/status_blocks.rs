@@ -218,7 +218,7 @@ pub(crate) fn session_usage_block_text(
         rows.push("  By model:".to_string());
         for (model, m) in &usage.model_usage {
             rows.push(format!(
-                "    {model} — {} in / {} out · {}",
+                "    {model}: {} in / {} out · {}",
                 group_thousands(m.input_tokens),
                 group_thousands(m.output_tokens),
                 format_cost(m),
@@ -346,8 +346,8 @@ mod tests {
             .insert("grok-4".into(), model_row(50, 5, None));
         let text = session_usage_block_text(&usage);
         assert!(text.contains("By model:"), "{text}");
-        assert!(text.contains("grok-build — 100 in / 10 out"), "{text}");
-        assert!(text.contains("grok-4 — 50 in / 5 out"), "{text}");
+        assert!(text.contains("grok-build: 100 in / 10 out"), "{text}");
+        assert!(text.contains("grok-4: 50 in / 5 out"), "{text}");
     }
 
     #[test]

@@ -472,7 +472,7 @@ impl AgentView {
         // Non-prompt rows stay queued (see `queue_row_prompt_like`): save the edit.
         let row_prompt_like = self.queue_row_prompt_like(id);
         if row_prompt_like == Some(false) {
-            self.show_toast("Can't send this mid-turn — it runs when the current turn ends");
+            self.show_toast("Can't send this mid-turn: it runs when the current turn ends");
             return self.save_edited_queued_row(id, server_id, true);
         }
         if row_prompt_like.is_none() && kind != crate::app::agent::QueueEntryKind::Prompt {
@@ -992,6 +992,7 @@ mod tests {
             target: crate::app::actions::ClipboardPasteTarget::AgentPrompt {
                 agent_id: agent.session.id,
                 images_dir: None,
+                from_feedback_pane: false,
             },
             source: crate::app::actions::ClipboardPasteSource::ClipboardKey {
                 text: crate::app::actions::ClipboardTextRead::Success(None),

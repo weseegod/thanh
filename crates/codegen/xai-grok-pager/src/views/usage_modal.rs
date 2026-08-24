@@ -164,7 +164,7 @@ impl UsageInfoModalState {
             context_error: None,
             session_error: None,
             session_usage_text: None,
-            fetch_nonce: 0,
+fetch_nonce: 0,
             session_fields: None,
             copy_hits: Vec::new(),
             hovered_copy_line: None,

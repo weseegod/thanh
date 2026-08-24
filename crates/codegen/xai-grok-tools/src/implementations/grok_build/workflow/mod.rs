@@ -283,8 +283,8 @@ impl xai_tool_runtime::Tool for WorkflowTool {
                         .unwrap_or_default();
                     format!(
                         "Workflow '{name}' started in the background. Progress appears in \
-                         /workflows and completion is reported automatically. '{name}' is the \
-                         session-unique display handle for user-facing status and /workflow \
+                         /workflow runs and completion is reported automatically. '{name}' is \
+                         the session-unique display handle for user-facing status and /workflow \
                          management; keep the structured run id internal.{iterate}"
                     )
                 },

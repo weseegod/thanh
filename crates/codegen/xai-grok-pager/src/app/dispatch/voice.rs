@@ -64,7 +64,7 @@ fn open_voice_tier_upsell(app: &mut AppView) -> Vec<Effect> {
         }
         ActiveView::AgentDashboard => {
             if let Some(d) = app.dashboard.as_mut() {
-                d.set_error_toast("/voice isn't available on your current plan.");
+d.set_error_toast("/voice isn't available on your current plan.");
             }
         }
         _ => {}

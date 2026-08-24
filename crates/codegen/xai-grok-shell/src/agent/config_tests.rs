@@ -1057,6 +1057,7 @@ fn test_model_entry(
             agent_type: default_agent_type(),
             inference_idle_timeout_secs: None,
             max_retries: None,
+            subagent_rate_limit_max_attempts: None,
             hidden: false,
             supported_in_api: true,
             reasoning_effort: None,
@@ -2132,6 +2133,7 @@ fn model_info_from_config_propagates_use_concise() {
         agent_type: default_agent_type(),
         inference_idle_timeout_secs: None,
         max_retries: None,
+        subagent_rate_limit_max_attempts: None,
         hidden: false,
         supported_in_api: true,
         reasoning_effort: None,
@@ -2293,6 +2295,7 @@ fn model_info_from_config_propagates_agent_type() {
         agent_type: "codex".to_string(),
         inference_idle_timeout_secs: None,
         max_retries: None,
+        subagent_rate_limit_max_attempts: None,
         hidden: false,
         supported_in_api: true,
         reasoning_effort: None,
@@ -2782,6 +2785,7 @@ fn inference_idle_timeout_propagates_to_model_info() {
         agent_type: default_agent_type(),
         inference_idle_timeout_secs: Some(120),
         max_retries: None,
+        subagent_rate_limit_max_attempts: None,
         hidden: false,
         supported_in_api: true,
         reasoning_effort: None,
@@ -5347,11 +5351,19 @@ fn known_non_serde_config_paths_are_not_reported_unused() {
             not_a_real_feature = true
             [slash_command_tags]
             workflows = "new"
+            [marketplace]
+            plugin_cta_marketplace = "Acme Marketplace"
         "#,
     );
     assert!(
         !unused.iter().any(|k| k == "features.remote_fetch"),
         "features.remote_fetch must not be treated as a typo: {unused:?}"
+    );
+    assert!(
+        !unused
+            .iter()
+            .any(|k| k == "marketplace.plugin_cta_marketplace"),
+        "the pager-read CTA marketplace override must not warn: {unused:?}"
     );
     assert!(
         !unused.iter().any(|k| k == "features.session_search"),
@@ -6872,6 +6884,7 @@ fn prefetch_model_entry(slug: &str, context_window: u64, api_backend: ApiBackend
             agent_type: default_agent_type(),
             inference_idle_timeout_secs: None,
             max_retries: None,
+            subagent_rate_limit_max_attempts: None,
             hidden: false,
             supported_in_api: true,
             reasoning_effort: None,
@@ -7010,6 +7023,7 @@ fn global_model_defaults_apply_to_model_without_override() {
     cfg.models.max_completion_tokens = Some(4096);
     cfg.models.max_retries = Some(9);
     cfg.models.inference_idle_timeout_secs = Some(600);
+    cfg.models.subagent_rate_limit_max_attempts = Some(12);
     cfg.models.stream_tool_calls = Some(true);
     let entry = prefetch_model_entry("remote-only-model", 200_000, ApiBackend::default());
     let mut prefetched = IndexMap::new();
@@ -7024,6 +7038,7 @@ fn global_model_defaults_apply_to_model_without_override() {
     assert_eq!(info.max_completion_tokens, Some(4096));
     assert_eq!(info.max_retries, Some(9));
     assert_eq!(info.inference_idle_timeout_secs, Some(600));
+    assert_eq!(info.subagent_rate_limit_max_attempts, Some(12));
     assert_eq!(info.stream_tool_calls, Some(true));
 }
 #[test]

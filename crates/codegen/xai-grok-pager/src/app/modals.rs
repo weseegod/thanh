@@ -68,6 +68,8 @@ impl AgentView {
             has_session_announcements: slash_controller.has_session_announcements(),
             usage_command_visible: slash_controller.usage_command_visible(),
             workflows_available: slash_controller.workflows_available(),
+            saved_workflows: slash_controller.registry().saved_workflows(),
+            workflow_runs: slash_controller.workflow_runs(),
             screen_mode: slash_controller.screen_mode(),
             current_title: slash_controller.current_title(),
         };

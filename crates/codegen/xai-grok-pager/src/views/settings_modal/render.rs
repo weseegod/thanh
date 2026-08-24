@@ -1659,7 +1659,7 @@ pub(super) fn render_editing_value(
     if buffer.is_empty() {
         let placeholder = match &meta.kind {
             SettingKind::String { validator, .. } => match validator {
-                StringValidator::KnownModel => "<empty — use shell default>",
+                StringValidator::KnownModel => "<empty: uses shell default>",
                 StringValidator::NonEmptyToken => "<type a value>",
                 StringValidator::Any => "<type a value>",
             },
@@ -1757,7 +1757,7 @@ fn render_int_stepper(
         // current value, so this branch should be unreachable, but
         // a blank cell would be confusing if a future refactor
         // dropped the seed.
-        "—".to_string()
+        "-".to_string()
     } else {
         buffer.to_string()
     };

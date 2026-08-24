@@ -734,21 +734,24 @@ pub struct DashboardState {
 }
 
 /// Mode staged for the next agent the dashboard spawns. Mirrors the agent
-/// view's Shift+Tab cycle (Normal → Plan → Always-Approve → Normal).
+/// view's Shift+Tab cycle (Normal → Plan → Auto → Always-Approve → Normal
+/// when Auto is enabled).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum DashboardDispatchMode {
     #[default]
     Normal,
     Plan,
+    Auto,
     AlwaysApprove,
 }
 
 impl DashboardDispatchMode {
     /// Advance to the next mode in the Shift+Tab rotation.
-    pub fn cycle(self) -> Self {
+    pub fn cycle(self, auto_mode_gate: bool) -> Self {
         match self {
             Self::Normal => Self::Plan,
-            Self::Plan => Self::AlwaysApprove,
+            Self::Plan if auto_mode_gate => Self::Auto,
+            Self::Plan | Self::Auto => Self::AlwaysApprove,
             Self::AlwaysApprove => Self::Normal,
         }
     }
@@ -2509,7 +2512,7 @@ impl DashboardState {
         let mut attachment = match image {
             ProbedAttachment::Image(pasted) => {
                 if peek_in_question {
-                    self.set_error_toast("Pasted image discarded — reply switched to a question");
+                    self.set_error_toast("Pasted image discarded: reply switched to a question");
                     ClipboardPasteCompletion::Dropped
                 } else {
                     let (_, completion) = if peek {
@@ -2534,7 +2537,7 @@ impl DashboardState {
             if file_urls.as_deref().is_some_and(|urls| {
                 !crate::prompt_images::try_read_images_from_paste(urls).is_empty()
             }) {
-                self.set_error_toast("Pasted image discarded — reply switched to a question");
+                self.set_error_toast("Pasted image discarded: reply switched to a question");
             }
             attachment = ClipboardPasteCompletion::Dropped;
         }
@@ -2610,12 +2613,12 @@ impl DashboardState {
                 });
             } else if !same_row {
                 // Never reply to a row the user is no longer peeking.
-                self.set_error_toast("Reply canceled — peek panel changed");
+                self.set_error_toast("Reply canceled: peek panel changed");
             } else {
                 // A question now owns the panel (Enter answers it there, and the
                 // reply dispatch would silently queue a prompt + wipe the draft
                 // behind the dialog) — drop the stash; the draft stays put.
-                self.set_error_toast("Reply canceled — answer the question first");
+                self.set_error_toast("Reply canceled: answer the question first");
             }
         }
         actions
@@ -4571,6 +4574,7 @@ fn dashboard_action_for_id(
         // flag a missing case when a new Dashboard* action is added.
         ActionId::SendPrompt
         | ActionId::InterjectPrompt
+        | ActionId::StashPrompt
         | ActionId::ScrollUp
         | ActionId::ScrollDown
         | ActionId::PageUp

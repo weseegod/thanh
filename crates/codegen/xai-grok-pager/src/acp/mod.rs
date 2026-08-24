@@ -19,6 +19,9 @@ pub(crate) fn is_session_update_ext_method(method: &str) -> bool {
     matches!(method, "x.ai/session_notification" | "x.ai/session/update")
 }
 
+use xai_grok_telemetry::process_info::{
+    Entrypoint, Interactivity, LeaderMode, ProcessIdentity, set_identity,
+};
 use xai_grok_telemetry::startup;
 pub use xai_grok_telemetry::startup::{
     AgentKind, Owner, StartupOutcome, StartupPhase, StartupTimer,
@@ -107,6 +110,8 @@ pub struct AcpConnection {
     /// disabled feature produces zero `x.ai/recap` traffic. Defaults to `false`
     /// when absent (e.g. an older shell that predates the feature).
     pub session_recap_available: bool,
+    /// Shell-side feedback trace-offer eligibility (see `feedbackTraceOffer`).
+    pub feedback_trace_offer: bool,
     /// `AuthManager` for pager-side authenticated channels (voice STT/TTS).
     ///
     /// In-process mode shares the agent's instance (single token cache); leader
@@ -206,6 +211,14 @@ pub async fn connect(cancel: &CancellationToken, flags: ConnectFlags) -> Result<
 
     apply_config_writes(&flags);
 
+    // Stamped before the spawn/handshake can fail: a failed connect still
+    // reports under this identity.
+    set_identity(ProcessIdentity {
+        entrypoint: Entrypoint::Embedded,
+        leader: LeaderMode::Standalone,
+        interactivity: Interactivity::Interactive,
+    });
+
     let memory_config = agent_config.memory_config.clone();
     let spawned = spawn::spawn_grok_shell(agent_config, cancel, memory_config).await?;
     let auth_manager = spawned.auth_manager.clone();
@@ -220,6 +233,7 @@ pub async fn connect(cancel: &CancellationToken, flags: ConnectFlags) -> Result<
         available_commands,
         cancel_rewind_enabled,
         session_recap_available,
+        feedback_trace_offer,
     ) = initialize(&tx, &flags).await?;
 
     // Determine whether interactive login is needed.
@@ -256,6 +270,7 @@ pub async fn connect(cancel: &CancellationToken, flags: ConnectFlags) -> Result<
         leader_status_rx: None,
         cancel_rewind_enabled,
         session_recap_available,
+        feedback_trace_offer,
         auth_manager,
     })
 }
@@ -341,6 +356,7 @@ pub async fn connect_via_leader(
         available_commands,
         cancel_rewind_enabled,
         session_recap_available,
+        feedback_trace_offer,
     ) = initialize(&tx, &flags).await?;
 
     let (needs_login, login_label, login_method_id, auth_start_mode) =
@@ -371,6 +387,11 @@ pub async fn connect_via_leader(
     ));
 
     // Leader has no in-process agent; init this process's product telemetry client.
+    set_identity(ProcessIdentity {
+        entrypoint: Entrypoint::Pager,
+        leader: LeaderMode::Attached,
+        interactivity: Interactivity::Interactive,
+    });
     xai_grok_shell::agent::init::update_telemetry_config(&agent_config, &auth_manager);
 
     Ok(AcpConnection {
@@ -390,6 +411,7 @@ pub async fn connect_via_leader(
         leader_status_rx: Some(status_rx),
         cancel_rewind_enabled,
         session_recap_available,
+        feedback_trace_offer,
         auth_manager,
     })
 }
@@ -516,6 +538,7 @@ async fn initialize(
     Vec<acp::AvailableCommand>,
     bool,
     bool,
+    bool,
 )> {
     let req = acp::InitializeRequest::new(acp::ProtocolVersion::V1)
         .client_capabilities(
@@ -558,6 +581,7 @@ async fn initialize(
         .unwrap_or(true);
 
     let session_recap_available = parse_session_recap_available(resp.meta.as_ref());
+    let feedback_trace_offer = parse_feedback_trace_offer(resp.meta.as_ref());
     let default_auth_method_id = parse_default_auth_method_id(resp.meta.as_ref());
 
     Ok((
@@ -568,6 +592,7 @@ async fn initialize(
         available_commands,
         cancel_rewind_enabled,
         session_recap_available,
+        feedback_trace_offer,
     ))
 }
 
@@ -587,6 +612,12 @@ pub fn parse_available_commands(meta: Option<&acp::Meta>) -> Vec<acp::AvailableC
 /// defaults produce zero automatic recap traffic.
 pub fn parse_session_recap_available(meta: Option<&acp::Meta>) -> bool {
     meta.and_then(|m| m.get("sessionRecap"))
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
+}
+
+pub fn parse_feedback_trace_offer(meta: Option<&acp::Meta>) -> bool {
+    meta.and_then(|m| m.get("feedbackTraceOffer"))
         .and_then(|v| v.as_bool())
         .unwrap_or(false)
 }
@@ -1141,16 +1172,16 @@ mod tests {
     }
 
     #[test]
-    fn client_capabilities_meta_defaults_absent_or_blank_mode_to_agent_only() {
+    fn client_capabilities_meta_defaults_absent_or_blank_mode_to_off() {
         // Rows 1 & 2 of the truth table: nothing set, and a set-but-blank value,
-        // both advertise the `agent_only` default (never `""` → AllDirty).
+        // both advertise the `off` default (never `""` → AllDirty).
         let absent = client_capabilities_meta(&ConnectFlags::default());
-        assert_eq!(absent["x.ai/hunkTracker"]["mode"], "agent_only");
+        assert_eq!(absent["x.ai/hunkTracker"]["mode"], "off");
         let blank = client_capabilities_meta(&ConnectFlags {
             hunk_tracker_mode: Some("   ".into()),
             ..Default::default()
         });
-        assert_eq!(blank["x.ai/hunkTracker"]["mode"], "agent_only");
+        assert_eq!(blank["x.ai/hunkTracker"]["mode"], "off");
     }
 
     /// The agent gates the whole payload on this key, so a misspelling on
