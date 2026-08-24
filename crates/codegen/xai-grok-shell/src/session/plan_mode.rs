@@ -373,8 +373,9 @@ impl PlanModeTracker {
 /// Tool name placeholders (`${{ tools.by_kind.edit }}`, etc.) are resolved
 /// automatically from the registry's `ToolKind` \u{2192} client-facing name mapping.
 /// When a task (subagent) tool is registered, the reminder also states the
-/// subagent policy: read-only `explore` spawns are allowed for parallel
-/// exploration, write-capable spawns are not.
+/// subagent policy: read-only `explore` spawns (including several in
+/// parallel) are allowed, write-capable spawns are system-rejected while
+/// plan mode is active.
 pub(crate) fn plan_mode_reminder_full_template() -> &'static str {
     "\
 Plan mode is active. Do not make any edits or writes to the system.
@@ -393,10 +394,11 @@ Note that this is the only file you are allowed to edit.
 
 ${%- if tools.by_kind.task %}
 You may spawn read-only subagents (subagent_type=\"explore\") using the \
-${{ tools.by_kind.task }} tool to explore the codebase in parallel; they \
-do not edit files. Do not spawn write-capable subagents (general-purpose) \
-while plan mode is active - they are not covered by this gate, so defer \
-file changes beyond the plan file until after you exit plan mode.
+${{ tools.by_kind.task }} tool - spawn several in parallel for exploration \
+and read-only measurements; they never edit files. Spawning write-capable \
+subagents (e.g. general-purpose) while plan mode is active is rejected by \
+the system - defer all file changes beyond the plan file until after you \
+exit plan mode.
 ${%- endif %}
 
 Your turn should only end with either ${{ tools.by_kind.ask_user }} to clarify \
@@ -424,10 +426,11 @@ A plan file exists at ${{ plan_path }} from your previous planning session.
 
 ${%- if tools.by_kind.task %}
 You may spawn read-only subagents (subagent_type=\"explore\") using the \
-${{ tools.by_kind.task }} tool to explore the codebase in parallel; they \
-do not edit files. Do not spawn write-capable subagents (general-purpose) \
-while plan mode is active - they are not covered by this gate, so defer \
-file changes beyond the plan file until after you exit plan mode.
+${{ tools.by_kind.task }} tool - spawn several in parallel for exploration \
+and read-only measurements; they never edit files. Spawning write-capable \
+subagents (e.g. general-purpose) while plan mode is active is rejected by \
+the system - defer all file changes beyond the plan file until after you \
+exit plan mode.
 ${%- endif %}
 
 Your turn should only end with either ${{ tools.by_kind.ask_user }} to clarify requirements or ${{ tools.by_kind.exit_plan }} to present your plan to the user."
@@ -440,6 +443,19 @@ Your turn should only end with either ${{ tools.by_kind.ask_user }} to clarify r
 /// `{ "plan_path": "..." }`.
 pub(crate) fn plan_mode_edit_rejected_template() -> &'static str {
     "Rejected: file edits are not allowed in plan mode - the only editable file is the plan file (${{ plan_path }})."
+}
+/// Rejection message for a write-capable subagent spawn while plan mode is
+/// active. Returned as the tool result so the model knows read-only spawns
+/// stay allowed (including parallel ones) and only write-capable types are
+/// blocked.
+///
+/// Render via `TemplateRenderer::render_with_extra()` with
+/// `{ "plan_path": "..." }`; `tools.by_kind.task` resolves from the registry.
+pub(crate) fn plan_mode_subagent_rejected_template() -> &'static str {
+    "Rejected: spawning write-capable subagents is not allowed in plan mode - \
+the only editable file is the plan file (${{ plan_path }}). You may spawn \
+read-only subagents (subagent_type=\"explore\") using the ${{ tools.by_kind.task }} \
+tool - spawn several in parallel; they never edit files."
 }
 /// Exit reminder template.
 ///
@@ -791,8 +807,12 @@ mod tests {
             "full reminder should allow read-only explore subagents: {text}"
         );
         assert!(
-            text.contains("Do not spawn write-capable subagents"),
-            "full reminder should forbid write-capable subagents: {text}"
+            text.contains("spawn several in parallel"),
+            "full reminder should encourage parallel read-only spawns: {text}"
+        );
+        assert!(
+            text.contains("write-capable") && text.contains("rejected by the system"),
+            "full reminder should say write-capable spawns are system-rejected: {text}"
         );
         assert!(
             text.contains("task tool"),
@@ -888,7 +908,8 @@ mod tests {
         );
         assert!(text.contains("Returning to Plan Mode"));
         assert!(text.contains("subagent_type=\"explore\""));
-        assert!(text.contains("Do not spawn write-capable subagents"));
+        assert!(text.contains("spawn several in parallel"));
+        assert!(text.contains("rejected by the system"));
         assert!(text.contains("task tool"));
         assert!(!text.contains("${{"));
     }
@@ -937,6 +958,33 @@ mod tests {
         );
     }
     #[test]
+    fn subagent_rejected_template_renders_with_plan_path_and_task_tool() {
+        let r = test_renderer_with_task();
+        let text = render(
+            &r,
+            plan_mode_subagent_rejected_template(),
+            "/tmp/session/plan.md",
+            false,
+        );
+        assert!(
+            text.contains("Rejected: spawning write-capable subagents is not allowed in plan mode"),
+            "rejection should name the blocked action: {text}"
+        );
+        assert!(
+            text.contains("only editable file is the plan file (/tmp/session/plan.md)"),
+            "rejection should name the plan file: {text}"
+        );
+        assert!(
+            text.contains("subagent_type=\"explore\""),
+            "rejection should redirect to read-only explore spawns: {text}"
+        );
+        assert!(
+            text.contains("task tool"),
+            "task tool name hint should resolve from the registry: {text}"
+        );
+        assert!(!text.contains("${{"), "unresolved placeholder: {text}");
+    }
+    #[test]
     fn templates_are_static_with_no_hardcoded_tool_names() {
         let hardcoded_names = [
             "search_replace",
@@ -952,6 +1000,7 @@ mod tests {
             plan_mode_reentry_reminder_template(),
             plan_mode_exit_reminder_template(),
             plan_mode_edit_rejected_template(),
+            plan_mode_subagent_rejected_template(),
         ];
         for template in &templates {
             for name in &hardcoded_names {

@@ -1752,6 +1752,12 @@ mod plan_mode_edit_gate_tests;
 #[cfg(test)]
 #[path = "acp_session_tests/plan_mode_midturn_tests.rs"]
 mod plan_mode_midturn_tests;
+/// Plan-mode subagent gate: read-only spawns (explore) stay allowed,
+/// write-capable spawns are rejected with a clear message, unknown types
+/// fail closed.
+#[cfg(test)]
+#[path = "acp_session_tests/plan_mode_subagent_gate_tests.rs"]
+mod plan_mode_subagent_gate_tests;
 /// Tests for [`conversation_has_project_instructions`], the idempotence
 /// helper that gates the spawn-time AGENTS.md / CLAUDE.md injector.
 ///

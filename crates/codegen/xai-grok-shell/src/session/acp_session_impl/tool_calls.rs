@@ -209,6 +209,8 @@ pub(super) enum PlanEditGate {
     Allow,
     /// Grok-toolset edit outside the plan file (plan-file-only rule).
     RejectNonPlanFile,
+    /// Task-tool spawn of a write-capable subagent while plan mode is active.
+    RejectWriteCapableSubagent,
 }
 /// Gate edit-class tool calls while plan mode is active.
 ///
@@ -231,10 +233,14 @@ pub(super) enum PlanEditGate {
 /// `apply_patch` maps to a placeholder `AccessKind::Edit("apply_patch")` and
 /// therefore never matches the plan file: it is always rejected in plan mode
 /// (conservative — per-file targets are only known after patch parsing).
-/// Non-edit tools (bash, read, grep, MCP, web) are never gated here; they
-/// flow to the normal permission path, where yolo may still auto-approve
-/// them. `enter_plan_mode` / `exit_plan_mode` map to `AccessKind::Read` and
-/// are likewise never gated.
+/// The task tool (`ToolInput::Task`) maps to a synthetic `AccessKind::Edit(
+/// "task:{type}")` pseudo-path for the permission layer; it is NOT a file
+/// edit, so this gate defers it to [`plan_mode_subagent_gate`], which owns
+/// the plan-mode subagent policy (read-only spawns allowed, write-capable
+/// rejected). Non-edit tools (bash, read, grep, MCP, web) are never gated
+/// here; they flow to the normal permission path, where yolo may still
+/// auto-approve them. `enter_plan_mode` / `exit_plan_mode` map to
+/// `AccessKind::Read` and are likewise never gated.
 pub(super) fn plan_mode_edit_gate(
     tracker: &crate::session::plan_mode::PlanModeTracker,
     tool_input: &ToolInput,
@@ -243,13 +249,96 @@ pub(super) fn plan_mode_edit_gate(
     if !tracker.is_active() {
         return PlanEditGate::Allow;
     }
-    let _ = tool_input;
+    if matches!(tool_input, ToolInput::Task(_)) {
+        return PlanEditGate::Allow;
+    }
     match access_kind {
         AccessKind::Edit(path) if !tracker.should_auto_approve_edit(Path::new(path)) => {
             PlanEditGate::RejectNonPlanFile
         }
         _ => PlanEditGate::Allow,
     }
+}
+/// Gate `task`-tool subagent spawns while plan mode is active.
+///
+/// Plan mode is read-only in every permission mode; the edit gate covers
+/// file edits, and this covers the second write path: spawning a
+/// write-capable subagent (general-purpose, codex, ...) would let an
+/// ungated `PromptMode::Agent` child edit files freely. Read-only spawns
+/// (explore — including several in parallel) stay allowed; therefore the
+/// model keeps its parallel exploration while the workspace stays
+/// read-only in fact, not just by reminder.
+///
+/// Unknown / unresolvable subagent types fail CLOSED (rejected): the
+/// spawn would later fail `Unknown` anyway, and rejecting early with a
+/// clear message beats a silent mid-turn failure. `cli_agents` is
+/// test-only on the session side, so resolution mirrors the spawn path's
+/// builtin/project/user/plugin discovery.
+pub(super) fn plan_mode_subagent_gate(
+    tracker: &crate::session::plan_mode::PlanModeTracker,
+    tool_input: &ToolInput,
+    cwd: &std::path::Path,
+    plugins: Option<&xai_grok_agent::plugins::PluginRegistry>,
+) -> PlanEditGate {
+    if !tracker.is_active() {
+        return PlanEditGate::Allow;
+    }
+    let ToolInput::Task(spawn) = tool_input else {
+        return PlanEditGate::Allow;
+    };
+    if subagent_is_read_only(&spawn.subagent_type, cwd, plugins) {
+        PlanEditGate::Allow
+    } else {
+        PlanEditGate::RejectWriteCapableSubagent
+    }
+}
+/// Whether a subagent type resolves to a genuinely read-only definition.
+///
+/// Read-only iff the definition declares `capability_mode == ReadOnly` OR
+/// its toolset survives a `ReadOnly` capability filter intact — every tool
+/// has a known kind and that kind is read-allowed (the same semantics the
+/// explorer/plan toolsets use to stay editable-free). Unresolvable types
+/// and tools with unknown kinds return `false` (fail-closed; see
+/// [`plan_mode_subagent_gate`]).
+fn subagent_is_read_only(
+    subagent_type: &str,
+    cwd: &std::path::Path,
+    plugins: Option<&xai_grok_agent::plugins::PluginRegistry>,
+) -> bool {
+    let Some(definition) = resolve_subagent_definition(subagent_type, cwd, plugins) else {
+        return false;
+    };
+    if definition.capability_mode == Some(xai_tool_types::SubagentCapabilityMode::ReadOnly) {
+        return true;
+    }
+    let filtered =
+        xai_grok_workspace::capability::CapabilityMode::ReadOnly.filter(&definition.tool_config);
+    filtered.tools.len() == definition.tool_config.tools.len()
+        && definition
+            .tool_config
+            .tools
+            .iter()
+            .all(|tc| tc.kind.is_some())
+}
+/// Resolve a subagent type to its `AgentDefinition` via the same
+/// builtin/project/user/plugin discovery the spawn path uses. The shell's
+/// `cli_agents` list is deliberately empty here (test-only on the session
+/// side); unresolvable names return `None`.
+fn resolve_subagent_definition(
+    subagent_type: &str,
+    cwd: &std::path::Path,
+    plugins: Option<&xai_grok_agent::plugins::PluginRegistry>,
+) -> Option<xai_grok_agent::config::AgentDefinition> {
+    xai_grok_subagent_resolution::discover_agent_definition(
+        subagent_type,
+        &xai_grok_subagent_resolution::DefinitionResolutionContext {
+            cwd,
+            plugins,
+            cli_agents: &[],
+            toggles: &std::collections::HashMap::new(),
+            allowed_types: None,
+        },
+    )
 }
 /// Typed view of an `exit_plan_mode` approval decision. The wire type
 /// (`ExitPlanModeExtResponse`) carries `outcome` as a string; both the mid-turn
@@ -1244,6 +1333,27 @@ impl SessionActor {
             )
             .in_scope(|| {});
             let msg = self.plan_mode_edit_rejected_message().await;
+            self.handle_tool_not_executed(&call.id, &tool_call_id, msg)
+                .await?;
+            return Ok(Err(ToolLoop::Continue));
+        }
+        let subagent_gate = plan_mode_subagent_gate(
+            &self.plan_mode.lock(),
+            &tool_input,
+            &self.tool_context.cwd.as_path(),
+            self.plugin_registry.borrow().as_deref(),
+        );
+        if subagent_gate != PlanEditGate::Allow {
+            tracing::info_span!(
+                "tool.decision",
+                tool_name = %call.function.name,
+                tool_use_id = %call.id,
+                decision = "deny",
+                source = "plan_mode_subagent",
+                wait_ms = 0_i64,
+            )
+            .in_scope(|| {});
+            let msg = self.plan_mode_subagent_rejected_message().await;
             self.handle_tool_not_executed(&call.id, &tool_call_id, msg)
                 .await?;
             return Ok(Err(ToolLoop::Continue));
@@ -3089,6 +3199,27 @@ impl SessionActor {
             format!(
                 "Rejected: file edits are not allowed in plan mode - the only editable \
                  file is the plan file ({}).",
+                plan_path.display()
+            )
+        })
+    }
+    /// Model-facing rejection for a write-capable subagent spawn while plan
+    /// mode is active. Rendered via the session's `TemplateRenderer` so
+    /// `${{ plan_path }}` / `${{ tools.by_kind.task }}` resolve; falls back
+    /// if rendering fails.
+    pub(super) async fn plan_mode_subagent_rejected_message(&self) -> String {
+        let plan_path = self.plan_mode.lock().plan_file_path().to_path_buf();
+        self.render_plan_template(
+            crate::session::plan_mode::plan_mode_subagent_rejected_template(),
+            &plan_path,
+            false,
+        )
+        .await
+        .unwrap_or_else(|| {
+            format!(
+                "Rejected: spawning write-capable subagents is not allowed in plan mode - \
+                 the only editable file is the plan file ({}). You may spawn read-only \
+                 subagents (subagent_type=\"explore\") — they never edit files.",
                 plan_path.display()
             )
         })
