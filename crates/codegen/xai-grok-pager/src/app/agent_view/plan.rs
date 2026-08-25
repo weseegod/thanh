@@ -13,9 +13,7 @@ use crate::views::plan_approval_view::{
     PlanApprovalFocus, PlanApprovalViewState, PlanComment, PlanReviewSource,
 };
 use crate::views::prompt_widget::{EnterOutcome, PromptEvent};
-#[cfg(test)]
-use crossterm::event::KeyModifiers;
-use crossterm::event::{KeyCode, KeyEvent};
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 /// Telemetry for every way a plan review resolves ("build", "abandon",
 /// "revise").
 fn log_plan_submit(action: &str) {
@@ -421,6 +419,98 @@ impl AgentView {
             .plan_approval_view
             .as_ref()
             .is_some_and(|pav| pav.focus == PlanApprovalFocus::Commenting);
+
+        // ── Slash commands on the approval prompt ─────────────────────────
+        // A complete pager command (e.g. `/model grok-4.5`) runs and LEAVES
+        // the overlay open, so the user can switch the implement model and
+        // still press `a` (approve) or `g` (run as goal). Unknown or
+        // incomplete `/…` must never leak to the model as revision notes,
+        // so they are toasted / left editing instead of being sent through
+        // `send_plan_feedback`.
+        if !is_commenting && key.code == KeyCode::Enter && key.modifiers.is_empty() {
+            let text = self.prompt.text().to_string();
+            let trimmed = text.trim();
+            if trimmed.starts_with('/') {
+                let registry = self.prompt.slash_controller.registry();
+                let invocation = crate::slash::parse_invocation(trimmed);
+                let known = invocation
+                    .as_ref()
+                    .and_then(|inv| registry.get_for_dispatch(inv.token))
+                    .is_some();
+                if known && crate::slash::is_command_complete(trimmed, registry) {
+                    if self.prompt.slash_open() {
+                        self.prompt.slash_close();
+                    }
+                    return InputOutcome::Action(Action::SendPrompt(text));
+                }
+                if known {
+                    // Args required and still incomplete: keep editing.
+                    return InputOutcome::Changed;
+                }
+                self.show_toast(
+                    "Unknown command — type revision notes without \"/\", or press a to approve.",
+                );
+                return InputOutcome::Changed;
+            }
+        }
+
+        // ── Slash dropdown intercept (mirrors the normal composer) ────────
+        if !is_commenting && self.prompt.slash_open() && !self.prompt.file_search_visible() {
+            match key.code {
+                KeyCode::Up => {
+                    self.prompt.slash_move_selection(-1);
+                    self.prompt.slash_preview_current_selection();
+                    return InputOutcome::Changed;
+                }
+                KeyCode::Down => {
+                    self.prompt.slash_move_selection(1);
+                    self.prompt.slash_preview_current_selection();
+                    return InputOutcome::Changed;
+                }
+                KeyCode::Char('p') if key.modifiers == KeyModifiers::CONTROL => {
+                    self.prompt.slash_move_selection(-1);
+                    self.prompt.slash_preview_current_selection();
+                    return InputOutcome::Changed;
+                }
+                KeyCode::Char('n') if key.modifiers == KeyModifiers::CONTROL => {
+                    self.prompt.slash_move_selection(1);
+                    self.prompt.slash_preview_current_selection();
+                    return InputOutcome::Changed;
+                }
+                // Tab accepts the highlighted completion without leaving
+                // the prompt; args-taking commands re-open the dropdown
+                // with the trailing space (chained autocomplete).
+                KeyCode::Tab => {
+                    self.prompt.slash_commit_preview();
+                    self.prompt.accept_slash_completion(&self.session.models);
+                    return InputOutcome::Changed;
+                }
+                // Esc closes the dropdown; a second Esc leaves the prompt.
+                KeyCode::Esc => {
+                    self.prompt.slash_cancel_preview();
+                    self.prompt.slash_close();
+                    return InputOutcome::Changed;
+                }
+                KeyCode::Enter if key.modifiers.is_empty() => {
+                    // Only reached for mid-text `/` tokens (leading-slash
+                    // Enters were handled above): accept the completion.
+                    let chains = self
+                        .prompt
+                        .slash_snapshot()
+                        .selection()
+                        .is_some_and(|row| row.insert_text.ends_with(' '));
+                    self.prompt.slash_commit_preview();
+                    self.prompt.accept_slash_completion(&self.session.models);
+                    if chains {
+                        return InputOutcome::Changed;
+                    }
+                    self.prompt.slash_close();
+                    return InputOutcome::Changed;
+                }
+                _ => {}
+            }
+        }
+
         if crate::input::key::RowWalk::from_key(key).is_some() {
             let focus = self.plan_approval_view.as_ref().map(|p| p.focus);
             match focus {
@@ -519,6 +609,7 @@ impl AgentView {
                 if let Some(req) = self.prompt.pending_viewer_request.take() {
                     self.open_line_viewer(&req.path, req.initial_range);
                 }
+                self.prompt.refresh_slash(&self.session.models);
                 InputOutcome::Changed
             }
             PromptEvent::Ignored => InputOutcome::Changed,
@@ -1531,5 +1622,158 @@ mod plan_approval_optimistic_mode_tests {
         agent.abandon_plan();
         assert_eq!(agent.plan_mode_pending, Some(false));
         assert!(!effective_plan_mode(&agent));
+    }
+}
+/// Slash commands run on the plan-approval prompt and leave the overlay
+/// open for `a` (approve) / `g` (run as goal); unknown or incomplete `/…`
+/// never leak to the model as revision notes.
+#[cfg(test)]
+mod plan_approval_slash_tests {
+    use super::test_fixtures::make_agent;
+    use super::*;
+    use crate::views::plan_approval_view::PlanApprovalFocus;
+
+    fn enter_key() -> KeyEvent {
+        KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)
+    }
+
+    fn agent_with_slash_prompt() -> AgentView {
+        let mut agent = make_agent();
+        let (tx, _rx) = tokio::sync::oneshot::channel();
+        let request = crate::views::plan_approval_view::ExitPlanModeExtRequest {
+            session_id: "test-session".into(),
+            tool_call_id: "call-1".into(),
+            plan_content: Some("# Plan\n\n## Step 1\nDo something".into()),
+        };
+        let mut pav = crate::views::plan_approval_view::PlanApprovalViewState::new(
+            request,
+            crate::views::prompt_widget::StashedPrompt {
+                text: String::new(),
+                cursor: 0,
+                images: Vec::new(),
+                chip_elements: Vec::new(),
+                image_counter: 0,
+                image_undo_stash: Vec::new(),
+            },
+            tx,
+        );
+        pav.focus = PlanApprovalFocus::Prompt;
+        agent.plan_approval_view = Some(pav);
+        agent
+    }
+
+    /// Drive real keystrokes through `handle_plan_feedback_key` so the
+    /// `PromptEvent::Edited` → `refresh_slash` path is exercised.
+    fn type_text(agent: &mut AgentView, text: &str) {
+        for ch in text.chars() {
+            let key = KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE);
+            let _ = agent.handle_plan_feedback_key(&key);
+        }
+    }
+
+    #[test]
+    fn complete_slash_command_runs_and_keeps_overlay() {
+        let mut agent = agent_with_slash_prompt();
+        agent.prompt.set_text("/model grok-4.5");
+        agent.prompt.set_cursor(agent.prompt.text().len());
+        let outcome = agent.handle_plan_feedback_key(&enter_key());
+        match outcome {
+            InputOutcome::Action(Action::SendPrompt(text)) => {
+                assert_eq!(text, "/model grok-4.5")
+            }
+            other => panic!("expected SendPrompt, got {other:?}"),
+        }
+        assert!(
+            agent.plan_approval_view.is_some(),
+            "a slash command on the approval prompt must not dismiss the overlay"
+        );
+    }
+
+    #[test]
+    fn unknown_slash_command_toasts_instead_of_sending_revision() {
+        let mut agent = agent_with_slash_prompt();
+        agent.prompt.set_text("/definitely-not-a-real-command x");
+        agent.prompt.set_cursor(agent.prompt.text().len());
+        let outcome = agent.handle_plan_feedback_key(&enter_key());
+        assert!(matches!(outcome, InputOutcome::Changed));
+        assert!(agent.plan_approval_view.is_some());
+        assert_eq!(
+            agent.toast.as_ref().map(|(msg, _)| msg.as_str()),
+            Some("Unknown command — type revision notes without \"/\", or press a to approve.")
+        );
+    }
+
+    #[test]
+    fn incomplete_slash_command_stays_editing() {
+        let mut agent = agent_with_slash_prompt();
+        agent.prompt.set_text("/model");
+        agent.prompt.set_cursor(agent.prompt.text().len());
+        let outcome = agent.handle_plan_feedback_key(&enter_key());
+        assert!(matches!(outcome, InputOutcome::Changed));
+        assert!(agent.plan_approval_view.is_some());
+        assert!(
+            agent.toast.is_none(),
+            "an incomplete known command must stay editing, not toast"
+        );
+    }
+
+    #[test]
+    fn typing_slash_opens_dropdown() {
+        let mut agent = agent_with_slash_prompt();
+        type_text(&mut agent, "/mo");
+        assert!(
+            agent.prompt.slash_open(),
+            "typing /mo on the approval prompt must open the slash dropdown"
+        );
+    }
+
+    #[test]
+    fn tab_with_dropdown_accepts_completion_and_stays_on_prompt() {
+        let mut agent = agent_with_slash_prompt();
+        type_text(&mut agent, "/mo");
+        assert!(agent.prompt.slash_open());
+        let tab = KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE);
+        let _ = agent.handle_plan_feedback_key(&tab);
+        assert!(
+            agent.prompt.text().starts_with("/model"),
+            "Tab must accept the highlighted completion, got {:?}",
+            agent.prompt.text()
+        );
+        assert_eq!(
+            agent.plan_approval_view.as_ref().map(|p| p.focus),
+            Some(PlanApprovalFocus::Prompt),
+            "Tab with the dropdown open must stay on the prompt (not walk to Preview)"
+        );
+    }
+
+    #[test]
+    fn esc_with_dropdown_closes_dropdown_and_stays_on_prompt() {
+        let mut agent = agent_with_slash_prompt();
+        type_text(&mut agent, "/mo");
+        assert!(agent.prompt.slash_open());
+        let esc = KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE);
+        let _ = agent.handle_plan_feedback_key(&esc);
+        assert!(!agent.prompt.slash_open(), "Esc must close the dropdown");
+        assert_eq!(
+            agent.plan_approval_view.as_ref().map(|p| p.focus),
+            Some(PlanApprovalFocus::Prompt),
+            "closing the dropdown must not leave the prompt"
+        );
+    }
+
+    #[test]
+    fn approval_shortcuts_still_work_after_slash_command() {
+        let mut agent = agent_with_slash_prompt();
+        agent.prompt.set_text("/model grok-4.5");
+        agent.prompt.set_cursor(agent.prompt.text().len());
+        let _ = agent.handle_plan_feedback_key(&enter_key());
+        // dispatch_send_prompt_inner consumes the composer after the command.
+        agent.prompt.set_text("");
+        let a = KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE);
+        let _ = agent.handle_plan_feedback_key(&a);
+        assert!(
+            agent.plan_approval_view.is_none(),
+            "`a` must still approve after a slash command ran on the prompt"
+        );
     }
 }

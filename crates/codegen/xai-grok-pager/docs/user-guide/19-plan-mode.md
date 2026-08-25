@@ -83,7 +83,7 @@ Scroll the plan with the arrow keys or `j`/`k`. The action bar shows these short
 
 Press `Tab` to move focus between the plan preview and the prompt.
 
-While the plan approval view is open, `Ctrl+P` (command palette → model) still works for switching model before you press `a` to approve.
+While the plan approval view is open you can switch the model before approving: on the prompt, run `/model <id>` (or any slash command — the overlay stays open, then `a` / `g` still work), or press `Ctrl+P` (command palette → model) / `Ctrl+M` from the preview. The new model applies to the implement turn after approval. In the approval preview, `/` starts a slash command on the prompt instead of in-plan search; in-plan search/filter remains on `f`.
 
 ### Providing Feedback
 

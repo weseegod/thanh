@@ -4,7 +4,7 @@
 //! so dragging the thumb selected plan lines for a comment instead of
 //! scrolling (GB-4579: "can't click and drag scrollbar to view plan").
 
-use crossterm::event::{Event, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use ratatui::layout::Rect;
 
 use crate::actions::ActionRegistry;
@@ -126,6 +126,31 @@ fn border_column_press_grabs_scrollbar() {
         "dragging on the border column must keep scrolling (offset {} -> {})",
         offset_after_press,
         viewer.list_state.scroll_offset()
+    );
+}
+/// Regression (user report): after `/plan` the approval preview owns the
+/// keyboard, so typing `/model` opened in-plan search instead of a slash
+/// command. Bare `/` on the plan-approval preview must focus the prompt
+/// and start a command; in-plan search/filter stays on `f`.
+#[test]
+fn plan_preview_slash_starts_command_on_prompt() {
+    let mut agent = agent_with_scrollable_plan();
+    let registry = ActionRegistry::defaults();
+
+    let _ = agent.handle_input(
+        &Event::Key(KeyEvent::new(KeyCode::Char('/'), KeyModifiers::NONE)),
+        &registry,
+    );
+
+    assert_eq!(
+        agent.plan_approval_view.as_ref().map(|p| p.focus),
+        Some(PlanApprovalFocus::Prompt),
+        "bare `/` on the approval preview must move focus to the prompt"
+    );
+    assert_eq!(agent.prompt.text(), "/", "the composer must start with `/`");
+    assert!(
+        agent.prompt.slash_open(),
+        "the slash dropdown must open on the approval prompt"
     );
 }
 

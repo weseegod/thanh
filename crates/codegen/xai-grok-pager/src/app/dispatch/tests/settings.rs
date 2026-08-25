@@ -1387,6 +1387,38 @@ fn set_default_model_idempotent_when_already_current() {
         "re-dispatching same model must be idempotent (no effects), got {effects:?}",
     );
 }
+/// Regression: `/model` on the plan-approval prompt dispatches
+/// `SetDefaultModel` → `SwitchModel`; that must leave the parked approval
+/// overlay (and its `a` / `g` decision) in place.
+#[test]
+fn set_default_model_keeps_plan_approval_overlay() {
+    use agent_client_protocol as acp;
+    use std::sync::Arc;
+    let mut app = test_app_with_agent();
+    let id = acp::ModelId::new(Arc::from("grok-4.5"));
+    let info = acp::ModelInfo::new(id.clone(), "Grok 4.5".to_string());
+    let agent_id = AgentId(0);
+    let agent = app.agents.get_mut(&agent_id).unwrap();
+    agent
+        .session
+        .models
+        .available
+        .insert(id.clone(), info);
+    agent.plan_approval_view =
+        Some(crate::app::agent_view::test_fixtures::make_plan_approval_view_state());
+
+    let effects = dispatch(Action::SetDefaultModel(id.clone()), &mut app);
+
+    assert!(
+        !effects.is_empty(),
+        "model switch must still emit effects, got {effects:?}"
+    );
+    assert_eq!(app.agents[&agent_id].session.models.current, Some(id));
+    assert!(
+        app.agents[&agent_id].plan_approval_view.is_some(),
+        "SetDefaultModel must not dismiss a parked plan approval"
+    );
+}
 /// `clamp_max_thoughts_width` clamps
 /// out-of-range values to the registered `[40, 500]` bounds.
 #[test]

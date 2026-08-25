@@ -98,6 +98,28 @@ impl AgentView {
             return InputOutcome::Changed;
         }
 
+        // On the plan-approval preview, bare `/` starts a slash command on
+        // the prompt (e.g. `/model`) instead of opening in-plan search — the
+        // approval surface must stay usable without dismissing it. Search/
+        // filter inside the plan viewer remain on `f`.
+        if in_plan_approval
+            && !input_bar_active
+            && key.code == KeyCode::Char('/')
+            && key.modifiers.is_empty()
+        {
+            if let Some(ref mut pav) = self.plan_approval_view {
+                pav.focus = PlanApprovalFocus::Prompt;
+            }
+            if self.prompt.text().is_empty() {
+                self.prompt.set_text("/");
+            } else {
+                self.prompt.insert_replacing_selection("/");
+            }
+            self.prompt.set_cursor(self.prompt.text().len());
+            self.prompt.refresh_slash(&self.session.models);
+            return InputOutcome::Changed;
+        }
+
         if in_plan_approval && crate::input::key::RowWalk::from_key(key).is_some() {
             if let Some(ref mut pav) = self.plan_approval_view {
                 pav.focus = PlanApprovalFocus::Prompt;
