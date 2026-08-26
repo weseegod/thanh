@@ -705,6 +705,20 @@ mod tests {
         .into();
         TemplateRenderer::new(tools, HashMap::new())
     }
+    /// Build a test TemplateRenderer that includes the Task tool.
+    fn test_renderer_with_task() -> TemplateRenderer {
+        let tools: HashMap<ToolKind, String> = [
+            (ToolKind::Edit, "search_replace".to_owned()),
+            (ToolKind::Read, "read_file".to_owned()),
+            (ToolKind::List, "list_dir".to_owned()),
+            (ToolKind::Search, "grep".to_owned()),
+            (ToolKind::AskUser, "ask_user_question".to_owned()),
+            (ToolKind::ExitPlan, "exit_plan_mode".to_owned()),
+            (ToolKind::Task, "task".to_owned()),
+        ]
+        .into();
+        TemplateRenderer::new(tools, HashMap::new())
+    }
     /// Build a TemplateRenderer with custom (non-default) tool names.
     fn custom_renderer() -> TemplateRenderer {
         let tools: HashMap<ToolKind, String> = [
@@ -778,7 +792,6 @@ mod tests {
         assert!(!text.contains("ask_user_question"));
         assert!(!text.contains("exit_plan_mode"));
     }
-    #[test]
     #[test]
     fn full_reminder_includes_subagent_guidance_when_task_registered() {
         let r = test_renderer_with_task();
