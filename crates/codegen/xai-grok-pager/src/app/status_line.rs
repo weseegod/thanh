@@ -8,7 +8,6 @@ use std::time::{Duration, Instant};
 
 use xai_grok_status_line::{StatusLineConfig, StatusLineContext, StatusLineTrigger};
 
-use crate::app::ScreenMode;
 use crate::app::actions::Effect;
 use crate::app::agent::AgentId;
 use crate::views::status_line::{RowSize, SanitizedText, StatusLineDisplay, StatusSegment};
@@ -36,8 +35,8 @@ const _: () = assert!(
 
 /// Whether this process draws a row at all. Every gate that builds or streams
 /// reads this, or one of them sends a payload nobody draws.
-pub(crate) fn draws_a_row(screen_mode: ScreenMode, config: &StatusLineConfig) -> bool {
-    !screen_mode.is_minimal() && config.reserves_a_row()
+pub(crate) fn draws_a_row(config: &StatusLineConfig) -> bool {
+    config.reserves_a_row()
 }
 
 /// `None` for empty output, which must not latch `had_content`.

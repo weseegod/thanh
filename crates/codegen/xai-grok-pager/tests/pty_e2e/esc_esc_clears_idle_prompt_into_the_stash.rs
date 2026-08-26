@@ -3,16 +3,16 @@
 use super::common::*;
 
 /// Esc double-press policy (idle, non-empty prompt): the **first Esc shows
-/// "press again to clear"** and the **second Esc clears the prompt**, recording
-/// the cleared text into prompt history (recallable via the Up-arrow history
-/// panel). Proves `try_handle_esc_policy`'s idle clear arm +
-/// `dispatch_clear_prompt` end-to-end on the real binary.
+/// "press again to clear"** and the **second Esc clears the prompt** into the
+/// stash, which the border caption reports. The draft was never sent, so the
+/// Up-arrow history panel must not list it. Proves `try_handle_esc_policy`'s
+/// idle clear arm + `dispatch_clear_prompt` end-to-end on the real binary.
 ///
 /// Uses [`spawn_esc_double_press_pager`] so a slow inter-press round-trip
 /// can't expire the arm.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore]
-async fn esc_esc_clears_idle_prompt_and_records_history() {
+async fn esc_esc_clears_idle_prompt_into_the_stash() {
     let content = ContentController::start().await.expect("start content");
     content.set_response(format!("{MOCK_RESPONSE_SENTINEL} done."));
 
@@ -62,12 +62,21 @@ async fn esc_esc_clears_idle_prompt_and_records_history() {
         harness.screen_contents()
     );
 
-    // The cleared text was recorded into prompt history: Up on the now-empty
-    // prompt opens the history panel, whose list surfaces the cleared draft.
-    harness.inject_keys(keys::UP).expect("open history panel");
+    // The cleared text went to the stash, which the prompt border reports.
     harness
-        .wait_for_text(draft, Duration::from_secs(10))
-        .expect("cleared draft recorded in prompt history");
+        .wait_for_text("Stashed", Duration::from_secs(10))
+        .expect("the clear must stash the draft");
+
+    // The stash is not a history source: Up on the now-empty prompt opens the
+    // history panel, and the unsent draft must not be in it.
+    harness.inject_keys(keys::UP).expect("open history panel");
+    assert!(
+        harness
+            .wait_for_text(draft, Duration::from_secs(5))
+            .is_err(),
+        "a stashed draft must not be recallable from the history\nscreen:\n{}",
+        harness.screen_contents()
+    );
 
     assert!(
         !harness.contains_text("panicked"),

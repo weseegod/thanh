@@ -10,10 +10,8 @@ use tokio::fs::OpenOptions;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::Mutex;
 
-use crate::terminal::runner::{
-    AsyncTerminalRunner, TerminalError, TerminalRunRequest, TerminalRunResult,
-};
-use crate::terminal::{TerminalInfo, TerminalStatus};
+use crate::runner::{AsyncTerminalRunner, TerminalError, TerminalRunRequest, TerminalRunResult};
+use crate::{TerminalInfo, TerminalStatus};
 use xai_grok_tools::types::output::{BashOutput, ToolOutput};
 
 const DEFAULT_NOTIFICATION_INTERVAL_MS: u64 = 100;
@@ -865,7 +863,7 @@ fn spawn_shell_command(
 ) -> std::io::Result<Box<dyn process_wrap::tokio::ChildWrapper>> {
     #[cfg(unix)]
     {
-        let program = crate::terminal::default_shell_path();
+        let program = crate::default_shell_path();
         spawn_with_argv(program, cwd, env, |cmd| {
             cmd.arg("-c").arg(command);
         })
@@ -908,7 +906,7 @@ fn spawn_with_argv(
             set_argv(cmd);
             cmd.current_dir(cwd)
                 .envs(env)
-                .envs(crate::terminal::pager_env())
+                .envs(crate::pager_env())
                 .stdin(Stdio::null())
                 .stdout(Stdio::piped())
                 .stderr(Stdio::piped());
@@ -935,7 +933,7 @@ fn spawn_with_argv(
             set_argv(cmd);
             cmd.current_dir(cwd)
                 .envs(env)
-                .envs(crate::terminal::pager_env())
+                .envs(crate::pager_env())
                 .stdin(Stdio::null())
                 .stdout(Stdio::piped())
                 .stderr(Stdio::piped());
@@ -1188,7 +1186,7 @@ async fn run_output_collector(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::terminal::DEFAULT_OUTPUT_BYTE_LIMIT;
+    use crate::DEFAULT_OUTPUT_BYTE_LIMIT;
     use xai_grok_paths::AbsPathBuf;
 
     struct TestNotifier {

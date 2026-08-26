@@ -44,8 +44,7 @@ const DEFAULT_IDLE_TIMEOUT_SECS: u64 = 300;
 /// `SamplingError` so callers can inspect retryability, status code,
 /// etc., without losing information through the
 /// `SamplingErrorInfo` round trip.
-pub(crate) type CompletionResult =
-    Result<(ConversationResponse, InferenceLatencyStats), SamplingError>;
+pub type CompletionResult = Result<(ConversationResponse, InferenceLatencyStats), SamplingError>;
 
 /// Outcome of a single attempt within the retry loop.
 enum AttemptOutcome {

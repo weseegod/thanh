@@ -5,9 +5,7 @@ use tokio::io::AsyncReadExt;
 use tokio::process::Command;
 use tokio::time;
 
-use crate::terminal::runner::{
-    AsyncTerminalRunner, TerminalError, TerminalRunRequest, TerminalRunResult,
-};
+use crate::runner::{AsyncTerminalRunner, TerminalError, TerminalRunRequest, TerminalRunResult};
 use xai_tty_utils::KILL_REAP_TIMEOUT;
 
 pub struct LocalTerminalRunner;
@@ -99,7 +97,7 @@ impl AsyncTerminalRunner for LocalTerminalRunner {
         // Build and spawn the command via the platform shell.
         #[cfg(unix)]
         let mut cmd = {
-            let mut c = Command::new(crate::terminal::default_shell_path());
+            let mut c = Command::new(crate::default_shell_path());
             c.arg("-lc").arg(&request.command);
             c
         };
@@ -112,7 +110,7 @@ impl AsyncTerminalRunner for LocalTerminalRunner {
         };
         cmd.current_dir(&request.cwd)
             .envs(&request.env)
-            .envs(crate::terminal::pager_env())
+            .envs(crate::pager_env())
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
@@ -220,8 +218,8 @@ impl AsyncTerminalRunner for LocalTerminalRunner {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::terminal::DEFAULT_OUTPUT_BYTE_LIMIT;
-    use crate::terminal::runner::TerminalRunRequest;
+    use crate::DEFAULT_OUTPUT_BYTE_LIMIT;
+    use crate::runner::TerminalRunRequest;
     use std::collections::HashMap;
     use xai_grok_paths::AbsPathBuf;
 

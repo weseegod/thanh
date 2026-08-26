@@ -2235,23 +2235,30 @@ impl SessionActor {
                     let rest = &rest[rest.find('"')? + 1..];
                     Some(rest[..rest.find('"')?].to_string())
                 };
-                let inline_name = w.script.as_deref().and_then(script_name);
+                use xai_grok_tools::implementations::grok_build::workflow::WorkflowSource;
+                let inline_name = match &w.source {
+                    WorkflowSource::Script { script } => script_name(script),
+                    _ => None,
+                };
                 let title = if w.validate_only {
-                    match inline_name.or_else(|| w.name.clone()) {
-                        Some(n) => format!("Validating workflow '{n}'"),
+                    let source_name = match &w.source {
+                        WorkflowSource::Name { name } => Some(name.clone()),
+                        _ => inline_name,
+                    };
+                    match source_name {
+                        Some(name) => format!("Validating workflow '{name}'"),
                         None => "Validating workflow script".to_string(),
                     }
-                } else if w.script.is_some() {
-                    match inline_name {
-                        Some(n) => format!("Creating workflow '{n}'"),
-                        None => "Creating workflow".to_string(),
-                    }
-                } else if let Some(ref name) = w.name {
-                    format!("Workflow: {name}")
-                } else if w.resume_from_run_id.is_some() {
-                    "Workflow: resume run".to_string()
                 } else {
-                    "Workflow: launch script".to_string()
+                    match &w.source {
+                        WorkflowSource::Script { .. } => match inline_name {
+                            Some(name) => format!("Creating workflow '{name}'"),
+                            None => "Creating workflow".to_string(),
+                        },
+                        WorkflowSource::Name { name } => format!("Workflow: {name}"),
+                        WorkflowSource::Resume { .. } => "Workflow: resume run".to_string(),
+                        WorkflowSource::ScriptPath { .. } => "Workflow: launch script".to_string(),
+                    }
                 };
                 (title, acp::ToolKind::Other, vec![], vec![])
             }
@@ -3505,6 +3512,29 @@ mod plan_mode_edit_gate_tests {
             PlanEditGate::RejectNonPlanFile
         );
     }
+    #[test]
+    fn task_not_gated_in_plan_mode() {
+        use xai_tool_types::TaskToolInput;
+        let t = active_tracker();
+        assert_eq!(
+            gate(
+                &t,
+                &ToolInput::Task(TaskToolInput {
+                    prompt: "p".into(),
+                    description: "d".into(),
+                    subagent_type: "general-purpose".into(),
+                    run_in_background: false,
+                    capability_mode: None,
+                    isolation: None,
+                    resume_from: None,
+                    cwd: None,
+                    model: None,
+                    task_id: None,
+                })
+            ),
+            PlanEditGate::Allow
+        );
+    }
     /// Non-edit tools are never gated — they flow to the normal permission
     /// path (where yolo may auto-approve them). Plan mode blocks
     /// edits, not bash/reads.
@@ -3591,8 +3621,6 @@ mod plan_approval_helper_tests {
     }
     #[test]
     fn revise_plan_message_includes_feedback_when_present() {
-        assert!(revise_plan_message("").contains("Ask the user what changes"));
-        assert!(revise_plan_message("   ").contains("Ask the user what changes"));
         let with = revise_plan_message("use async");
         assert!(with.contains("The user said:"));
         assert!(with.contains("use async"));

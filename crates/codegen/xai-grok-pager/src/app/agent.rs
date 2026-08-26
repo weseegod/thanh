@@ -700,13 +700,15 @@ pub struct DeferredModelSwitch {
 }
 /// Cap on remembered prompts, shared by every recall list.
 pub const PROMPT_HISTORY_CAP: usize = 200;
-/// Move `text` to the front of a recall list, deduped by trimmed text and capped. Empty text is not remembered.
+/// Prepend `text` to a recall list, capped. An immediate repeat collapses; an interleaved one keeps both places.
 pub fn remember_prompt(list: &mut Vec<String>, text: &str) {
     let key = text.trim();
     if key.is_empty() {
         return;
     }
-    list.retain(|p| p.trim() != key);
+    if list.first().is_some_and(|p| p.trim() == key) {
+        return;
+    }
     list.insert(0, text.to_owned());
     list.truncate(PROMPT_HISTORY_CAP);
 }

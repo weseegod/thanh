@@ -1,3 +1,9 @@
+//! Local, ACP, and PTY terminal runners for the grok shell.
+//!
+//! `xai-grok-shell` re-exports this crate as `xai_grok_shell::terminal`.
+
+use std::sync::Arc;
+
 pub mod runner;
 pub use runner::{AsyncTerminalRunner, TerminalError, TerminalRunRequest, TerminalRunResult};
 
@@ -19,16 +25,24 @@ pub use adapter::AcpTerminalAdapter;
 mod exit_watcher;
 mod output_recorder;
 
-pub(crate) mod pty_session;
+pub mod pty_session;
+
+mod streaming_local_terminal;
+pub use streaming_local_terminal::{
+    ExitStatus, GatedNotifier, KillOutcome, OutputSnapshot, SessionNotificationSender,
+    StreamingLocalTerminalRunner, background_terminal, create_terminal, find_terminal_session_id,
+    get_terminal_output, kill_and_release_all_for_session, kill_terminal, release_terminal,
+    wait_for_terminal_exit,
+};
 
 pub const DEFAULT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 pub const DEFAULT_OUTPUT_BYTE_LIMIT: usize = 30_000; // 30k characters
 
 /// Resolved absolute path to bash. On Unix uses the `xai_grok_config` shell
 /// resolution cascade (`$GROK_SHELL` > `$SHELL` > `which` > common dirs >
-/// `/bin/bash`) and is cached process-wide. On non-Unix returns `"/bin/bash"`
-/// — but every caller in this crate is gated behind `#[cfg(unix)]`, so the
-/// non-Unix value should not be observed in practice.
+/// `/bin/bash`) and is cached process-wide. On non-Unix returns `"/bin/bash"`.
+/// Every caller in this crate is gated behind `#[cfg(unix)]`, so the non-Unix value
+/// should not be observed in practice.
 pub(crate) fn default_shell_path() -> &'static str {
     #[cfg(unix)]
     {
@@ -87,7 +101,7 @@ impl TerminalExtError {
         }
     }
 
-    fn terminal_id(&self) -> Option<&str> {
+    pub fn terminal_id(&self) -> Option<&str> {
         match self {
             Self::NotFound { terminal_id }
             | Self::NotInteractive { terminal_id }
@@ -98,24 +112,7 @@ impl TerminalExtError {
     }
 }
 
-impl<T: serde::Serialize> From<TerminalExtError> for crate::session::result::ExtMethodResult<T> {
-    fn from(err: TerminalExtError) -> Self {
-        let data = err
-            .terminal_id()
-            .map(|id| serde_json::json!({ "terminalId": id }));
-        Self {
-            result: None,
-            error: serde_json::to_value(crate::session::result::ExtMethodError {
-                code: err.code().to_string(),
-                message: err.to_string(),
-                data,
-            })
-            .ok(),
-        }
-    }
-}
-
-pub(crate) async fn list_terminals() -> Vec<TerminalInfo> {
+pub async fn list_terminals() -> Vec<TerminalInfo> {
     let mut terminals = pty_session::list_ptys().await;
     let mut piped = streaming_local_terminal::list_piped_terminals().await;
     terminals.append(&mut piped);
@@ -128,7 +125,7 @@ pub use xai_grok_tools::util::pager_env;
 
 /// Returns environment variables that encourage CLI tools to emit colored output
 /// and show progress bars/spinners even when running through pipes (non-TTY).
-pub(crate) fn color_env() -> std::collections::HashMap<String, String> {
+pub fn color_env() -> std::collections::HashMap<String, String> {
     std::collections::HashMap::from([
         ("TERM".to_string(), "xterm-256color".to_string()),
         ("COLORTERM".to_string(), "truecolor".to_string()),
@@ -138,7 +135,7 @@ pub(crate) fn color_env() -> std::collections::HashMap<String, String> {
         // Cargo: always show progress bar
         ("CARGO_TERM_PROGRESS_WHEN".to_string(), "always".to_string()),
         ("CARGO_TERM_PROGRESS_WIDTH".to_string(), "80".to_string()),
-        // CI mode - many tools show progress in CI
+        // CI mode: many tools show progress in CI
         ("CI".to_string(), "true".to_string()),
         // npm/yarn progress
         ("NPM_CONFIG_PROGRESS".to_string(), "true".to_string()),
@@ -161,9 +158,9 @@ pub(crate) fn color_env() -> std::collections::HashMap<String, String> {
 /// Follows the <https://no-color.org/> convention plus tool-specific overrides.
 pub fn no_color_env() -> std::collections::HashMap<String, String> {
     std::collections::HashMap::from([
-        // https://no-color.org/ — respected by many CLI tools
+        // https://no-color.org/: respected by many CLI tools
         ("NO_COLOR".to_string(), "1".to_string()),
-        // Override TERM to dumb — prevents cursor movement, color codes
+        // Override TERM to dumb: prevents cursor movement, color codes
         ("TERM".to_string(), "dumb".to_string()),
         // Disable forced color in tools that check these
         ("FORCE_COLOR".to_string(), "0".to_string()),
@@ -186,26 +183,16 @@ pub fn no_color_env() -> std::collections::HashMap<String, String> {
     ])
 }
 
-mod streaming_local_terminal;
-pub use streaming_local_terminal::{
-    ExitStatus, GatedNotifier, KillOutcome, OutputSnapshot, SessionNotificationSender,
-    StreamingLocalTerminalRunner, background_terminal, create_terminal, find_terminal_session_id,
-    get_terminal_output, kill_and_release_all_for_session, kill_terminal, release_terminal,
-    wait_for_terminal_exit,
-};
-
-use std::sync::Arc;
-
-/// Terminal runner that routes requests based on the `stream` flag:
-/// - `stream: true` → StreamingLocalTerminalRunner (updates, killable)
-/// - `stream: false` → LocalTerminalRunner (silent, fire-and-forget)
-pub(crate) struct TerminalRunner {
+/// Terminal runner that routes requests based on the `stream` flag.
+/// `stream: true` uses StreamingLocalTerminalRunner (updates, killable).
+/// `stream: false` uses LocalTerminalRunner (silent, fire and forget).
+pub struct TerminalRunner {
     notifier: Arc<dyn SessionNotificationSender>,
     session_id: agent_client_protocol::SessionId,
 }
 
 impl TerminalRunner {
-    pub(crate) fn new(
+    pub fn new(
         notifier: Arc<dyn SessionNotificationSender>,
         session_id: agent_client_protocol::SessionId,
     ) -> Self {

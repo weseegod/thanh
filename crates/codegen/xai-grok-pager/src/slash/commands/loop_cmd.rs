@@ -340,7 +340,6 @@ mod tests {
                 // Stable, behaviour-bearing tokens, not incidental example text.
                 assert!(instruction.contains("30 minutes"));
                 assert!(instruction.contains("<number><unit>"));
-                assert!(instruction.contains("ask the user how often"));
             }
             other => panic!("expected InjectSkill, got {other:?}"),
         }

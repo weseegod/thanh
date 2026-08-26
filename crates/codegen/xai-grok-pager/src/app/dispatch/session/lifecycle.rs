@@ -8,6 +8,7 @@ use crate::app::actions::{Action, Effect, SwitchModelError};
 use crate::app::agent::{AgentCommand, AgentId, AgentSession, AgentState, DeferredModelSwitch};
 use crate::app::agent_view::{ActivePane, AgentView, McpInitProgress};
 use crate::app::app_view::{ActiveView, AppView, TrustState};
+use crate::app::cancel_latency::TurnEnd;
 use crate::app::consent::ConsentState;
 use crate::app::dispatch::ctx::{
     SwitchCause, get_active_agent, reseed_tip_for_new_session, show_welcome, switch_to_agent,
@@ -336,7 +337,7 @@ fn apply_welcome_workspace_on_new_session(app: &mut AppView) -> Result<(), Vec<E
             app.welcome_local_workspace_ack_pending = true;
             app.session_picker_entries = None;
             app.session_picker_loading = false;
-            app.session_picker_list_seq = app.session_picker_list_seq.saturating_add(1);
+            super::foreign::next_picker_list_generation(app);
             Err(vec![])
         }
         Err(err) => {
@@ -1197,7 +1198,7 @@ pub(in crate::app::dispatch) fn handle_worktree_session_created(
 ) -> Vec<Effect> {
     if let Some(agent) = app.agents.get_mut(&agent_id) {
         agent.session.finish_command();
-        agent.mark_turn_finished();
+        agent.mark_turn_finished(TurnEnd::Aborted);
         let session_id_clone = session_id.clone();
         agent.bind_session_id(session_id);
         agent.scheduler_background_loops = scheduler_background_loops;
@@ -1364,7 +1365,7 @@ pub(in crate::app::dispatch) fn handle_session_failed(
         agent.mcp_init_progress = None;
         agent.session.finish_command();
         let elapsed = agent.turn_elapsed();
-        agent.mark_turn_finished();
+        agent.mark_turn_finished(TurnEnd::Aborted);
         agent.pending_first_prompt = None;
         agent.pending_fork_banner = None;
         agent.show_toast(&msg);
@@ -1417,7 +1418,7 @@ pub(in crate::app::dispatch) fn handle_worktree_session_failed(
         agent.mcp_init_progress = None;
         agent.session.finish_command();
         let elapsed = agent.turn_elapsed();
-        agent.mark_turn_finished();
+        agent.mark_turn_finished(TurnEnd::Aborted);
         agent.pending_first_prompt = None;
         agent.pending_fork_banner = None;
         agent

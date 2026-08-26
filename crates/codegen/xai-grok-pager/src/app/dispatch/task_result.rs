@@ -35,6 +35,7 @@ use super::session::load::{
     handle_session_search_debounce_expired, remove_session_from_pickers,
 };
 use super::session::modal::remove_agent_and_cleanup;
+use super::session::picker_routing::PickerRequest;
 use super::settings::ui::apply_setting_rollback;
 use super::status::{
     handle_coding_data_sharing_failed, handle_coding_data_sharing_updated,
@@ -365,12 +366,25 @@ pub(super) fn dispatch_task_result(result: TaskResult, app: &mut AppView) -> Vec
             error,
         } => handle_session_load_failed(app, agent_id, session_id, error),
         TaskResult::SessionListLoaded {
+            host,
+            generation,
             sessions,
             partial,
             scope,
             seq,
             query,
-        } => handle_session_list_loaded(app, sessions, partial, scope, seq, query),
+        } => handle_session_list_loaded(
+            app,
+            PickerRequest {
+                host,
+                generation,
+                seq,
+            },
+            sessions,
+            partial,
+            scope,
+            query,
+        ),
         TaskResult::ForeignSessionsScanned { entries, seq } => {
             handle_foreign_sessions_scanned(app, entries, seq)
         }
@@ -401,12 +415,36 @@ pub(super) fn dispatch_task_result(result: TaskResult, app: &mut AppView) -> Vec
             app.apply_foreign_resume_detection(launch_token, &canonical_cwd, hint);
             vec![]
         }
-        TaskResult::SessionListFailed { error, seq, query } => {
-            handle_session_list_failed(app, error, seq, query)
-        }
-        TaskResult::SessionSearchDebounceExpired { query, seq } => {
-            handle_session_search_debounce_expired(app, query, seq)
-        }
+        TaskResult::SessionListFailed {
+            host,
+            generation,
+            error,
+            seq,
+            query,
+        } => handle_session_list_failed(
+            app,
+            PickerRequest {
+                host,
+                generation,
+                seq,
+            },
+            error,
+            query,
+        ),
+        TaskResult::SessionSearchDebounceExpired {
+            host,
+            generation,
+            query,
+            seq,
+        } => handle_session_search_debounce_expired(
+            app,
+            PickerRequest {
+                host,
+                generation,
+                seq,
+            },
+            query,
+        ),
         TaskResult::RosterLoaded { sessions } => {
             app.leader_roster = sessions;
             app.dashboard_sessions_loading = false;
@@ -423,11 +461,23 @@ pub(super) fn dispatch_task_result(result: TaskResult, app: &mut AppView) -> Vec
             vec![]
         }
         TaskResult::CardDetailLoaded {
+            host,
+            generation,
             source,
             session_id,
-            generation,
+            seq,
             detail,
-        } => handle_card_detail_loaded(app, source, session_id, generation, detail),
+        } => handle_card_detail_loaded(
+            app,
+            PickerRequest {
+                host,
+                generation,
+                seq,
+            },
+            source,
+            session_id,
+            detail,
+        ),
         TaskResult::SessionRestored {
             agent_id,
             local_session_id,
@@ -678,10 +728,35 @@ pub(super) fn dispatch_task_result(result: TaskResult, app: &mut AppView) -> Vec
             use xai_grok_tools::implementations::skills::skill::extract_skill_display_text;
             if let Some(agent) = app.agents.get_mut(&agent_id) {
                 agent.session.prompt_history_loading = false;
-                agent.session.prompt_history = prompts
+                let fetched: Vec<String> = prompts
                     .into_iter()
                     .map(|p| extract_skill_display_text(&p).unwrap_or(p))
                     .collect();
+                let local: std::collections::HashSet<String> = agent
+                    .session
+                    .prompt_history
+                    .iter()
+                    .flat_map(|p| {
+                        let t = p.trim();
+                        [t.to_owned(), t.strip_prefix("! ").unwrap_or(t).to_owned()]
+                    })
+                    .collect();
+                let local_entries = agent.session.prompt_history.len();
+                let fetched_entries = fetched.len();
+                agent
+                    .session
+                    .prompt_history
+                    .extend(fetched.into_iter().filter(|p| !local.contains(p.trim())));
+                agent
+                    .session
+                    .prompt_history
+                    .truncate(crate::app::agent::PROMPT_HISTORY_CAP);
+                tracing::info!(
+                    history.local_entries = local_entries,
+                    history.fetched_entries = fetched_entries,
+                    history.merged_entries = agent.session.prompt_history.len(),
+                    "history.fetch_merged"
+                );
                 if agent.prompt.history_search.is_active() {
                     let history = agent.combined_prompt_history();
                     agent.prompt.history_search.refresh_items(&history);
@@ -1326,9 +1401,20 @@ pub(super) fn dispatch_task_result(result: TaskResult, app: &mut AppView) -> Vec
             app.welcome_prompt_focused = false;
             effects
         }
-        TaskResult::DeepSearchResults { results, seq } => {
-            handle_deep_search_results(app, results, seq)
-        }
+        TaskResult::DeepSearchResults {
+            host,
+            generation,
+            results,
+            seq,
+        } => handle_deep_search_results(
+            app,
+            PickerRequest {
+                host,
+                generation,
+                seq,
+            },
+            results,
+        ),
         TaskResult::RewindPointsLoaded { agent_id, points } => {
             handle_rewind_points_loaded(app, agent_id, points)
         }

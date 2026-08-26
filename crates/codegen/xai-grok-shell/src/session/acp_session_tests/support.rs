@@ -5,13 +5,6 @@ use super::*;
 pub(crate) fn test_auth_method_id(id: &str) -> crate::agent::auth_method::SharedAuthMethodId {
     crate::agent::auth_method::new_shared_auth_method_id(Some(acp::AuthMethodId::new(id)))
 }
-/// Harness contract sentence — both halves ("verifies what's complete" AND
-/// "tells you what's missing").
-pub(crate) const HARNESS_VERIFIES_SENTENCE: &str =
-    "verifies what's complete and tells you what's missing on the next nudge";
-/// Plan-aware seed-todos instruction (`goal_plan_block.md`).
-pub(crate) const PLAN_SEED_TODOS_PHRASE: &str =
-    "Seed todos from the plan's acceptance criteria via";
 #[cfg(test)]
 pub(crate) fn noop_observability_bridge() -> xai_computer_hub_sdk::ObservabilityBridge {
     xai_computer_hub_sdk::ObservabilityBridge::new(
@@ -400,7 +393,7 @@ pub(crate) async fn create_test_actor_with_terminal(
         managed_mcp_handle: Default::default(),
         initial_client_mcp_servers: vec![],
         tool_metadata_snapshot: Arc::new(std::sync::Mutex::new(Default::default())),
-        mcp_announced_servers: Mutex::new(HashMap::new()),
+        mcp_announcements: Default::default(),
         mcp_reminder_mode: McpReminderMode::Delta,
         mcp_reminder_dirty: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         mcp_connecting_reminder_injected: std::cell::Cell::new(false),
@@ -442,6 +435,7 @@ pub(crate) async fn create_test_actor_with_terminal(
         turn_stream_drained: parking_lot::Mutex::new(None),
         pending_image_strip: parking_lot::Mutex::new(None),
         sampler_handle: xai_grok_sampler::SamplerHandle::noop(),
+        sampling_gate: None,
         rebuild_spec: crate::session::agent_rebuild::test_rebuild_spec_default(),
         image_description_model: crate::test_support::TEST_MODEL.to_owned(),
         image_describe_cache: Arc::new(crate::session::image_describe::ImageDescribeCache::new()),
@@ -621,43 +615,6 @@ pub(crate) fn set_goal_harness_for_tests(actor: &SessionActor) {
     actor
         .goal_harness_enabled
         .store(true, std::sync::atomic::Ordering::Relaxed);
-}
-#[cfg(test)]
-pub(crate) fn assert_goal_discipline_in_reminder(reminder: &str, site: &str) {
-    let discipline_idx = reminder
-        .find("<task_completion_discipline>")
-        .unwrap_or_else(|| panic!("{site} must include <task_completion_discipline>:\n{reminder}"));
-    let tracking_idx = reminder
-        .find("TRACKING:")
-        .unwrap_or_else(|| panic!("{site} must include TRACKING:\n{reminder}"));
-    assert!(
-        discipline_idx < tracking_idx,
-        "{site} must place discipline before TRACKING (discipline={discipline_idx} tracking={tracking_idx}):\n{reminder}"
-    );
-    assert!(
-        reminder.contains("</task_completion_discipline>\nTRACKING:"),
-        "{site} must glue discipline directly before TRACKING:\n{reminder}"
-    );
-    for phrase in [
-        "Tool-call first",
-        "Don't ask permission to continue a task in flight",
-        "Track multi-step work with a",
-        "Don't stop with easy work left undone",
-    ] {
-        assert!(
-            reminder.contains(phrase),
-            "{site} must include discipline phrase `{phrase}`:\n{reminder}"
-        );
-    }
-    assert_eq!(
-        reminder.matches("</task_completion_discipline>").count(),
-        1,
-        "{site} must contain exactly one discipline closing tag:\n{reminder}"
-    );
-    assert!(
-        !reminder.contains("{DISCIPLINE_BLOCK}"),
-        "{site} must not leave {{DISCIPLINE_BLOCK}} unsubstituted:\n{reminder}"
-    );
 }
 /// An actor whose persistence channel answers the `FlushAndAck` barrier, so a
 /// turn driven with a `persist_ack` resolves (bare `build_actor` never acks).

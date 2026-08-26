@@ -23,7 +23,7 @@ enum StatusLineWork {
 
 impl AppView {
     fn draws_a_row(&self) -> bool {
-        draws_a_row(self.screen_mode, &self.current_ui.status_line)
+        draws_a_row(&self.current_ui.status_line)
     }
 
     /// A fullscreen subagent draws the whole frame. Separate from
@@ -72,9 +72,7 @@ impl AppView {
             self.status_line.cancel_refresh_request();
         }
 
-        if self.screen_mode.is_minimal() || source.is_none() {
-            // Cleared even when the source did not move, since entering
-            // minimal mode empties a row describing the same agent.
+        if source.is_none() {
             self.status_line.set_source(source);
             self.status_line.invalidate();
             return;

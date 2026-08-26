@@ -175,7 +175,7 @@ pub struct ConnectFlags {
 
 /// Connect to an agent: spawn, initialize, authenticate.
 pub async fn connect(cancel: &CancellationToken, flags: ConnectFlags) -> Result<AcpConnection> {
-    startup::enter(StartupPhase::LoadConfig);
+    startup::enter(StartupPhase::ConfigLoad);
     let raw_config = xai_grok_shell::config::load_effective_config()
         .map_err(|e| anyhow::anyhow!("Failed to load config: {}", e))?;
     let mut agent_config = AgentConfig::new_from_toml_cfg(&raw_config)
@@ -296,7 +296,7 @@ pub async fn connect_via_leader(
 
     apply_config_writes(&flags);
 
-    startup::enter(StartupPhase::LoadConfig);
+    startup::enter(StartupPhase::ConfigLoad);
     // The leader path never runs the managed-policy sync in this process.
     startup::set_auth_mode(xai_grok_shell::managed_config::classify_auth_mode());
     let mut agent_config = AgentConfig::new_from_toml_cfg(raw_config)

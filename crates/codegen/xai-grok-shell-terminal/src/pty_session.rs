@@ -17,8 +17,38 @@ use portable_pty::{CommandBuilder, MasterPty, PtySize, native_pty_system};
 use tokio::sync::{Mutex, mpsc};
 use xai_acp_lib::AcpAgentGatewaySender as GatewaySender;
 
-use crate::extensions::routing::{TargetClientId, send_routed_notification};
-use crate::terminal::{TerminalExtError, TerminalInfo, TerminalStatus};
+use xai_grok_workspace::file_system::TargetClientId;
+
+use crate::{TerminalExtError, TerminalInfo, TerminalStatus};
+
+/// Inject `targetClientId` into `_meta` and fire-and-forget an ext notification.
+/// Mirrors `xai_grok_shell::extensions::routing::send_routed_notification` so
+/// this crate does not depend on the shell.
+fn send_routed_notification(
+    gateway: &GatewaySender,
+    method: &str,
+    mut params: serde_json::Value,
+    target_client_id: &TargetClientId,
+) {
+    if !target_client_id.is_none() {
+        let meta = params.as_object_mut().and_then(|obj| {
+            obj.entry("_meta")
+                .or_insert_with(|| serde_json::json!({}))
+                .as_object_mut()
+        });
+        if let Some(meta) = meta
+            && let Ok(val) = serde_json::to_value(target_client_id)
+        {
+            meta.insert("targetClientId".to_string(), val);
+        }
+    }
+    if let Ok(raw) = serde_json::value::to_raw_value(&params) {
+        gateway.forward_fire_and_forget(agent_client_protocol::ExtNotification::new(
+            method,
+            raw.into(),
+        ));
+    }
+}
 
 const NOTIFICATION_METHOD: &str = "x.ai/terminal/pty/notification";
 const OUTPUT_RING_BUFFER_SIZE: usize = 256 * 1024;
@@ -29,7 +59,7 @@ const EXIT_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis
 /// Collecting a killed shell, not waiting on a live one.
 const REAP_GRACE: std::time::Duration = std::time::Duration::from_millis(100);
 
-pub(crate) struct PtySession {
+pub struct PtySession {
     master: Option<Box<dyn MasterPty + Send>>,
     /// Taken at teardown so the writer loop ends and releases its master dup.
     input_tx: Option<mpsc::Sender<Vec<u8>>>,
@@ -202,7 +232,7 @@ type PtyMap = HashMap<String, Arc<Mutex<PtySession>>>;
 
 static PTY_REGISTRY: LazyLock<Mutex<PtyMap>> = LazyLock::new(|| Mutex::new(HashMap::new()));
 
-pub(crate) async fn get_pty(pty_id: &str) -> Option<Arc<Mutex<PtySession>>> {
+pub async fn get_pty(pty_id: &str) -> Option<Arc<Mutex<PtySession>>> {
     PTY_REGISTRY.lock().await.get(pty_id).cloned()
 }
 
@@ -216,7 +246,7 @@ pub(crate) async fn require_pty(
         })
 }
 
-pub(crate) async fn create_pty(
+pub async fn create_pty(
     shell: Option<&str>,
     cwd: Option<&str>,
     env: HashMap<String, String>,
@@ -579,7 +609,7 @@ async fn flush_output(
     );
 }
 
-pub(crate) async fn write_pty_input(pty_id: &str, data: &[u8]) -> Result<(), TerminalExtError> {
+pub async fn write_pty_input(pty_id: &str, data: &[u8]) -> Result<(), TerminalExtError> {
     let entry = require_pty(pty_id).await?;
     let input_tx = entry.lock().await.input_tx.clone();
     input_tx
@@ -595,7 +625,7 @@ pub(crate) async fn write_pty_input(pty_id: &str, data: &[u8]) -> Result<(), Ter
     Ok(())
 }
 
-pub(crate) async fn resize_pty(pty_id: &str, rows: u16, cols: u16) -> Result<(), TerminalExtError> {
+pub async fn resize_pty(pty_id: &str, rows: u16, cols: u16) -> Result<(), TerminalExtError> {
     let entry = require_pty(pty_id).await?;
     let mut session = entry.lock().await;
     let Some(master) = session.master.as_ref() else {
@@ -614,14 +644,14 @@ pub(crate) async fn resize_pty(pty_id: &str, rows: u16, cols: u16) -> Result<(),
     Ok(())
 }
 
-pub(crate) async fn is_exited(pty_id: &str) -> bool {
+pub async fn is_exited(pty_id: &str) -> bool {
     match get_pty(pty_id).await {
         Some(entry) => entry.lock().await.shell.poll_exit(),
         None => true,
     }
 }
 
-pub(crate) async fn close_pty(pty_id: &str) -> Result<(), String> {
+pub async fn close_pty(pty_id: &str) -> Result<(), String> {
     let entry = { PTY_REGISTRY.lock().await.remove(pty_id) };
     if let Some(entry) = entry {
         tokio::task::spawn_blocking(move || reap(&entry))
@@ -664,7 +694,7 @@ fn wait_for_exit(entry: &Arc<Mutex<PtySession>>, budget: std::time::Duration) ->
 }
 
 /// Called on agent disconnect to clean up all PTYs.
-pub(crate) async fn close_all() {
+pub async fn close_all() {
     let entries: Vec<Arc<Mutex<PtySession>>> = {
         let mut reg = PTY_REGISTRY.lock().await;
         reg.drain().map(|(_, v)| v).collect()
@@ -731,7 +761,7 @@ pub(crate) async fn list_ptys() -> Vec<TerminalInfo> {
 
 #[derive(Debug, Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
-pub(crate) struct PtyLoadResult {
+pub struct PtyLoadResult {
     pub terminal_id: String,
     pub rows: u16,
     pub cols: u16,
@@ -743,7 +773,7 @@ pub(crate) struct PtyLoadResult {
 /// Reconnect to a PTY, replaying the ring buffer so the client can reset its
 /// VTE emulator and feed all bytes from scratch. An exited PTY still loads, so
 /// its final output stays readable.
-pub(crate) async fn load(
+pub async fn load(
     pty_id: &str,
     gateway: &GatewaySender,
     target_client_id: TargetClientId,

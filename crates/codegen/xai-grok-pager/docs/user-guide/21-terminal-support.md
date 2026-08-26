@@ -250,7 +250,7 @@ terminals, Terminal.app, Konsole, mlterm, and others). Grok Build therefore
 **does not** reorder RTL by default.
 
 If Arabic or Persian in **scrollback** (or list content) reads backwards,
-enable app-side reordering in `~/.grok/pager.toml` (or project config):
+enable app-side reordering in `~/.thanh/pager.toml` (or project config):
 
 ```toml
 [scrollback.display]

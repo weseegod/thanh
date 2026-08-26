@@ -256,6 +256,16 @@ pub fn minimal_committed_plan_id(app: &AppView) -> Option<&str> {
     app.minimal_state.committed_plan_tool_call_id.as_deref()
 }
 
+/// [`AppView::status_line_frame`].
+pub fn status_line_frame(app: &AppView) -> crate::views::status_line::StatusLineFrame {
+    app.status_line_frame()
+}
+
+/// [`crate::views::status_line::inner_width`].
+pub fn status_line_inner_width(width: u16, padding: u16) -> Option<u16> {
+    crate::views::status_line::inner_width(width, padding)
+}
+
 /// Whether minimal's Ctrl+O remap opens the full-transcript pager *right now*.
 ///
 /// Minimal remaps Ctrl+O to `Action::OpenTranscriptPager` except when:
@@ -567,6 +577,10 @@ pub fn resolve_turn_activity(v: &AgentView) -> Option<TurnActivity> {
 /// [`AgentView::renders_parked`].
 pub fn renders_parked(v: &AgentView) -> bool {
     v.renders_parked()
+}
+
+pub fn is_turn_or_wake_running(v: &AgentView) -> bool {
+    v.session.state.is_turn_running() || v.wake_turn_active()
 }
 
 /// [`AgentView::watchers`] — idle-surviving background work (running

@@ -18,6 +18,7 @@ use crate::app::actions::{Action, DoctorFixTarget, Effect};
 use crate::app::agent::{AgentCommand, AgentId, AgentState};
 use crate::app::agent_view::AgentView;
 use crate::app::app_view::{ActiveView, AppView};
+use crate::app::cancel_latency::TurnEnd;
 use crate::notifications::{NotificationEvent, NotificationEventKind};
 use crate::scrollback::block::RenderBlock;
 use crate::scrollback::blocks::SessionEvent;
@@ -183,16 +184,11 @@ pub(super) fn dispatch_send_prompt(app: &mut AppView, text: String) -> Vec<Effec
     )
 }
 
-/// Clear the active prompt and record non-empty text in prompt history (Esc Esc).
+/// Clear the active prompt into the stash (Esc Esc).
+///
+/// The draft goes to the stash, not the recall list. `Ctrl+S` is how it comes back.
 pub(super) fn dispatch_clear_prompt(app: &mut AppView) -> Vec<Effect> {
     with_active_agent(app, |agent| {
-        // Prefixed the way the stash entry is, or a `!` draft shows up twice in the Up browse.
-        let text = crate::app::agent_view::prompt_history_text(
-            agent.prompt.text(),
-            agent.prompt_input_mode,
-        );
-        crate::app::agent::remember_prompt(&mut agent.session.prompt_history, &text);
-
         // Recoverable with the stash chord, but Esc-Esc is a discard: it never comes back on its own.
         agent.stash_prompt_draft(crate::app::agent_view::StashCause::ClearedDraft);
     });
@@ -500,6 +496,12 @@ pub(super) fn dispatch_send_prompt_inner(
 
     let trimmed = text.trim();
 
+    // Recorded before the registry runs, because most command outcomes return on their own path.
+    let recorded_as_command = !literal && consume_input && trimmed.starts_with('/');
+    if recorded_as_command {
+        agent.record_prompt_in_history(trimmed);
+    }
+
     let mut effects = Vec::new();
 
     // ── Tier-restricted command upsell ─────────────────────────────
@@ -663,6 +665,20 @@ pub(super) fn dispatch_send_prompt_inner(
                     agent.prompt.set_text("");
                 }
                 return dispatch(Action::ExitSession, app);
+            }
+            CommandResult::Action(Action::EditPromptExternal) => {
+                // Typed slash input occupies the composer; the palette route preserves an existing draft.
+                if consume_input {
+                    agent.prompt.set_text("");
+                }
+                return dispatch(Action::EditPromptExternal, app);
+            }
+            CommandResult::Action(Action::SendRememberNote(note)) => {
+                if consume_input {
+                    agent.prompt.set_text("");
+                }
+                // The typed `/remember <text>` is the row already recorded above.
+                return super::notes::dispatch_send_remember_note_from_command(app, note);
             }
             CommandResult::Action(mut action) => {
                 if consume_input {
@@ -853,7 +869,7 @@ pub(super) fn dispatch_send_prompt_inner(
                 // up-arrow history (same as the local path's history insert).
                 agent.prompt.set_text("");
                 agent.note_draft_consumed();
-                crate::app::agent::remember_prompt(&mut agent.session.prompt_history, &text);
+                agent.record_prompt_in_history(&text);
             }
 
             // A new prompt is taking the wheel: the previous response's
@@ -921,8 +937,9 @@ pub(super) fn dispatch_send_prompt_inner(
         };
 
         // Skipped for modal-driven dispatch: the user didn't type these commands and shouldn't see them in up-arrow history.
-        if consume_input {
-            crate::app::agent::remember_prompt(&mut agent.session.prompt_history, &text);
+        // `PassThrough`, `QueueCommand` and `InjectSkill` reach here, so a command recorded above would land twice.
+        if consume_input && !recorded_as_command {
+            agent.record_prompt_in_history(&text);
         }
         maybe_drain_queue(agent)
     };
@@ -960,13 +977,10 @@ pub(super) fn dispatch_send_bash_command(app: &mut AppView, command: String) -> 
     // Submitting a bash command retires any edit-contextual ephemeral tip.
     agent.ephemeral_tip.clear_on_submit();
 
-    crate::app::agent::remember_prompt(
-        &mut agent.session.prompt_history,
-        &crate::app::agent_view::prompt_history_text(
-            &command,
-            crate::app::agent_view::PromptInputMode::Bash,
-        ),
-    );
+    agent.record_prompt_in_history(&crate::app::agent_view::prompt_history_text(
+        &command,
+        crate::app::agent_view::PromptInputMode::Bash,
+    ));
 
     // ── Server-authoritative immediate send for bash while running ──
     // A bash command typed while a turn is RUNNING is sent to the agent
@@ -1351,7 +1365,7 @@ pub(super) fn handle_prompt_response(
             _ => None,
         };
 
-        agent.mark_turn_finished();
+        agent.mark_turn_finished(TurnEnd::Completed);
         agent.activity_started_at = None;
         agent.last_activity = None;
 
@@ -1573,7 +1587,7 @@ pub(super) fn handle_compact_complete(
             }
         }
 
-        agent.mark_turn_finished();
+        agent.mark_turn_finished(TurnEnd::Completed);
         agent.activity_started_at = None;
         agent.last_activity = None;
 

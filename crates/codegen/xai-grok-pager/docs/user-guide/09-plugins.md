@@ -122,7 +122,7 @@ In the **Marketplace** tab, browse and install from your sources:
 
 Component summaries in the Marketplace tab appear only for marketplaces that publish a [`plugin-index.json`](#add-a-catalog-optional) catalog. Destructive actions ask for confirmation: press lowercase `y` to confirm, any other key (including `Esc`) to cancel.
 
-In the **Workflows** tab (open it directly with `/workflows`, or `Tab` from the commands above), browse the saved workflows Grok discovered: built-ins, project `.grok/workflows/`, and user `~/.grok/workflows/`. Each row shows the workflow's name, source, and description; press `Enter` to expand its path and when-to-use notes, `r` to reload the list, and `/` to search. Rows are browse-only — run one with `/workflow <name>` or its own slash command.
+In the **Workflows** tab (open it directly with `/workflows`, or `Tab` from the commands above), browse the saved workflows Grok discovered: built-ins, project `.grok/workflows/`, and user `~/.thanh/workflows/`. Each row shows the workflow's name, source, and description; press `Enter` to expand its path and when-to-use notes, `r` to reload the list, and `/` to search. Rows are browse-only — run one with `/workflow <name>` or its own slash command.
 
 ### Turn plugins on or off in config
 

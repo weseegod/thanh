@@ -28,7 +28,7 @@ fn wrap_command_quotes_shell_metacharacters() {
     let cmd = wrap_command("echo 'hello world' && ls").unwrap();
     #[cfg(unix)]
     {
-        let shell = crate::terminal::default_shell_path();
+        let shell = crate::default_shell_path();
         assert!(
             cmd.starts_with(&format!("{shell} -lc")),
             "expected wrapped cmd to begin with `{shell} -lc`, got: {cmd}"

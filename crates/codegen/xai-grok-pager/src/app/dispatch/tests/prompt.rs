@@ -4698,6 +4698,169 @@ fn clear_display_wipes_scrollback_preserves_session() {
     assert_eq!(app.agents[&id].session.session_id, session_id);
 }
 
+mod prompt_history_recording_tests {
+    use super::test_app_with_agent;
+    use crate::app::actions::Action;
+    use crate::app::agent::AgentId;
+    use crate::app::dispatch::router::dispatch;
+
+    fn history(app: &crate::app::app_view::AppView) -> Vec<String> {
+        app.agents[&AgentId(0)].session.prompt_history.clone()
+    }
+
+    #[test]
+    fn a_typed_slash_command_lands_in_the_history() {
+        let mut app = test_app_with_agent();
+
+        dispatch(
+            Action::SendPrompt("/rename payment retries".into()),
+            &mut app,
+        );
+
+        assert_eq!(history(&app), ["/rename payment retries"]);
+    }
+
+    /// The shell returns prompts it was sent, including ones the local list already holds.
+    #[test]
+    fn the_fetch_does_not_reorder_what_the_shell_also_knows() {
+        let mut app = test_app_with_agent();
+        let id = AgentId(0);
+
+        dispatch(Action::SendPrompt("hello".into()), &mut app);
+        dispatch(Action::SendBashCommand("ls".into()), &mut app);
+        dispatch(Action::SendPrompt("/asim-skill".into()), &mut app);
+        dispatch(Action::SendPrompt("/session-info".into()), &mut app);
+
+        dispatch(
+            Action::TaskComplete(crate::app::actions::TaskResult::PromptHistoryLoaded {
+                agent_id: id,
+                prompts: vec!["/asim-skill".to_owned(), "hello".to_owned()],
+            }),
+            &mut app,
+        );
+
+        assert_eq!(
+            history(&app),
+            ["/session-info", "/asim-skill", "! ls", "hello"]
+        );
+    }
+
+    #[test]
+    fn an_immediate_repeat_collapses_but_an_interleaved_one_does_not() {
+        let mut app = test_app_with_agent();
+
+        dispatch(Action::SendPrompt("build it".into()), &mut app);
+        dispatch(Action::SendPrompt("build it".into()), &mut app);
+        dispatch(Action::SendPrompt("check it".into()), &mut app);
+        dispatch(Action::SendPrompt("build it".into()), &mut app);
+
+        assert_eq!(history(&app), ["build it", "check it", "build it"]);
+    }
+
+    /// `/notacommand` reaches the command recorder and then the prompt recorder.
+    #[test]
+    fn an_unknown_command_is_recorded_once() {
+        let mut app = test_app_with_agent();
+
+        dispatch(Action::SendPrompt("/notacommand".into()), &mut app);
+
+        assert_eq!(history(&app), ["/notacommand"]);
+    }
+
+    /// Bash, slash and note entries never reach the shell. The local list is their only copy.
+    #[test]
+    fn a_late_history_fetch_keeps_what_only_the_client_knows() {
+        let mut app = test_app_with_agent();
+        let id = AgentId(0);
+
+        dispatch(Action::SendBashCommand("git status".into()), &mut app);
+        dispatch(
+            Action::SendPrompt("/rename payment retries".into()),
+            &mut app,
+        );
+
+        dispatch(
+            Action::TaskComplete(crate::app::actions::TaskResult::PromptHistoryLoaded {
+                agent_id: id,
+                prompts: vec!["git status".to_owned(), "fetched from the shell".to_owned()],
+            }),
+            &mut app,
+        );
+
+        let after = history(&app);
+        assert!(
+            after.contains(&"! git status".to_owned()),
+            "the bash command survived the fetch: {after:?}"
+        );
+        assert!(
+            !after.contains(&"git status".to_owned()),
+            "the shell stores bash bare, so its copy must not double the prefixed one: {after:?}"
+        );
+        assert!(
+            after.contains(&"/rename payment retries".to_owned()),
+            "the slash command survived the fetch: {after:?}"
+        );
+        assert!(
+            after.contains(&"fetched from the shell".to_owned()),
+            "the fetched history is still merged in: {after:?}"
+        );
+    }
+
+    /// Storing the `#` would recall a prompt opening `# Context` as a note.
+    #[test]
+    fn a_remember_note_is_recorded_as_plain_text() {
+        let mut app = test_app_with_agent();
+
+        dispatch(
+            Action::SendRememberNote("deploys need the staging flag".into()),
+            &mut app,
+        );
+
+        assert_eq!(history(&app), ["deploys need the staging flag"]);
+    }
+
+    #[test]
+    fn a_refused_remember_note_records_nothing() {
+        let mut app = test_app_with_agent();
+
+        dispatch(Action::SendRememberNote("   ".into()), &mut app);
+
+        assert!(history(&app).is_empty());
+    }
+
+    /// A stashed draft is not history. Only the send that follows puts a row in the recall list.
+    #[test]
+    fn stashing_a_draft_adds_no_history_row() {
+        let mut app = test_app_with_agent();
+        let id = AgentId(0);
+        {
+            let agent = app.agents.get_mut(&id).unwrap();
+            agent.prompt.set_text("first draft");
+            agent.stash_prompt_draft(crate::app::agent_view::StashCause::ClearedDraft);
+            agent.prompt.set_text("second draft");
+            agent.stash_prompt_draft(crate::app::agent_view::StashCause::ClearedDraft);
+        }
+        assert!(history(&app).is_empty());
+
+        dispatch(Action::SendPrompt("a real send".into()), &mut app);
+
+        assert_eq!(history(&app), ["a real send"]);
+    }
+
+    /// `/remember foo` runs the command recorder and then `SendRememberNote(foo)`.
+    #[test]
+    fn a_slash_remember_records_only_the_typed_command() {
+        let mut app = test_app_with_agent();
+
+        dispatch(
+            Action::SendPrompt("/remember deploys need the staging flag".into()),
+            &mut app,
+        );
+
+        assert_eq!(history(&app), ["/remember deploys need the staging flag"]);
+    }
+}
+
 mod prompt_stash_dispatch_tests {
     use super::test_app_with_agent;
     use crate::app::actions::Action;
@@ -4726,10 +4889,10 @@ mod prompt_stash_dispatch_tests {
         assert_eq!(stash.cause, StashCause::ClearedDraft);
     }
 
-    /// The clear records history and the stash contributes its own entry, so a `!` draft has to
-    /// be recorded with the same `! ` prefix or the Up browse lists it twice.
+    /// A cleared `!` draft lands in the slot with its shell mode; it was never sent, so
+    /// `session.prompt_history` stays empty. Fork UX still ranks it first in Up-browse history.
     #[test]
-    fn clearing_a_shell_draft_leaves_one_history_entry() {
+    fn clearing_a_shell_draft_stashes_it_and_records_no_history() {
         let mut app = test_app_with_agent();
         let id = AgentId(0);
         {
@@ -4740,9 +4903,23 @@ mod prompt_stash_dispatch_tests {
 
         dispatch(Action::ClearPrompt, &mut app);
 
-        let history = app.agents[&id].combined_prompt_history();
-        let texts: Vec<&str> = history.iter().map(|e| e.text.as_str()).collect();
-        assert_eq!(texts, ["! git status"]);
+        let agent = app.agents.get(&id).unwrap();
+        assert!(
+            agent.session.prompt_history.is_empty(),
+            "cleared draft must not be recorded as a sent prompt"
+        );
+        let history = agent.combined_prompt_history();
+        assert_eq!(
+            history.iter().map(|e| e.text.as_str()).collect::<Vec<_>>(),
+            ["! git status"],
+            "fork Up-browse ranks the stashed shell draft first"
+        );
+        let stash = agent.prompt_stash.as_ref().expect("draft was stashed");
+        assert_eq!(stash.prompt.text, "git status");
+        assert_eq!(
+            stash.input_mode,
+            crate::app::agent_view::PromptInputMode::Bash
+        );
     }
 
     #[test]

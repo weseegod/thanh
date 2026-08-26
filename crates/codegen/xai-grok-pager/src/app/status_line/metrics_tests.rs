@@ -13,8 +13,8 @@ fn session_reports_its_config_once() {
     let metrics = StatusLineMetrics::new();
 
     // A section that named no mode is `unset`, not `disabled`.
-    metrics.report_config(&StatusLineConfig::default(), ScreenMode::Fullscreen);
-    metrics.report_config(&command_row(), ScreenMode::Fullscreen);
+    metrics.report_config(&StatusLineConfig::default());
+    metrics.report_config(&command_row());
 
     assert_eq!(metrics.kind.get().copied(), Some("unset"));
     // The flag health is gated on cannot move on the second call either.
@@ -24,7 +24,7 @@ fn session_reports_its_config_once() {
 #[test]
 fn health_reports_every_run_and_the_slowest_of_them_once() {
     let metrics = StatusLineMetrics::new();
-    metrics.report_config(&command_row(), ScreenMode::Fullscreen);
+    metrics.report_config(&command_row());
     metrics.note_content();
     metrics.record_ok(10);
     metrics.record_ok(20);
@@ -57,9 +57,9 @@ fn only_a_builtin_row_reports_the_items_it_drew() {
 #[test]
 fn row_the_client_cannot_draw_reports_adoption_but_not_health() {
     let metrics = StatusLineMetrics::new();
-    metrics.report_config(&command_row(), ScreenMode::Minimal);
+    metrics.report_config(&StatusLineConfig::default());
     metrics.note_content();
 
-    assert_eq!(metrics.kind.get().copied(), Some("command"));
+    assert_eq!(metrics.kind.get().copied(), Some("unset"));
     assert!(metrics.health_event().is_none());
 }

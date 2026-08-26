@@ -487,6 +487,21 @@ impl ToolBridge {
         }
     }
 
+    /// Move all running foreground commands to background instead of killing them, optionally scoped to `owner_session_id`.
+    /// Used on a mid-turn redirect (send-now) so an in-flight command is never SIGKILLed.
+    pub async fn background_foreground_commands(
+        &self,
+        owner_session_id: Option<&str>,
+    ) -> Vec<crate::computer::types::BackgroundedForeground> {
+        if let Some(terminal) = &self.terminal {
+            terminal
+                .background_foreground_commands(owner_session_id)
+                .await
+        } else {
+            Vec::new()
+        }
+    }
+
     /// Kill all running background tasks.
     pub async fn kill_all_background_tasks(&self) {
         if let Some(terminal) = &self.terminal {

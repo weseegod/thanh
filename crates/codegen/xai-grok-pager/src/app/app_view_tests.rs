@@ -252,7 +252,10 @@ pub(crate) fn test_app() -> AppView {
         foreign_session_scan_seq: 0,
         foreign_scan_coordinator: Default::default(),
         session_picker_lanes: Default::default(),
-        session_picker_detail_generation: 0,
+        session_picker_detail_seq: 0,
+        picker_generation_counter: 0,
+        session_picker_generation: 0,
+        dashboard_session_picker: None,
         session_picker_entries_query: None,
         session_picker_pending_delete: None,
         welcome_tick: 0,
@@ -739,6 +742,8 @@ fn tick_demand_fast_while_modal_session_picker_loads() {
             content_results: None,
             content_loading: false,
             deep_search_seq: 0,
+            generation: 0,
+            detail_seq: 0,
             entries_query: None,
             source_filter: crate::views::session_picker::SourceFilter::default(),
             pending_delete: None,
@@ -764,6 +769,7 @@ fn tick_demand_fast_while_modal_session_picker_loads() {
         worktree_label: None,
         last_turn_summary: None,
         last_recap: None,
+        session_kind: None,
         card_detail: None,
     };
     if let Some(crate::views::modal::ActiveModal::SessionPicker { entries, .. }) =
@@ -2080,6 +2086,7 @@ fn welcome_session_entry(id: &str) -> SessionPickerEntry {
         worktree_label: None,
         last_turn_summary: None,
         last_recap: None,
+        session_kind: None,
         card_detail: None,
     }
 }
@@ -3039,6 +3046,23 @@ fn esc_cancels_running_wake_turn_while_pane_is_idle() {
     );
 }
 #[test]
+fn streaming_wake_turn_counts_as_running_for_minimal_commit() {
+    let mut app = test_app_with_agent();
+    let id = super::super::agent::AgentId(0);
+    let agent = app.agents.get_mut(&id).unwrap();
+    assert!(agent.session.state.is_idle());
+    assert!(!crate::minimal_api::is_turn_or_wake_running(agent));
+    agent.note_streaming_wake_turn("subagent-completed-abc");
+    assert!(
+        crate::minimal_api::is_turn_or_wake_running(agent),
+        "a streaming wake turn must hold the minimal commit frontier"
+    );
+    agent.running_wake_turn = None;
+    assert!(!crate::minimal_api::is_turn_or_wake_running(agent));
+    agent.session.state = AgentState::TurnRunning;
+    assert!(crate::minimal_api::is_turn_or_wake_running(agent));
+}
+#[test]
 fn esc_from_prompt_pane_running_turn_with_draft_cancels_preserving_draft() {
     let mut app = test_app_with_agent();
     let id = super::super::agent::AgentId(0);
@@ -3268,12 +3292,15 @@ fn idle_non_empty_double_esc_clears_prompt() {
     let effects = crate::app::dispatch::dispatch(Action::ClearPrompt, &mut app);
     assert!(effects.is_empty());
     assert!(app.agents[&id].prompt.textarea.text().is_empty());
+    assert!(
+        app.agents[&id].session.prompt_history.is_empty(),
+        "the cleared draft goes to the stash, never to the history"
+    );
     assert_eq!(
         app.agents[&id]
-            .session
-            .prompt_history
-            .first()
-            .map(String::as_str),
+            .prompt_stash
+            .as_ref()
+            .map(|entry| entry.prompt.text.as_str()),
         Some("draft to clear")
     );
 }
@@ -3775,6 +3802,7 @@ fn idle_scrollback_pane_esc_with_history_search_does_not_arm_rewind() {
         .push_block(crate::scrollback::block::RenderBlock::user_prompt(
             "earlier",
         ));
+    agent.session.prompt_history = vec!["earlier".into()];
     assert!(agent.prompt.textarea.text().is_empty());
     let history = agent.combined_prompt_history();
     let current_text = agent.prompt.text().to_string();
@@ -6586,6 +6614,7 @@ fn welcome_picker_f_cycle_disabled_under_chat_mode() {
         worktree_label: None,
         last_turn_summary: None,
         last_recap: None,
+        session_kind: None,
         card_detail: None,
     };
     let f_key = Event::Key(KeyEvent::new(KeyCode::Char('f'), KeyModifiers::NONE));

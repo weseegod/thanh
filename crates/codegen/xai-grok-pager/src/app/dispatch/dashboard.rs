@@ -22,7 +22,9 @@ use crate::app::actions::{Action, Effect, PermissionModeKind};
 use crate::app::agent::{AgentId, DeferredModelSwitch};
 use crate::app::agent_view::AgentView;
 use crate::app::app_view::{ActiveView, AppView, DashboardReturn, TrustState};
+use crate::app::cancel_latency::CancelOrigin;
 use agent_client_protocol as acp;
+use xai_grok_telemetry::events::CancellationScope;
 
 // ---------------------------------------------------------------------------
 // Agent Dashboard dispatchers
@@ -2011,10 +2013,6 @@ pub(super) fn dispatch_dashboard_stop(app: &mut AppView) -> Vec<Effect> {
                 return vec![];
             };
             if !crate::views::dashboard::classify_top_level(agent).allows_delete() {
-                // Busy row: stop what keeps it out of Idle — a running turn,
-                // background work (bg tasks, monitors, scheduled `/loop`s),
-                // or queued prompts. Never arms; once the row settles to
-                // idle, Ctrl+X twice deletes it.
                 let stopped = stop_top_level_activity(agent);
                 if let Some(d) = app.dashboard.as_mut() {
                     d.delete_confirm = None;
@@ -2101,11 +2099,13 @@ fn stop_top_level_activity(agent: &mut crate::app::agent_view::AgentView) -> Opt
             // start_turn'd a user prompt), then a local turn. Do not
             // cancel_turn a local user turn that is only queued behind a wake.
             if agent.session.state.is_compact_running() {
-                agent.session.cancel_compact_command();
+                agent.cancel_and_arm(CancellationScope::Compaction, CancelOrigin::UserGesture);
             } else if agent.running_wake_turn.is_some() {
+                // Wake cancel only marks the shell-front stop; there is no local
+                // turn to measure, so it intentionally skips arming latency.
                 agent.mark_wake_cancel_sent();
             } else if agent.session.state.is_turn_running() {
-                agent.session.cancel_turn(&mut agent.scrollback);
+                agent.cancel_and_arm(CancellationScope::Turn, CancelOrigin::UserGesture);
             }
             agent.cancel_trigger_hint = Some(crate::app::actions::CancelTrigger::DashboardStop);
             // Stop-everything on purpose: unlike the in-pane retry, the row

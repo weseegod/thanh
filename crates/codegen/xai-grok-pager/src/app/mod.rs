@@ -14,6 +14,7 @@ pub mod agent;
 pub mod agent_view;
 pub mod app_view;
 pub mod bundle;
+pub(crate) mod cancel_latency;
 pub mod cli;
 pub mod consent;
 pub use crate::link_opener;
@@ -38,8 +39,10 @@ pub(crate) mod status_line;
 mod status_line_policy;
 pub mod subagent;
 pub mod subscription;
+mod x10_filter;
 pub(crate) use effects::sanitize_user_error;
 mod event_loop;
+mod event_loop_stall;
 mod exit_timeout;
 pub(crate) mod external_editor;
 mod foreign_sessions;
@@ -681,7 +684,12 @@ pub async fn run(
     if let Ok(cwd) = std::env::current_dir() {
         crate::git_info::populate_from_cwd_async(cwd);
     }
+    let prefetch_wait_started = std::time::Instant::now();
+    let had_prefetch = early_prefetch.is_some();
     let remote_settings = join_early_prefetch(early_prefetch);
+    if had_prefetch {
+        xai_grok_telemetry::startup::record_prefetch_wait(prefetch_wait_started.elapsed());
+    }
     xai_grok_shell::util::config::cache_remote_auto_mode(
         remote_settings.as_ref().and_then(|s| s.auto_mode.clone()),
     );
@@ -819,10 +827,11 @@ pub async fn run(
         args.permission_mode_flag.as_deref(),
         remote_permission_mode,
     );
-    let launch_auto = xai_grok_shell::util::config::effective_auto_for_launch_interactive(
+    let launch_auto = xai_grok_shell::util::config::effective_auto_for_launch(
         args.yolo,
         args.permission_mode_flag.as_deref(),
         remote_permission_mode,
+        xai_grok_shell::util::config::default_interactive_permission_mode(),
     );
     let mut connect_flags = crate::acp::ConnectFlags {
         subagents: !args.no_subagents,

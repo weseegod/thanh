@@ -409,6 +409,26 @@ fn gap_between_runs_is_measured_from_the_end_of_the_last_one() {
 }
 
 #[test]
+fn minimal_mode_runs_the_row_like_fullscreen() {
+    let now = Instant::now();
+    let mut app = status_line_app(StatusLineType::Command);
+    app.screen_mode = crate::app::ScreenMode::Minimal;
+    app.update_status_line_at(now);
+    assert!(queued_a_run(&app), "the script runs in minimal mode too");
+
+    let mut app = status_line_app(StatusLineType::Builtin);
+    app.current_ui.status_line = command_row(StatusLineType::Builtin)
+        .with_items(vec![StatusLineItem::Cwd])
+        .into_config();
+    app.screen_mode = crate::app::ScreenMode::Minimal;
+    app.update_status_line_at(now);
+    assert!(
+        matches!(app.status_line_frame(), StatusLineFrame::On { .. }),
+        "a builtin row fills for the minimal live region to paint"
+    );
+}
+
+#[test]
 fn resize_arms_the_next_run_only_when_there_is_a_row() {
     let mut app = status_line_app(StatusLineType::Command);
     app.queue_status_line_resize();

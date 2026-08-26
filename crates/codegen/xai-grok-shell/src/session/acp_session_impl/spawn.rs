@@ -300,6 +300,7 @@ pub(crate) async fn spawn_session_actor(
     forked_tool_override: Option<Vec<ToolSpec>>,
     is_chat_kind: bool,
     spawn_timer: Option<xai_grok_telemetry::subagent_spawn::SharedSubagentSpawnTimer>,
+    sampling_gate: Option<Arc<tokio::sync::Semaphore>>,
 ) -> Result<
     (
         SessionHandle,
@@ -1394,51 +1395,28 @@ pub(crate) async fn spawn_session_actor(
                     });
                     continue;
                 }
-                if input.resume_from_run_id.is_some()
-                    && (input.name.is_some()
-                        || input.script.is_some()
-                        || input.script_path.is_some())
-                {
-                    let _ = ack
-                        .send(WorkflowLaunchAck::Rejected {
-                            code: "workflow_invalid_source",
-                            detail: "resume uses the original immutable script and args; launch edited source as a new run"
-                                .into(),
-                        });
-                    continue;
-                }
                 let registry_snapshot = registry::WorkflowRegistry::scan(Some(&launch_cwd));
-                let resolved = if let Some(name) = input.name.as_deref() {
-                    registry_snapshot.resolve_by_name(name)
-                } else if let Some(script) = input.script.clone() {
-                    registry::resolve_inline(script)
-                } else if let Some(path) = input.script_path.as_deref() {
-                    registry::resolve_by_path(
-                        std::path::Path::new(path),
+                use xai_grok_tools::implementations::grok_build::workflow::WorkflowSource;
+                let resolved = match &input.source {
+                    WorkflowSource::Name { name } => registry_snapshot.resolve_by_name(name),
+                    WorkflowSource::Script { script } => registry::resolve_inline(script.clone()),
+                    WorkflowSource::ScriptPath { script_path } => registry::resolve_by_path(
+                        std::path::Path::new(script_path),
                         &launch_cwd,
                         Some(&launch_session_dir),
-                    )
-                } else if input.resume_from_run_id.is_some() {
-                    match manager
-                        .lock()
-                        .await
-                        .script_copy_for(input.resume_from_run_id.as_deref().unwrap())
-                    {
-                        Some(script) => registry::resolve_inline(script),
-                        None => {
-                            let _ = ack.send(WorkflowLaunchAck::Rejected {
-                                code: "workflow_resume_unknown_run",
-                                detail: "no persisted script for that run id".into(),
-                            });
-                            continue;
+                    ),
+                    WorkflowSource::Resume { resume_from_run_id } => {
+                        match manager.lock().await.script_copy_for(resume_from_run_id) {
+                            Some(script) => registry::resolve_inline(script),
+                            None => {
+                                let _ = ack.send(WorkflowLaunchAck::Rejected {
+                                    code: "workflow_resume_unknown_run",
+                                    detail: "no persisted script for that run id".into(),
+                                });
+                                continue;
+                            }
                         }
                     }
-                } else {
-                    let _ = ack.send(WorkflowLaunchAck::Rejected {
-                        code: "workflow_invalid_source",
-                        detail: "provide one of name / script / script_path".into(),
-                    });
-                    continue;
                 };
                 let resolved = match resolved {
                     Ok(r) => r,
@@ -1486,10 +1464,15 @@ pub(crate) async fn spawn_session_actor(
                     continue;
                 }
                 let definition_name = resolved.meta.name.clone();
-                let args = match (&input.args, &input.resume_from_run_id) {
-                    (Some(a), _) => a.clone(),
-                    (None, Some(rid)) => manager.lock().await.args_copy_for(rid),
-                    (None, None) => serde_json::Value::Null,
+                let resume_run_id = match &input.source {
+                    WorkflowSource::Resume { resume_from_run_id } => {
+                        Some(resume_from_run_id.clone())
+                    }
+                    _ => None,
+                };
+                let args = match &resume_run_id {
+                    Some(rid) => manager.lock().await.args_copy_for(rid),
+                    None => input.args.clone().unwrap_or(serde_json::Value::Null),
                 };
                 let objective = args
                     .get("objective")
@@ -1501,7 +1484,7 @@ pub(crate) async fn spawn_session_actor(
                     args,
                     agent_budget: input.agent_budget,
                     effort: None,
-                    resume_run_id: input.resume_from_run_id.clone(),
+                    resume_run_id,
                 };
                 let launch_outcome = {
                     let mut mgr = manager.lock().await;
@@ -1821,14 +1804,9 @@ pub(crate) async fn spawn_session_actor(
         goal_classifier_in_flight: std::sync::atomic::AtomicBool::new(false),
         managed_mcp_handle,
         tool_metadata_snapshot: Arc::new(std::sync::Mutex::new(Default::default())),
-        mcp_announced_servers: Mutex::new(
+        mcp_announcements: Mutex::new(
             persisted_announcement_state
-                .as_ref()
-                .map(|s| {
-                    crate::session::announcement_state::from_persisted_fingerprints(
-                        &s.mcp_server_fingerprints,
-                    )
-                })
+                .map(crate::session::announcement_state::McpAnnounced::from_persisted)
                 .unwrap_or_default(),
         ),
         mcp_reminder_mode: McpReminderMode::from_env(),
@@ -1882,6 +1860,7 @@ pub(crate) async fn spawn_session_actor(
         turn_stream_drained: parking_lot::Mutex::new(None),
         pending_image_strip: parking_lot::Mutex::new(None),
         sampler_handle,
+        sampling_gate,
         rebuild_spec: rebuild_spec.clone(),
         image_description_model,
         image_describe_cache: Arc::new(crate::session::image_describe::ImageDescribeCache::new()),
@@ -2402,6 +2381,7 @@ pub(crate) async fn spawn_session_on_thread(
     forked_tool_override: Option<Vec<ToolSpec>>,
     is_chat_kind: bool,
     spawn_timer: Option<xai_grok_telemetry::subagent_spawn::SharedSubagentSpawnTimer>,
+    sampling_gate: Option<Arc<tokio::sync::Semaphore>>,
 ) -> Result<
     (
         SessionHandle,
@@ -2575,6 +2555,7 @@ pub(crate) async fn spawn_session_on_thread(
                         forked_tool_override,
                         is_chat_kind,
                         spawn_timer,
+                        sampling_gate,
                     )
                     .await
                     {

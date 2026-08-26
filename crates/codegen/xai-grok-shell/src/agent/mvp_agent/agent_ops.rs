@@ -2481,6 +2481,9 @@ impl MvpAgent {
             subagent_presentation: RefCell::new(
                 crate::agent::subagent::SubagentPresentation::new(),
             ),
+            subagent_sampling_semaphore: Arc::new(
+                tokio::sync::Semaphore::new(cfg.subagents_sampling_limit),
+            ),
             monitor_event_buffer: xai_grok_tools::implementations::grok_build::monitor::types::MonitorEventBuffer::default(),
             bundle_sync_in_flight: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             post_unblock_jwt_retry_in_flight: Arc::new(
@@ -4098,6 +4101,7 @@ impl MvpAgent {
             session_yolo_mode,
             session_auto_mode,
             prompt_display_cwd,
+            is_headless,
             is_chat_kind,
         } = spec;
         let _timer = crate::instrumentation_timer!("session.spawn_and_register");
@@ -4352,13 +4356,11 @@ impl MvpAgent {
                 model.map(|e| &e.info),
             )
         };
-        let compaction_mode = self.cfg.borrow().resolve_compaction_mode();
         let compaction_verbatim_input = self
             .cfg
             .borrow()
             .is_feature_enabled(crate::agent::config::Feature::CompactionVerbatimInput);
         let compaction_tool_choice = self.cfg.borrow().resolve_compaction_tool_choice();
-        let two_pass_enabled = self.cfg.borrow().is_two_pass_compaction_enabled();
         let auto_update = self.cfg.borrow().cli.auto_update;
         let client_type = *self.client_type.borrow();
         let buffering_settings = self.buffering_settings.borrow().clone();
@@ -4438,6 +4440,15 @@ impl MvpAgent {
             );
             agent_definition.user_message_template = template;
         }
+        let pins = crate::session::cursor_compaction_pins(
+            self.cfg.borrow().resolve_compaction_mode(),
+            self.cfg.borrow().is_two_pass_compaction_enabled(),
+            crate::session::is_cursor_user_template(
+                &agent_definition.user_message_template,
+            ),
+        );
+        let compaction_mode = pins.mode;
+        let two_pass_enabled = pins.two_pass;
         let (session_model_id, mut sampling_config) = self
             .apply_agent_model_override(
                 pinned_model.as_ref(),
@@ -4891,6 +4902,7 @@ impl MvpAgent {
                     None,
                     is_chat_kind,
                     None,
+                    None,
                 )
                 .await?
         };
@@ -4971,6 +4983,9 @@ impl MvpAgent {
             && let Some(scope) = &old.tool_context.process_scope
         {
             scope.kill_all();
+        }
+        if is_headless {
+            self.session_registry.mark_headless(&session_info.id);
         }
         self.spawn_managed_gateway_tool_catalog_fetch();
         let cwd_for_maintenance = session_info.cwd.clone();

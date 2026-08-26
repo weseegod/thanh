@@ -139,7 +139,6 @@ pub(crate) fn task_status_line(
     counts: TaskStatusCounts,
     theme: &Theme,
     is_hovered: bool,
-    tick: u64,
 ) -> Option<Line<'static>> {
     if counts == TaskStatusCounts::default() {
         return None;
@@ -161,10 +160,10 @@ pub(crate) fn task_status_line(
     let mut spans = Vec::with_capacity(2);
 
     if counts.running > 0 {
-        let frames = crate::glyphs::dot_spinner_frames();
-        let frame_idx = (tick / SPINNER_DIVISOR) as usize % frames.len();
+        // Static, and the same diamond the task rows use. The header sits in view the whole session,
+        // so a spinner here reads as noise rather than progress.
         spans.push(Span::styled(
-            format!("{} {}", frames[frame_idx], counts.running),
+            format!("{} {}", crate::glyphs::diamond_filled(), counts.running),
             running_style,
         ));
     }

@@ -74,6 +74,7 @@ impl AgentView {
         self.prompt.clear_history();
 
         // A replaced entry loses its slot and its images, so keep its text reachable via Up.
+        // Held in `prompt_stash_evicted` so a late `PromptHistoryLoaded` cannot wipe it.
         if let Some(old) = self.prompt_stash.replace(entry) {
             crate::app::agent::remember_prompt(&mut self.prompt_stash_evicted, &old.history_text());
         }
@@ -129,6 +130,11 @@ impl AgentView {
         let cursor = self.prompt.cursor();
         self.prompt.restore(entry.prompt);
         self.prompt.set_cursor(cursor);
+    }
+
+    /// Record `text` in the recall list. The one door in, so every send path caps and orders alike.
+    pub(in crate::app) fn record_prompt_in_history(&mut self, text: &str) {
+        crate::app::agent::remember_prompt(&mut self.session.prompt_history, text);
     }
 
     /// The stash chord toggles: a draft goes into the slot, an empty composer takes it back.
@@ -205,6 +211,33 @@ mod tests {
             KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL),
             KeyEvent::new(KeyCode::Char('s'), KeyModifiers::ALT),
         ]
+    }
+
+    /// Committing the browse must keep the shell mode the recall set, or the command goes to the model instead of the shell.
+    #[test]
+    fn committing_a_recalled_shell_command_keeps_shell_mode() {
+        for commit in [
+            KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+            KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE),
+        ] {
+            let mut agent = test_fixtures::make_agent();
+            agent.session.prompt_history = vec!["! git status".to_owned()];
+            agent.handle_prompt_key_for_test(&KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
+            await_history_results(&mut agent);
+
+            agent.handle_prompt_key_for_test(&commit);
+
+            assert_eq!(
+                agent.prompt_input_mode,
+                PromptInputMode::Bash,
+                "{commit:?} dropped shell mode"
+            );
+            assert!(
+                agent.prompt.text().starts_with("git status"),
+                "{commit:?} left {:?}",
+                agent.prompt.text()
+            );
+        }
     }
 
     #[test]
@@ -560,11 +593,8 @@ mod tests {
     #[test]
     fn stashed_draft_ranks_first_in_history_with_its_shell_prefix() {
         let mut agent = test_fixtures::make_agent();
-        agent
-            .scrollback
-            .push_block(crate::scrollback::block::RenderBlock::user_prompt(
-                "sent prompt",
-            ));
+        // The browse reads the recall list, not the scrollback, so seed what the send would record.
+        agent.session.prompt_history = vec!["sent prompt".to_owned()];
         agent.prompt_input_mode = PromptInputMode::Bash;
         agent.prompt.set_text("git status");
         agent.stash_prompt_draft(StashCause::ClearedDraft);

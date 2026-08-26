@@ -133,6 +133,8 @@ pub(super) use prompt_queue::QueueInputRequest;
 mod hooks_plugins;
 #[path = "acp_session_impl/mcp.rs"]
 mod mcp;
+#[path = "acp_session_impl/mcp_failed_reminder.rs"]
+mod mcp_failed_reminder;
 #[path = "acp_session_impl/model_switch.rs"]
 mod model_switch;
 #[path = "acp_session_impl/slash_exec.rs"]
@@ -977,10 +979,10 @@ pub(crate) struct SessionActor {
     /// Shared MCP tool metadata for the BM25 search index. Updated after MCP init.
     pub(crate) tool_metadata_snapshot:
         Arc<std::sync::Mutex<crate::session::tool_index::ToolMetadataSnapshot>>,
-    /// Tracks which servers have been announced via system-reminder, for
-    /// change detection. Maps server_name -> (tool_count, description_hash).
-    pub(crate) mcp_announced_servers:
-        Mutex<HashMap<String, xai_grok_tools::implementations::search_tool::ServerFingerprint>>,
+    /// MCP servers (connected and failed) already announced via
+    /// system-reminder — see [`crate::session::announcement_state::McpAnnounced`]
+    /// for the dedupe semantics.
+    pub(crate) mcp_announcements: Mutex<crate::session::announcement_state::McpAnnounced>,
     /// Controls whether MCP server reminders inject only changes (Delta)
     /// or the full server list (Full). Read from `MCP_REMINDER_MODE` env var.
     pub(crate) mcp_reminder_mode: McpReminderMode,
@@ -1151,6 +1153,9 @@ pub(crate) struct SessionActor {
     /// tests and other constructor sites use `SamplerHandle::noop()`.
     /// All inference flows through this handle.
     pub(crate) sampler_handle: xai_grok_sampler::SamplerHandle,
+    /// Turn-sampling gate: `None` is the main session (ungated), `Some` is the process
+    /// tree's shared sampling semaphore. See `acquire_subagent_sampling_permit`.
+    pub(crate) sampling_gate: Option<Arc<tokio::sync::Semaphore>>,
     /// Cached recipe for constructing this session's [`xai_grok_agent::Agent`].
     ///
     /// Populated once at session spawn and then reused by
@@ -2018,6 +2023,9 @@ mod load_user_prompts_tests;
 #[cfg(test)]
 #[path = "acp_session_tests/mcp_connecting_reminder_tests.rs"]
 mod mcp_connecting_reminder_tests;
+#[cfg(test)]
+#[path = "acp_session_tests/mcp_failed_reminder_tests.rs"]
+mod mcp_failed_reminder_tests;
 #[cfg(test)]
 #[path = "acp_session_tests/media_gen_auth_retry_tests.rs"]
 mod media_gen_auth_retry_tests;

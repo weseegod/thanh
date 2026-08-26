@@ -126,6 +126,7 @@ pub(crate) struct InlineVideoState {
 use super::actions::Action;
 use super::agent::AgentSession;
 use super::app_view::InputOutcome;
+use super::cancel_latency::CancelLatency;
 use crate::scrollback::EntryId;
 use crate::scrollback::ScrollbackSearchState;
 use crate::scrollback::state::ScrollbackState;
@@ -1636,6 +1637,7 @@ pub struct AgentView {
     /// event loop re-sends the idempotent cancel after
     /// [`super::dispatch::CANCEL_RESEND_GRACE`] while still cancelling.
     pub(crate) pending_cancel_resend: Option<PendingCancelResend>,
+    pub(crate) cancel_latency: Option<CancelLatency>,
     /// Send-now cancel expectation: the client-minted id of an explicit
     /// cancel-and-send this client dispatched into a running turn (send-now
     /// chord / `SendPromptNow`, or queue-row "Send now"). The running turn's

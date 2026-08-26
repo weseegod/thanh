@@ -1141,7 +1141,7 @@ pub(super) fn dispatch_queue_interject_shared(
             with_active_agent(app, |agent| {
                 // Edited override is user-typed text; keep it Ctrl+R recallable.
                 if let Some(text) = &new_text {
-                    crate::app::agent::remember_prompt(&mut agent.session.prompt_history, text);
+                    agent.record_prompt_in_history(text);
                 }
                 agent.note_self_originated_prompt(&id);
                 arm_send_now_and_paint(agent, &id, new_text.as_deref());
