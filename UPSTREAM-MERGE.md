@@ -364,3 +364,17 @@ Sync #8 (merge `07dc922`, direct local merge into `main`):
 - Fork markers: 113/113 preserved (content identical; line numbers shifted)
 - Fast pre-gate `cargo check -p xai-grok-shell -p xai-grok-pager -p xai-grok-sampling-types` clean (0 errors); test targets compile; pager dispatch 1437/1437, pager subagent 196/196, shell subagent 358/358 green; **full `./build.sh` waived by user** ("no need to build") — substitute gate `cargo check --workspace --all-targets` exit 0 with zero errors
 - Delivered via direct merge into local `main` (fast-forward, not pushed; push + release when requested); version crates at upstream's `1.0.8`; fork had 42 commits ahead of upstream at merge time
+
+Sync #9 (merge `3f7fba08`, follow-up `b19e9a1d`, direct local merge into `main`):
+- 2 upstream commits (`c2ad97f8`..`77cd7eb6`, "Synced from monorepo"); 335 files, ~19.3k insertions, ~4.1k deletions
+- Pre-merge: stashed local WIP (goal compaction reseed + `draw_prompt_dropdowns`); re-added missing `upstream` remote
+- **5 conflicts**, resolved by combining:
+  - `agent_view/mod.rs` + `session.rs`: kept fork `prompt_stash_evicted`; dropped upstream `credit_limit_stashed_prompt` (no consumer billing)
+  - `dispatch/tests/prompt.rs`: kept fork `clear_display_wipes_scrollback_preserves_session` + upstream `prompt_history_recording_tests`; adapted stash test for fork Up-browse ranking of stashed drafts
+  - `plan_mode.rs`: kept fork subagent reminder tests + static sparse reminder asserts; restored `test_renderer_with_task` helper in follow-up commit
+  - `workflow/mod.rs`: adopted upstream `WorkflowSource` tagged input (dropped flat legacy fields from schema); re-applied `~/.thanh/workflows/` + `/workflow runs` in description
+- Auto-merge fallout: re-wired fork `prompt_stash_evicted` into `prompt.rs` / `prompt_stash.rs` on top of upstream's `record_prompt_in_history` / `seed_prompt_history_from_scrollback` redesign
+- Docs: re-applied `~/.thanh` on 09/21/25/26 user-guide pages upstream still had as `~/.grok`
+- Fork markers: 113/113 preserved (content identical)
+- `cargo check -p xai-grok-shell -p xai-grok-pager -p xai-grok-sampling-types -p xai-grok-workspace` clean; plan-mode conflict tests 4/4 green; full `./build.sh` not run yet
+- Delivered via direct merge into local `main` (not pushed; push + release when requested); version crates at upstream's `1.0.10`; fork had 51 commits ahead of upstream at merge time
