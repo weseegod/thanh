@@ -1,5 +1,6 @@
-//! Single source of truth for the grok home directory: `$GROK_HOME` or
-//! `<home>/.thanh`. Shared by `xai-grok-config` and `xai-fast-worktree`.
+//! Home-directory resolution generally: USERPROFILE-first `home_dir`, plus
+//! grok-home (`$GROK_HOME` or `<home>/.thanh`). Shared by `xai-grok-config`
+//! and `xai-fast-worktree`.
 //!
 //! Fork-specific: the home is `~/.thanh` (not upstream's `~/.grok`) so the
 //! fork keeps its own config, auth, sessions, binaries and caches completely

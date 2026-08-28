@@ -2874,6 +2874,8 @@ fn dashboard_stop_with_peek_open_moves_selection_and_peek_down_one() {
             &[],
             false,
             None,
+            false,
+            None,
         );
     };
     render(&mut app);

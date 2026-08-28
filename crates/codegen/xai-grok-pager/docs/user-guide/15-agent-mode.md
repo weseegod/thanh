@@ -63,7 +63,7 @@ thanh agent --always-approve serve --bind 127.0.0.1:2419 --secret <token>
 
 | Flag | Description |
 | ---- | ----------- |
-| `-m, --model <MODEL>` | Model ID (for example `grok-build`). |
+| `-m, --model <MODEL>` | Model ID (for example `grok-4.6`). |
 | `--always-approve` | Run without interactive tool-permission prompts. Alias: `--yolo`. |
 | `--reauth` | Authenticate before the agent starts. |
 | `--agent-profile <PATH>` | Load an agent profile from a file. |
