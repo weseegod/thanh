@@ -4,16 +4,44 @@ This document is a step-by-step guide for syncing this fork with upstream
 [xai-org/grok-build](https://github.com/xai-org/grok-build). Follow it
 verbatim when performing automated upstream merges.
 
-## Project goal
+## Fork purpose — keep upstream's core intact
 
-This repository is a **BYOK-focused fork** of Grok Build. Upstream owns the
-agent runtime, TUI, tools, and core features. This fork keeps upstream core
-as-is and adds a thin customization layer so third-party models (DeepSeek,
-OpenRouter, etc.) work reliably with Bring Your Own Key (BYOK) configuration.
+**This fork changes upstream as little as possible.** It exists for one
+reason: to let third-party models (DeepSeek, OpenRouter, any OpenAI-compatible
+API) run reliably on the upstream agent/TUI core with Bring Your Own Key
+(BYOK) configuration — plus a few small TUI ergonomics — and to trim what a
+personal BYOK fork doesn't need (billing/paywall, product telemetry).
+Everything else is taken from upstream exactly as shipped.
 
-Do **not** reimplement upstream features. Extend only where third-party models
-need different behavior (model config parsing, text-only image handling, BYOK
-auth, and small TUI ergonomics).
+- **KEEP (upstream-owned — never fork):** the agent runtime, TUI, tools, core
+  features, module layout, generated/read-only files. Upstream is the source
+  of truth; every sync imports its changes wholesale.
+- **ADAPT (fork-owned — thin layer only):** model config parsing
+  (`input_modalities`), text-only image stripping, BYOK auth/sampling, and a
+  small set of TUI ergonomics (`/clear`, `/new`, task-list expansion).
+- **TRIM (fork-owned — removals):** upstream features this fork doesn't need.
+  Already done: the consumer free→paid paywall in
+  `crates/codegen/xai-grok-pager/src/app/subscription.rs` (BYOK sessions have
+  no grok.com billing; the server-driven gate chokepoint is kept). Target:
+  product telemetry/analytics for privacy (`xai-grok-telemetry` — Mixpanel,
+  Sentry, OTel — and its wiring in `xai-grok-pager-bin/src/main.rs`).
+- **NEVER:** reimplement upstream features, redesign upstream UI, restructure
+  upstream modules, or carry features that only this fork would maintain.
+
+**Scope test — a change belongs in this fork only if it is one of:**
+
+1. A BYOK / third-party-model adaptation.
+2. A small TUI ergonomic improvement.
+3. A trim — removal of something this fork doesn't need (billing, telemetry,
+   …) — or a genuine bug fix that upstream hasn't accepted yet.
+
+Anything else belongs upstream, not here.
+
+**Pull everything, adapt after.** When upstream ships new features, merge them
+wholesale — do **not** pre-filter or pre-adapt. Grok's own models are
+OpenAI-compatible, so new upstream features keep working with BYOK models.
+BYOK adaptation and trimming happen afterwards, in the same pass that re-applies
+the fork layer.
 
 ## Remotes
 
@@ -54,6 +82,9 @@ git fetch --all
    ```
 
 4. Resolve conflicts using the rules in [Conflict resolution](#conflict-resolution).
+   The merge brings upstream **in full** — all new features arrive, so do not
+   filter features out mid-merge; fork ADAPT/TRIM changes are re-applied on
+   top afterwards.
 
 5. Verify the build (fast `cargo check` pre-gate first, then the slow full
    build — see [Post-merge verification](#post-merge-verification)):
@@ -108,6 +139,12 @@ git fetch --all
 Do **not** rebase fork commits onto upstream — that drops fork history and
 makes BYOK customizations harder to track.
 
+**Pull everything, adapt after.** When upstream ships new features, merge them
+wholesale — do **not** pre-filter or pre-adapt. Grok's own models are
+OpenAI-compatible, so new upstream features keep working with BYOK models.
+BYOK adaptation and trimming happen afterwards, in the same pass that re-applies
+the fork layer.
+
 ```mermaid
 flowchart LR
   upstreamMain["upstream/main"]
@@ -136,6 +173,7 @@ These paths contain fork customizations. Preserve them during merges.
 | BYOK goal evaluator | `crates/codegen/xai-grok-shell/src/session/acp_session_impl/goal.rs`, `goal_evaluator.rs` | Keep preferred-model goal-evaluator logic (`effective_suggest_model` from pin, fallback to active) and `GOAL_EVALUATOR_TIMEOUT` guard (re-add const if upstream removes it) |
 | Fork TUI UX | `crates/codegen/xai-grok-pager/src/slash/commands/clear.rs`, `new.rs`, `views/turn_status.rs`, `views/tasks_pane.rs`, related `agent_view/` and `dispatch/` changes | Keep fork UX; merge upstream structural refactors around them |
 | Fork docs edits | `crates/codegen/xai-grok-pager/docs/user-guide/04-slash-commands.md`, `05-configuration.md`, `11-custom-models.md`, `17-sessions.md`, `20-background-tasks.md` | Prefer upstream wording, then re-apply fork additions |
+| Trims (removals) | `crates/codegen/xai-grok-pager/src/app/subscription.rs` (fork-modified: paywall removed, server-driven gate chokepoint kept); target removals: `crates/codegen/xai-grok-telemetry/` (Mixpanel, Sentry, OTel) + its wiring in `crates/codegen/xai-grok-pager-bin/src/main.rs`, config in `crates/codegen/xai-grok-config-types` | Keep the fork trim; after every sync take upstream's re-additions first, then re-apply the removal |
 
 The table is illustrative, not exhaustive — many more files carry fork
 markers (e.g. `xai-grok-pager/src/acp/model_state.rs`, `xai-grok-pager/src/models.rs`,
@@ -198,11 +236,16 @@ Historical fork commits (reference):
 
 | Situation | Action |
 |-----------|--------|
+| Any change not required by BYOK support, small TUI ergonomics, or the trim list | Take **upstream** — it does not belong in the fork |
 | File not in fork inventory above | Take **upstream** |
 | Fork-only file (`build.sh`, `docs/byok-models.md`) | Keep **fork** |
 | Shared hot file (`models.rs`, `config.rs`, `compaction.rs`, etc.) | **Combine**: upstream refactor/renames + fork BYOK logic |
 | Generated/read-only (`Cargo.toml` workspace root, `SOURCE_REV`) | Take **upstream** |
 | Upstream deleted/renamed something the fork touched | Follow **upstream** structure; re-port fork logic into new locations |
+
+Trims (removals) are re-applied **after** the wholesale merge, not decided
+during conflict resolution: take upstream's re-additions first, then delete
+again (see the inventory TRIM row).
 
 After resolving shared hot files, grep for fork markers:
 
@@ -264,117 +307,7 @@ Manual checks:
 - Do **not** rebase fork commits onto upstream
 - Do **not** delete `build.sh` or `docs/byok-models.md`
 - Do **not** commit API keys or real credentials from `~/.thanh/config.toml`
-
-## Reference: Aug 2026 syncs
-
-Sync #1 (merge `1e99e1e`):
-- 3 upstream commits ("Synced from monorepo") merged with **zero conflicts**
-- Build verified: `thanh 0.2.120` via `./build.sh`
-- Fork had 8 commits ahead of upstream at merge time
-
-Sync #2 (merge `45939f6`, [PR #1](https://github.com/weseegod/thanh/pull/1)):
-- 1 upstream commit (`a5589e9`); 231 files, ~20.7k insertions, ~4.3k deletions
-- **Zero conflicts**; 7 fork-inventory files auto-merged (non-overlapping hunks)
-- Fork markers verified identical pre/post via the `git grep -n` diff
-- `cargo check` passed; full `./build.sh` waived by user
-- Delivered via **PR** (`merge/upstream-main` → `main`) instead of local merge + push
-- Fork had 12 commits ahead of upstream at merge time
-
-Sync #3 (merge `6f2d9d5`, direct local merge + push):
-- 1 upstream commit (`393430e`, "Synced from monorepo"); 262 files, ~21.1k insertions, ~6.3k deletions
-- **2 conflicts**, both resolved by combining:
-  - `agent_view/render.rs`: fork keeps `turn_status::row_count` (expanded watching-cue detail rows) while adopting upstream's `wake_display_state` refactor (`wake_display_state.unwrap_or(&self.session.state)` as the state arg)
-  - `acp_session_impl/goal.rs`: fork keeps preferred-model goal-evaluator logic (`effective_suggest_model` from `prompt_suggest_model_pin`, fallback to active model via `prepare_chat_completion`); upstream removed the whole preferred-model branch and the 30s timeout, so re-added `GOAL_EVALUATOR_TIMEOUT` const to `goal_evaluator.rs`
-- Fork markers: 110/110 lines preserved (content identical; line numbers shifted by upstream insertions/reorderings — e.g. one `ModelByok` use line moved within `auth_error_no_retry_tests.rs` as upstream reordered tests)
-- `cargo check` passed; full `./build.sh` waived by user
-- Delivered via **direct merge** into `main` + push (per user request)
-- Fork had 14 commits ahead of upstream at merge time
-
-Sync #4 (merge `5fa1439`, + Cargo.lock resync `5d3b005`):
-- 1 upstream commit (`afbc0fb`, "Synced from monorepo"); 74 files, ~4.7k insertions, ~0.7k deletions
-- **Zero conflicts** on the merge branch; Cargo.lock resynced on `main` afterwards (shell/pager follow upstream 1.0.0; fork version crates stay 0.2.122)
-- Follow-up **fork cleanup** — removed the consumer billing/paywall surface (BYOK sessions have no grok.com billing):
-  - Deleted `dispatch/billing.rs`, `views/credit_bar.rs`, `scrollback/blocks/credit_limit.rs`, shell `subscription_check.rs` + `extensions/billing.rs`
-  - `subscription.rs` trimmed to the server-driven gate chokepoint; `Effect::FetchBilling` / `CheckSubscription` / `GateVerify*` / `SchedulePaywallCheck` and the `credit_limit_blocked` / `free_usage_blocked` / `usage_visible` fields removed
-  - Tier-restricted upsell (SuperGrok modal/toast) replaced with a terse "isn't available on your current plan" notice
-- `cargo check --all-targets` clean (0 warnings); pager + shell lib tests: only **pre-existing** failures remain (paste file-URL probe, scrollback token teal, terminal-cursor tests, shell auth order-dependent flakes + one stack-overflow test — all fail identically at pre-cleanup HEAD)
-- Full `./build.sh` verified (release build + install)
-- Fork markers: 110/110 preserved (verified via the `git grep -n` diff pre/post)
-- Delivered via **direct merge** into `main` + push (per user request)
-
-Sync #5 (merge `de01de1`, direct local merge into `main`):
-- 3 upstream commits (`75e73f3`..`be71313`, "Synced from monorepo"); 296 files, ~18.0k insertions, ~2.7k deletions
-- **7 conflicts**, resolved by combining:
-  - `pager-bin/main.rs`: adopt upstream `build_with_blocking_pool` + `resolve_update_trigger`; keep `thanh` branding and worker-count error text
-  - `dispatch/session/fork.rs`: keep `conversation_entry` stamping; drop reintroduced `apply_credit_balance` / `credit_balance` (no consumer billing surface)
-  - `dispatch/tests/task_result.rs`: keep new `ResetSessionTitle*` tests; drop `CheckSubscription` / `pending_gate_verification` billing tests
-  - `slash/commands/mod.rs`: keep bare `/usage` tests (no `ManageBilling` / `billing_surface_visible`)
-  - `shell/agent/app.rs`: keep `thanh login` / `thanh agent stdio` copy + orphaned-upload cleanup comment
-  - `shell/config/mod.rs`: take upstream ZDR video-tools doc wording; keep `~/.thanh/managed_config.toml`
-  - `update/auto_update.rs`: adopt channel-aware `reinstall_hint(installer, channel)` API + Rosetta / install-phase helpers; keep `weseegod/thanh` feed, `thanh` binary name, and fork release-page manual install hint (channel arg accepted, ignored)
-- Fork markers: 113/113 preserved (content identical; line numbers shifted by upstream insertions/reorderings)
-- `cargo check -p xai-grok-shell -p xai-grok-pager -p xai-grok-sampling-types -p xai-grok-update -p xai-grok-pager-bin` passed
-- Full `./build.sh` not run yet (waive or run before release)
-- Delivered via **direct merge** into local `main` (not pushed; push + release when requested)
-- Fork had 32 commits ahead of upstream at merge time; version crates remain `1.0.1` pending post-sync bump
-
-Sync #6 (merge `a45c679`, direct local merge into `main`):
-- 4 upstream commits (`e5fd481`..`5163763`, "Synced from monorepo"); 763 files, ~172k insertions, ~121k deletions (mostly test-file splits)
-- **34 conflicts**, resolved by combining:
-  - New `xai-grok-home` crate is now the home-dir source of truth; fork default remains `~/.thanh` (not `~/.grok`); `paths.rs` re-exports it and keeps `bin/thanh`
-  - `pager-bin` / `cli.rs` / `version`: adopt upstream `full_version()` / `set_full_version`; keep `thanh` branding and `CLI_BINARY_NAME`
-  - Docs (`05-configuration`, `10-hooks`, `13-memory`, `17-sessions`): take upstream wording (`GROK_CONFIG` overlay, memory flag removal, worktree gc safety); re-apply `thanh` / `~/.thanh`
-  - Billing files (`dispatch/billing.rs` + tests) kept **deleted**; usage modal keeps BYOK tab (no credit bar / `ManageBilling`)
-  - Several large files adopted upstream `#[path = "..._tests.rs"]` extracts (`app_view`, `auto_update`, `compaction`, `goal_classifier`, `remote/client`, `agent/config`)
-  - BYOK: kept `strip_image_parts_for_text_only` + tests (alongside new upstream `strip_images_by_url`), `input`/`input_modalities` parsing, `stop_child_session_after_cancel`
-- Fork markers: production logic preserved (113 lines pre-merge; tests for `input_modalities` / `ModelByok` moved to `config_tests.rs` with the upstream extract)
-- `cargo check -p xai-grok-shell -p xai-grok-pager -p xai-grok-sampling-types -p xai-grok-update -p xai-grok-pager-bin -p xai-grok-home -p xai-fast-worktree` passed
-- Full `./build.sh` not run yet (waive or run before release)
-- Delivered via **direct merge** into local `main` (not pushed; push + release when requested)
-- Fork had 34 commits ahead of upstream at merge time; version crates followed upstream to `1.0.4` (pending post-sync bump + publish)
-
-Sync #7 (merge `d2f91f6`, direct local merge into `main`):
-- 4 upstream commits (`9fabade`..`19d42e3`, "Synced from monorepo"); 539 files, ~32k insertions, ~7.9k deletions
-- Pre-merge cleanup: finished the half-wired OpenCode Zen vendor-trailer fix (`is_vendor_trailer` now consulted in the Chat Completions SSE decode), committed on `main`; deleted stale untracked leftovers identical to `upstream/main`; gitignored `dist/`
-- **8 conflicts**, resolved by combining:
-  - `docs/custom-hooks.md`: upstream PowerShell troubleshooting row + fork `~/.thanh/logs` wording
-  - `pty_e2e_clipboard.rs`: kept fork's `thanh wrap ssh <host>` assertion (matches `SSH_WRAP_ONE_OFF`)
-  - `app_view.rs` / test ctx structs: adopted new upstream `workspace_dashboard_enabled`; dropped reintroduced `usage_visible` (no consumer billing surface)
-  - `event_loop.rs`: adopted upstream status-line refresh timer; dropped billing poll + `subscription_watch` arm
-  - `mvp_agent/mod.rs` (+ `agent_ops.rs`, `acp_agent.rs`, `tests.rs`): removed upstream's tier-recheck/subscription machinery (`retry_subscription_check`, `spawn_tier_recheck`, `TierRecheckInFlightGuard`) per the no-billing policy; kept deleted `subscription_check.rs`
-- Merge fallout fixed in follow-up commits: `expired_removed` widened to `u64` in gc integration tests; `handle_set_session_model` now called through `Arc` with the new `skip_prompt_rewrite` arg; added `docs/internal/25-enterprise.md` + `22-environment-variables.md` (upstream's `registered_features_are_documented` tripwire referenced files that were never committed anywhere); shell-alias fix test isolated from user rc files (a real installed `thanh` shadowed its stub)
-- Fork markers: 113/113 preserved (content identical; line numbers shifted)
-- `cargo check --workspace --all-targets` clean; sampler suite fully green; pager/shell suites green except **pre-existing** failures only (paste file-URL probe family ×18; scrollback teal + cursor tests fail under this environment's `NO_COLOR=1`; hooks `omits_session_id_when_none` needs `GROK_SESSION_ID` unset — it is set inside thanh sessions; shell `auth_retry_budget_tests::authenticated_401s_still_exhaust_after_three_retries` stack-overflows identically at pre-merge HEAD)
-- Note for future syncs: never point a worktree/baseline build at the main checkout's shared `target/` dir — same-version path crates collide and produce phantom missing-symbol errors; `touch` the crate sources to invalidate
-- Delivered via direct merge into local `main` (not pushed; push + release when requested); version crates remain at upstream's `1.0.6` pending post-sync bump + publish
-
-Sync #8 (merge `07dc922`, direct local merge into `main`):
-- 1 upstream commit (`07b2f71`, "Synced from monorepo"); 765 files, ~55.2k insertions, ~14.8k deletions (fork-tip vs upstream-tip delta — the largest since sync #6)
-- **22 conflicts + 2 modify/delete**, resolved by combining:
-  - Billing surface: `dispatch/billing.rs` + `dispatch/tests/billing.rs` kept **deleted** (upstream modify/delete); dropped every upstream reintroduction — `Effect::FetchBilling` pushes (dispatch/prompt ×2, session/lifecycle ×2, session/load, event_loop `billing_poll` variable + select arm), `append_consumer_billing_surface` / `dispatch_manage_billing` (dispatch/status), `credit_limit_stashed_prompt` field + init (agent_view), `prompt_response_formatted_402_takes_credit_limit_path` test, `/usage` billing tests + `billing_surface_visible` struct fields (slash/commands tests, `workflow_tests.rs`), SuperGrok upgrade messages replaced with fork's "isn't available on your current plan" (voice.rs, dashboard.rs)
-  - `acp_handler/interactions.rs`: adopted upstream's `FeedbackTrace` displaced-card commit + dedicated `DoctorFix` arm; fallback arm keeps fork's variant set (no `CreditLimitUpsell`/`FreeUsageUpsell`)
-  - `subagent.rs`: followed upstream's test-split — `make_min_child_view` moved to `subagent_tests.rs` (stripped `credit_limit_blocked`/`free_usage_blocked` from the extracted literal); adopted upstream's relocated `scrollback_is_prompt_only` + new `scrollback_is_prompt_and_footer_only`
-  - `slash/commands/mod.rs`: kept fork's `/clear` registration (upstream dropped it from `builtin_commands`); adopted upstream's per-turn `effort`/`model`/`context` registrations (dropping them broke `slash_model_*` dispatch tests — fixed during verification); kept bare `/usage` tests (no `ManageBilling`)
-  - `sampler_turn.rs`: kept fork `prepare_compaction_sampling` (`[compactions] model` routing; callers in `compaction.rs` still use it)
-  - shell `subagent/tests/mod.rs`: kept fork `stop_child_session_after_cancel` import + regression test; dropped `DummyLspDispatch` (upstream removed the type and its tests)
-  - `xai-grok-version/src/lib.rs`: combined fork `CLI_BINARY_NAME = "thanh"` + upstream's new `IS_DEV_BUILD` const
-  - Docs: took upstream wording, re-applied `thanh`/`~/.thanh` — 04-slash-commands new `/workflow runs` dashboard para, 05-configuration MCP `User-Agent` para, 09-where-next upstream `F3` binding (fork had stale `Ctrl+S`) with fork `thanh -c`, workflow tool description, docs extraction path → `~/.thanh/docs/user-guide/`
-  - `dispatch/tests/prompt.rs`: kept fork `clear_display_wipes_scrollback_preserves_session` alongside upstream's new `prompt_stash_dispatch_tests` module
-- Merge fallout fixed in a follow-up commit (`f377a6b`): defined `nfs/confined.rs` `tests::plant_journal` — upstream's NFS remove test calls it but upstream never defined it (its own `cargo check --workspace --all-targets` fails identically at `07b2f71`); planted row mirrors `liveness.rs::write_create_state` (daemon DB `wt_create_state`)
-- Fork markers: 113/113 preserved (content identical; line numbers shifted)
-- Fast pre-gate `cargo check -p xai-grok-shell -p xai-grok-pager -p xai-grok-sampling-types` clean (0 errors); test targets compile; pager dispatch 1437/1437, pager subagent 196/196, shell subagent 358/358 green; **full `./build.sh` waived by user** ("no need to build") — substitute gate `cargo check --workspace --all-targets` exit 0 with zero errors
-- Delivered via direct merge into local `main` (fast-forward, not pushed; push + release when requested); version crates at upstream's `1.0.8`; fork had 42 commits ahead of upstream at merge time
-
-Sync #9 (merge `3f7fba08`, follow-up `b19e9a1d`, direct local merge into `main`):
-- 2 upstream commits (`c2ad97f8`..`77cd7eb6`, "Synced from monorepo"); 335 files, ~19.3k insertions, ~4.1k deletions
-- Pre-merge: stashed local WIP (goal compaction reseed + `draw_prompt_dropdowns`); re-added missing `upstream` remote
-- **5 conflicts**, resolved by combining:
-  - `agent_view/mod.rs` + `session.rs`: kept fork `prompt_stash_evicted`; dropped upstream `credit_limit_stashed_prompt` (no consumer billing)
-  - `dispatch/tests/prompt.rs`: kept fork `clear_display_wipes_scrollback_preserves_session` + upstream `prompt_history_recording_tests`; adapted stash test for fork Up-browse ranking of stashed drafts
-  - `plan_mode.rs`: kept fork subagent reminder tests + static sparse reminder asserts; restored `test_renderer_with_task` helper in follow-up commit
-  - `workflow/mod.rs`: adopted upstream `WorkflowSource` tagged input (dropped flat legacy fields from schema); re-applied `~/.thanh/workflows/` + `/workflow runs` in description
-- Auto-merge fallout: re-wired fork `prompt_stash_evicted` into `prompt.rs` / `prompt_stash.rs` on top of upstream's `record_prompt_in_history` / `seed_prompt_history_from_scrollback` redesign
-- Docs: re-applied `~/.thanh` on 09/21/25/26 user-guide pages upstream still had as `~/.grok`
-- Fork markers: 113/113 preserved (content identical)
-- `cargo check -p xai-grok-shell -p xai-grok-pager -p xai-grok-sampling-types -p xai-grok-workspace` clean; plan-mode conflict tests 4/4 green; full `./build.sh` not run yet
-- Delivered via direct merge into local `main` (not pushed; push + release when requested); version crates at upstream's `1.0.10`; fork had 51 commits ahead of upstream at merge time
+- Do **not** add fork-only features unrelated to BYOK support, small TUI
+  ergonomics, or trimming — propose them upstream instead
+- Do **not** pre-filter upstream features during a merge — bring everything
+  in first, then adapt/trim
