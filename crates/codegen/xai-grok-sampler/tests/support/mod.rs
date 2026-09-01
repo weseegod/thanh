@@ -1,6 +1,5 @@
-//! Sampler-specific helpers for the shared-HTTP-client integration binaries:
-//! config + request drivers for real `SamplingClient`s. The generic
-//! connection-counting server lives in `xai_grok_test_support`.
+//! Sampler-specific helpers for the shared-HTTP-client integration binaries: config and request drivers for real `SamplingClient`s.
+//! The generic connection-counting server lives in `xai_grok_test_support`.
 
 use std::sync::Arc;
 
@@ -16,8 +15,7 @@ pub fn test_config(base_url: &str, api_key: &str) -> SamplerConfig {
     }
 }
 
-/// Drive one POST through the client; the canned `{}` body is not a valid
-/// completion, but only the wire-level request matters here.
+/// Drive one POST through the client; the canned `{}` body is not a valid completion, but only the wire-level request matters here.
 pub async fn send_one(client: &SamplingClient) {
     let request = ConversationRequest {
         items: vec![ConversationItem::User(UserItem {

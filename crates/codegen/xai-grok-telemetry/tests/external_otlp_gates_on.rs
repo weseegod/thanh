@@ -1,30 +1,25 @@
-//! Wire test for the external OTEL stream with **both content gates ON** — the
-//! higher-risk privacy path, where prompt text and tool parameters actually
-//! leave the process. Asserts against an in-process OTLP collector that:
+//! Wire test for the external OTEL stream with **both content gates ON**, the higher-risk privacy path.
+//! Here prompt text and tool parameters actually leave the process.
+//! Asserts against an in-process OTLP collector that:
 //!
-//! - gated content (`prompt`, `tool_parameters`, `file_path`, verbatim
-//!   `tool_name`/`mcp_server.name`) IS present when the gate is on,
-//! - planted secret shapes are STILL scrubbed inside that gated content
-//!   (gates loosen *which fields* export, never the secret scrub),
+//! - gated content (`prompt`, `tool_parameters`, `file_path`, verbatim `tool_name`/`mcp_server.name`) IS present when the gate is on,
+//! - planted secret shapes are STILL scrubbed inside that gated content (gates loosen *which fields* export, never the secret scrub),
 //! - identity attributes ride every record and metric once set,
-//! - `OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE=cumulative` and
-//!   `OTEL_METRICS_INCLUDE_VERSION=1` take effect on the wire,
+//! - `OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE=cumulative` and `OTEL_METRICS_INCLUDE_VERSION=1` take effect on the wire,
 //! - the remote fleet kill switch stops emission in-process.
 //!
-//! Single sequential `#[test]` because the `EXTERNAL` registry is a
-//! process-global `OnceLock`, so each init-config scenario is its own test
-//! binary.
+//! Everything runs in one sequential `#[test]`: the `EXTERNAL` registry is a process-global `OnceLock`.
+//! Each init-config scenario is its own test binary.
 
 mod otlp_collector;
 
 use otlp_collector as col;
 use xai_grok_telemetry::external::{self, ExternalOtelRemotePolicy, IdentityAttrs};
 
-// Secret shapes — MUST be scrubbed everywhere, even inside gated content.
+// Secret shapes that MUST be scrubbed everywhere, even inside gated content
 const SECRET_KEY: &str = "sk-LEAKaaaaaaaaaaaaaaaa1234567890";
 const SECRET_MODEL: &str = "grok-4-sk-LEAKmodel1234567890abcd";
-// Benign markers — with the gate ON these MUST appear on the wire (proving the
-// gated field is actually exported, not just that the scrub ran).
+// Benign markers: with the gate ON these MUST appear on the wire (proving the gated field is actually exported, not just that the scrub ran)
 const PROMPT_MARK: &str = "promptbodymarker";
 const PARAM_MARK: &str = "parammarker";
 const CLIENT_VERSION: &str = "9.9.9-cv";
@@ -60,7 +55,7 @@ fn external_stream_gates_on_end_to_end() {
     external::init(Some(cfg));
     assert!(external::is_active(), "gates-on config must activate");
 
-    // Identity attrs (plain ids — never tokens) ride every record + metric.
+    // Identity attrs (plain ids, never tokens) ride every record and metric
     external::set_identity(IdentityAttrs {
         user_id: Some("user-x".into()),
         organization_id: Some("org-acme".into()),
@@ -68,8 +63,7 @@ fn external_stream_gates_on_end_to_end() {
         deployment_id: Some("deploy-eu".into()),
     });
 
-    // Product events disabled — pins the "external active while product telemetry off"
-    // half of the independence matrix through the real funnel.
+    // Product events stay disabled; the external sink must still emit through the real funnel
     assert!(!xai_grok_telemetry::is_enabled());
 
     xai_grok_telemetry::log_event(xai_grok_telemetry::events::SessionHarness {
@@ -104,10 +98,13 @@ fn external_stream_gates_on_end_to_end() {
         completion_tokens: Some(7),
         reasoning_tokens: Some(3),
         cached_prompt_tokens: Some(9),
+        cache_creation_tokens: None,
+        cost_usd_ticks: None,
     });
     xai_grok_telemetry::log_event(xai_grok_telemetry::events::ToolCallCompleted {
         tool_name: "github__create_issue".into(),
         outcome: xai_grok_session_events::types::ToolOutcome::Success,
+        hook_rewrote: false,
         duration_ms: 12,
         tool_result_size_bytes: None,
         file_path: Some("/tmp/projectdir/config.toml".into()),
@@ -245,8 +242,8 @@ fn external_stream_gates_on_end_to_end() {
         );
     }
     let sessions = col::find_metric(&collected, "grok_code.session.count");
-    // SessionHarness has no session.count metric; that comes from SessionNew —
-    // not emitted here, so just confirm token.usage identity coverage above.
+    // SessionHarness has no session.count metric; that comes from SessionNew, which this test never emits
+    // The token.usage checks above already cover metric identity
     let _ = sessions;
 
     // ── Canary scan at the raw HTTP layer (both signals) ────────────────

@@ -50,8 +50,7 @@ pub static WORKFLOW_RUNS_ACTIVE: ActivityGauge = ActivityGauge::new();
 pub static SESSIONS_ACTIVE: ActivityGauge = ActivityGauge::new();
 
 /// Every gauge in one read; the serde field names are the wire keys.
-/// Every boundary event enters its gauge before it logs, so its own stamp
-/// is self-inclusive.
+/// Every boundary event enters its gauge before it logs, so its own snapshot counts it.
 #[derive(Clone, Copy, serde::Serialize)]
 pub(crate) struct ActivitySnapshot {
     pub(crate) sessions_active: u32,

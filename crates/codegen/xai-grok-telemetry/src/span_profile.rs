@@ -1,5 +1,4 @@
-//! Tracing layer that folds the span tree by wall time when
-//! `GROK_SPAN_PROFILE_OUT` names an output; inert otherwise.
+//! Tracing layer that folds the span tree by wall time when `GROK_SPAN_PROFILE_OUT` names an output; inert otherwise.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -13,8 +12,8 @@ use tracing_subscriber::registry::LookupSpan;
 
 use crate::instrumentation::NoOpLayer;
 
-/// A fixed file is last-writer-wins across processes sharing the variable;
-/// use a directory for multi-process runs (each writes `<label>-<pid>-.folded`).
+/// A fixed file is last-writer-wins across processes sharing the variable.
+/// Use a directory for multi-process runs (each writes `<label>-<pid>-.folded`).
 pub const OUT_ENV: &str = "GROK_SPAN_PROFILE_OUT";
 
 const MAX_PATHS: usize = 8192;
@@ -86,7 +85,7 @@ impl SpanProfile {
 struct SpanTiming {
     opened: Instant,
     child_wall_us: u64,
-    /// A `name` field's value, folding one callsite into per-region frames.
+    /// The span's `name` field value; the folded path uses it instead of the span name, so one callsite can produce a frame per region.
     detail: Option<String>,
 }
 
@@ -164,9 +163,8 @@ where
     }
 }
 
-/// The span-profile layer for this process when [`OUT_ENV`] names an output;
-/// a no-op layer otherwise. `label` stems the artifact file name when the
-/// output is a directory.
+/// The span-profile layer for this process when [`OUT_ENV`] names an output; a no-op layer otherwise.
+/// `label` prefixes the artifact file name when the output is a directory.
 pub fn layer<S>(label: &'static str) -> Box<dyn Layer<S> + Send + Sync>
 where
     S: Subscriber + for<'span> LookupSpan<'span> + Send + Sync + 'static,
@@ -192,9 +190,8 @@ where
     Box::new(SpanProfileLayer { profile })
 }
 
-/// Write the folded span wall times, returning the artifact path; `None` when
-/// this process never armed the layer or nothing closed. Safe to call from
-/// any exit path; later calls after a successful write return `None`.
+/// Write the folded span wall times, returning the artifact path; `None` when this process never enabled the layer or nothing closed.
+/// Safe to call from any exit path; later calls after a successful write return `None`.
 pub fn finalize() -> Option<PathBuf> {
     PROFILE.get()?.write()
 }

@@ -1,17 +1,13 @@
-//! Parent↔subagent seam: every parent-side lifecycle call site, in order.
+//! Parent/subagent boundary: every parent-side lifecycle call site, in order.
 //!
-//! 1. `MvpAgent::start_subagent_coordinator` (parent thread, in `mvp_agent`):
-//!    hands the event receiver + concurrency limit to `spawn_subagent_coordinator`
-//!    here, which drives the coordinator (living in `xai-grok-tools`).
-//! 2. `ShellChildRunner::run` (parent thread): gathers what a child needs from
-//!    the parent via `MvpAgent::try_build_subagent_spawn_context` (the
-//!    parent→child snapshot, built by the owner in `mvp_agent`), then runs the
-//!    spawn work on the worker pool (`worker_runtime()`, built on first use).
-//! 3. `run_shell_child` (worker pool, in `handle_request.rs`): prepares the
-//!    child (toolset, optional worktree, context) and starts it on its own
-//!    thread via `spawn_session_on_thread`.
-//! 4. `on_completed` → `present_child_completion` (worker pool): reports the
-//!    child finished, persists the result, and optionally wakes the parent.
+//! 1. `MvpAgent::start_subagent_coordinator` (parent thread, in `mvp_agent`) hands the event receiver and concurrency limit here.
+//!    `spawn_subagent_coordinator` drives the coordinator (living in `xai-grok-tools`).
+//! 2. `ShellChildRunner::run` (parent thread) gathers what a child needs from the parent via `MvpAgent::try_build_subagent_spawn_context`.
+//!    That is the parent-to-child snapshot, built by the owner in `mvp_agent`.
+//!    It then runs the spawn work on the worker pool (`worker_runtime()`, built on first use).
+//! 3. `run_shell_child` (worker pool, in `handle_request.rs`) prepares the child (toolset, optional worktree, context).
+//!    It starts the child on its own thread via `spawn_session_on_thread`.
+//! 4. `on_completed` then `present_child_completion` (worker pool): reports the child finished, persists the result, and may wake the parent.
 //!
 //! Stage timings are recorded in `subagent_spawn::SubagentSpawnPhase`.
 use super::ShellCompletionData;
@@ -27,12 +23,10 @@ pub(crate) use xai_grok_tools::implementations::grok_build::task::coordinator::{
 use xai_grok_tools::implementations::grok_build::task::types::{SubagentRequest, SubagentResult};
 /// Floor keeps the pool responsive when `available_parallelism` is tiny.
 const MIN_WORKER_THREADS: usize = 2;
-/// Four suffice for 32 children (each runs on its own OS thread);
-/// `GROK_SUBAGENT_WORKER_THREADS` overrides.
+/// Four suffice for 32 children (each runs on its own OS thread); `GROK_SUBAGENT_WORKER_THREADS` overrides.
 const MAX_WORKER_THREADS: usize = 4;
-/// Pool for the per-child pipeline: a dedicated multi-thread runtime so
-/// concurrent subagents run in parallel, off the user-facing session's
-/// `LocalSet`.
+/// Pool for the per-child pipeline: a dedicated multi-thread runtime so concurrent subagents run in parallel.
+/// It sits off the user-facing session's `LocalSet`.
 pub(crate) fn worker_runtime() -> Result<&'static tokio::runtime::Handle, std::io::Error> {
     static WORKER: std::sync::OnceLock<tokio::runtime::Runtime> = std::sync::OnceLock::new();
     static INIT: std::sync::Mutex<()> = std::sync::Mutex::new(());
@@ -76,8 +70,7 @@ pub(crate) fn subagent_coordinator_channel() -> (
 ) {
     coordinator::SubagentCoordinator::<ShellChildRunner>::channel()
 }
-/// Resumes worker panics into the coordinator's `catch_unwind`
-/// (`finish_panicked_child`); the handle aborts on drop.
+/// Resumes worker panics into the coordinator's `catch_unwind` (`finish_panicked_child`); the handle aborts on drop.
 pub(crate) async fn join_worker_task<T>(task: tokio::task::JoinHandle<T>) -> T {
     let mut task = tokio_util::task::AbortOnDropHandle::new(task);
     match (&mut task).await {
@@ -284,11 +277,10 @@ fn log_limit_notice(notice: coordinator::SubagentLimitNotice) {
         },
     ));
 }
-/// Wire the shared subagent coordinator actor onto the current `LocalSet`:
-/// build the `ShellChildRunner`, attach the limit sink, and `spawn_local` the
-/// `SubagentCoordinator` draining `rx`. Coordinator/runner construction lives
-/// here in the seam; `MvpAgent::start_subagent_coordinator` owns the parent
-/// state (the event receiver + concurrency limits) it feeds in.
+/// Wire the shared subagent coordinator actor onto the current `LocalSet`.
+/// Builds the `ShellChildRunner`, attaches the limit sink, and `spawn_local`s the `SubagentCoordinator` draining `rx`.
+/// Coordinator/runner construction lives here in the boundary module.
+/// `MvpAgent::start_subagent_coordinator` owns the parent state (the event receiver and concurrency limits) it feeds in.
 pub(crate) fn spawn_subagent_coordinator(
     agent_ref: LocalRef<MvpAgent>,
     rx: coordinator::SubagentCoordinatorReceiver,
@@ -314,8 +306,7 @@ pub(crate) fn spawn_subagent_coordinator(
         coordinator::SubagentCoordinator::from_channel(rx, runner, config).run(),
     );
 }
-/// Whether this completion will inject an auto-wake prompt; decided (and
-/// the reservation taken) on the coordinator thread in `on_completed`.
+/// Whether this completion will inject an auto-wake prompt; decided (and the reservation taken) on the coordinator thread in `on_completed`.
 pub(crate) fn will_wake_for(completion: &ChildCompletion<ShellCompletionData>) -> bool {
     should_auto_wake_subagent(AutoWakeInputs::from_completion(completion))
         && completion.disposition.should_surface
@@ -358,6 +349,7 @@ pub(crate) fn present_child_completion(
             task_completion_reservations: &completion_data.task_completion_reservations,
             parent_cmd_tx: completion_data.parent_cmd_tx.as_ref(),
             task_output_tool_name: &completion_data.task_output_tool_name,
+            scheduler_delete_tool_name: completion_data.scheduler_delete_tool_name.as_deref(),
             synthetic_trace_tx: &completion_data.synthetic_trace_tx,
             goal_loop_active: &completion_data.goal_loop_active,
         });
@@ -394,11 +386,10 @@ impl AutoWakeInputs {
         }
     }
 }
-/// Auto-wake gate. `parent_channel_open` folds the inject's no-channel bail
-/// into the decision, so a stamped `will_wake` never promises a wake the
-/// inject won't do. `cancelled` never wakes: the Ctrl+C race can background
-/// a foreground child moments before its cancel lands, and waking would
-/// prompt the model right after the user stopped everything.
+/// Auto-wake gate.
+/// `parent_channel_open` folds the inject's no-channel bail into the decision, so a stamped `will_wake` never promises a wake the inject won't do.
+/// `cancelled` never wakes: the Ctrl+C race can background a foreground child moments before its cancel lands.
+/// Waking would prompt the model right after the user stopped everything.
 pub(crate) fn should_auto_wake_subagent(inputs: AutoWakeInputs) -> bool {
     inputs.run_in_background
         && !inputs.cancelled
@@ -408,8 +399,7 @@ pub(crate) fn should_auto_wake_subagent(inputs: AutoWakeInputs) -> bool {
         && !inputs.goal_loop_active
         && inputs.parent_channel_open
 }
-/// Inputs to [`inject_subagent_completed_prompt`], grouped so the call site
-/// names each field (mirrors [`AutoWakeInputs`]).
+/// Inputs to [`inject_subagent_completed_prompt`], grouped so the call site names each field (mirrors [`AutoWakeInputs`]).
 pub(crate) struct InjectParams<'a> {
     pub subagent_id: &'a str,
     pub result: &'a SubagentResult,
@@ -418,6 +408,7 @@ pub(crate) struct InjectParams<'a> {
         &'a Option<xai_grok_tools::reminders::task_completion::TaskCompletionReservations>,
     pub parent_cmd_tx: Option<&'a mpsc::UnboundedSender<SessionCommand>>,
     pub task_output_tool_name: &'a str,
+    pub scheduler_delete_tool_name: Option<&'a str>,
     pub synthetic_trace_tx:
         &'a Option<mpsc::UnboundedSender<crate::upload::turn::SyntheticTurnTraceRequest>>,
     pub goal_loop_active: &'a std::sync::atomic::AtomicBool,
@@ -431,6 +422,7 @@ pub(crate) fn inject_subagent_completed_prompt(params: InjectParams) {
         task_completion_reservations,
         parent_cmd_tx,
         task_output_tool_name,
+        scheduler_delete_tool_name,
         synthetic_trace_tx,
         goal_loop_active,
     } = params;
@@ -451,6 +443,7 @@ pub(crate) fn inject_subagent_completed_prompt(params: InjectParams) {
     let message = xai_grok_tools::reminders::task_completion::format_subagent_completion(
         &summary,
         Some(task_output_tool_name),
+        scheduler_delete_tool_name,
     );
     let wrapped = xai_grok_tools::reminders::wrap_reminder(&message);
     let prompt_id = format!("subagent-completed-{subagent_id}");

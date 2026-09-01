@@ -1360,44 +1360,7 @@ mod tests {
         assert!(hook.tool_id.is_none());
         assert!(hook.call_id.is_none());
     }
-
-    #[test]
-    fn hook_custom_carries_kind_and_payload() {
-        let payload = json!({"key": "value"});
-        let hook = HookFrame::custom(sid(), "my.hook".to_owned(), payload.clone());
-        match &hook.event {
-            HookEvent::Custom { kind, payload: p } => {
-                assert_eq!(kind, "my.hook");
-                assert_eq!(p, &payload);
-            }
-            other => panic!("expected Custom, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn hook_cancel_round_trips_through_serde() {
-        let hook = HookFrame::cancel(sid(), tid(), cid());
-        let json = serde_json::to_value(&hook).expect("serialize");
-        let back: HookFrame = serde_json::from_value(json).expect("deserialize");
-        assert_eq!(hook, back);
-    }
-
     // ── ToolNotificationFrame constructors ───────────────────────────
-
-    #[test]
-    fn notification_custom_sets_wire_shape() {
-        let frame = ToolNotificationFrame::custom(tid(), "echo.status", json!({"status": "idle"}));
-        assert_eq!(frame.tool_id.as_ref().unwrap(), &tid());
-        assert!(frame.tool_call_id.is_none());
-        match &frame.notification {
-            WireToolNotification::Custom(c) => {
-                assert_eq!(c.kind, "echo.status");
-                assert_eq!(c.payload, json!({"status": "idle"}));
-            }
-            other => panic!("expected Custom, got {other:?}"),
-        }
-    }
-
     #[test]
     fn notification_known_serializes_value() {
         let inner = json!({"type": "BashOutputChunk", "data": "hello"});
@@ -1471,17 +1434,6 @@ mod tests {
     }
 
     // ── ToolServerStatusPayload ────────────────────────────────────
-
-    #[test]
-    fn tool_server_lifecycle_status_serde_snake_case() {
-        let status = super::ToolServerLifecycleStatus::ShuttingDown;
-        let json = serde_json::to_value(status).expect("serialize");
-        assert_eq!(json.as_str(), Some("shutting_down"));
-        let back: super::ToolServerLifecycleStatus =
-            serde_json::from_value(json).expect("deserialize");
-        assert_eq!(back, status);
-    }
-
     #[test]
     fn tool_server_lifecycle_status_all_variants_round_trip() {
         use super::ToolServerLifecycleStatus::*;

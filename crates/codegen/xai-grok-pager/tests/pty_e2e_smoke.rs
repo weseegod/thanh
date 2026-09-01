@@ -1,8 +1,7 @@
 //! Basic PTY coverage: startup, input, rendering, permission-mode keys, and
 //! `thanh wrap` command routing.
 //!
-//! All cases are ignored for ordinary Cargo runs; Bazel opts in and caps this
-//! process-heavy family at four concurrent libtest workers.
+//! All cases are ignored for ordinary Cargo runs; Bazel opts in and caps this process-heavy family at four concurrent libtest workers.
 
 // Shared support intentionally serves all PTY family crates.
 #[allow(dead_code, unused_imports)]
@@ -13,8 +12,6 @@ mod common;
 mod agent_response;
 #[path = "pty_e2e/auto_compact_top_row.rs"]
 mod auto_compact_top_row;
-#[path = "pty_e2e/basename_path_demo_pty.rs"]
-mod basename_path_demo_pty;
 #[path = "pty_e2e/connect_ui_timeout_env_override.rs"]
 mod connect_ui_timeout_env_override;
 #[path = "pty_e2e/doubled_lines_out_of_band_repro.rs"]

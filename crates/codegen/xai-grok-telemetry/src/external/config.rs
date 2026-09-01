@@ -1,13 +1,9 @@
-//! Configuration resolution for the external OTEL stream.
+//! Pure resolution of the external OTEL stream config: no I/O besides reading env vars.
+//! The shell resolves the startup value once and passes the resolved struct to [`crate::external::init`].
+//! The `[telemetry]` `otel_*` config keys are layered under the env vars.
 //!
-//! Pure resolution — no I/O besides reading env vars. The shell resolves the
-//! startup value once (layering the `[telemetry]` `otel_*` config keys under
-//! the env vars) and passes the resolved struct to [`crate::external::init`].
-//!
-//! Activation requires a **double opt-in** (user-confirmed, RQ7):
-//! `GROK_EXTERNAL_OTEL=1` *and* at least one of `OTEL_METRICS_EXPORTER` /
-//! `OTEL_LOGS_EXPORTER` set to a real exporter. The master switch alone
-//! enables nothing; the exporter vars alone enable nothing.
+//! Activation requires a **double opt-in**: `GROK_EXTERNAL_OTEL=1` plus a real exporter in `OTEL_METRICS_EXPORTER` or `OTEL_LOGS_EXPORTER`.
+//! The master switch alone enables nothing; the exporter vars alone enable nothing.
 
 use std::time::Duration;
 
@@ -39,23 +35,21 @@ impl OtlpTransport {
     }
 }
 
-/// Master switch env var. Deliberately *not* `GROK_ENABLE_TELEMETRY`: that
-/// would be a word-order typo away from the long-standing
-/// `GROK_TELEMETRY_ENABLED` (product events/Mixpanel mode), and the two control
-/// opposite-pointing data flows (to xAI vs. to the customer's collector).
+/// Master switch env var.
+/// Deliberately *not* `GROK_ENABLE_TELEMETRY`: that is a word-order typo away from `GROK_TELEMETRY_ENABLED` (product events/Mixpanel mode).
+/// The two vars control data flowing in opposite directions (to xAI vs. to the customer's collector).
 pub const ENV_MASTER_SWITCH: &str = "GROK_EXTERNAL_OTEL";
 
-/// Exporter selection for one signal (`OTEL_METRICS_EXPORTER` /
-/// `OTEL_LOGS_EXPORTER`).
+/// Exporter selection for one signal (`OTEL_METRICS_EXPORTER` / `OTEL_LOGS_EXPORTER`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ExporterSelection {
-    /// No exporter — the signal is not produced.
+    /// No exporter: the signal is not produced.
     #[default]
     None,
     /// OTLP to the configured endpoint using [`OtlpTransport`].
     Otlp,
-    /// Redacted records printed to **stderr** (debugging). Stdout protocol
-    /// channels (headless/stream-JSON) are never touched.
+    /// Redacted records printed to **stderr** (debugging).
+    /// Stdout protocol channels (headless/stream-JSON) are never touched.
     Console,
 }
 
@@ -75,20 +69,17 @@ impl ExporterSelection {
     }
 }
 
-/// Content gates (additive opt-ins; default off). May only **tighten**
-/// post-init — a remote policy can force them off, never on.
+/// Content gates (additive opt-ins; default off).
+/// They may only **tighten** post-init: a remote policy can force them off, never on.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct ContentGates {
-    /// `OTEL_LOG_USER_PROMPTS=1`: prompt text on `grok_code.user_prompt`
-    /// (60 KB cap, secret-scrubbed).
+    /// `OTEL_LOG_USER_PROMPTS=1`: prompt text on `grok_code.user_prompt` (60 KB cap, secret-scrubbed).
     pub log_user_prompts: bool,
-    /// `OTEL_LOG_TOOL_DETAILS=1`: gated tool params / full paths / verbatim
-    /// MCP, skill, and plugin names.
+    /// `OTEL_LOG_TOOL_DETAILS=1`: gated tool params / full paths / verbatim MCP, skill, and plugin names.
     pub log_tool_details: bool,
 }
 
-/// Delta vs. cumulative metric temporality
-/// (`OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE`). Default **Delta**.
+/// Delta vs. cumulative metric temporality (`OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum TemporalityPreference {
     #[default]
@@ -96,32 +87,28 @@ pub enum TemporalityPreference {
     Cumulative,
 }
 
-/// Identity of the binary emitting external telemetry; becomes resource
-/// attributes. Filled by the caller (pager/shell) at init.
+/// Identity of the binary emitting external telemetry; becomes resource attributes.
+/// The caller (pager/shell) fills it in at init.
 #[derive(Debug, Clone, Default)]
 pub struct ExternalClientInfo {
-    /// Engine build (version + commit) → `service.version`.
+    /// Engine build (version and commit), exported as `service.version`.
     pub service_version: String,
-    /// Front-end client version → `client.version`.
+    /// Front-end client version, exported as `client.version`.
     pub client_version: String,
-    /// How the session was launched (`cli`/`headless`/`agent`) →
-    /// `app.entrypoint`.
+    /// How the session was launched (`cli`/`headless`/`agent`), exported as `app.entrypoint`.
     pub app_entrypoint: String,
 }
 
-/// Config-file layer for the external stream, built by the shell from the
-/// `otel_*` keys of the `[telemetry]` table and layered *under* env vars
-/// during resolution. (Field names here are the internal carrier; the
-/// user-facing keys are `otel_enabled`, `otel_metrics_exporter`, … — see
-/// [`crate::config::TelemetryConfig`].)
+/// Config-file layer for the external stream, built by the shell from the `otel_*` keys of the `[telemetry]` table.
+/// Resolution layers it *under* the env vars.
+/// The field names here are internal; users write `otel_enabled`, `otel_metrics_exporter`, and so on (see [`crate::config::TelemetryConfig`]).
 ///
-/// There is deliberately **no `headers` key** (user decision, RQ4): collector
-/// auth is supplied via the `OTEL_EXPORTER_OTLP_HEADERS` env var only, so
-/// collector tokens are never stored on disk.
+/// There is deliberately **no `headers` key**: collector auth comes from the `OTEL_EXPORTER_OTLP_HEADERS` env var only.
+/// That keeps collector tokens off disk.
 #[derive(Debug, Clone, Default, serde::Deserialize, serde::Serialize)]
 #[serde(default)]
 pub struct ExternalOtelFileConfig {
-    /// `= GROK_EXTERNAL_OTEL` (env wins).
+    /// Mirrors `GROK_EXTERNAL_OTEL` (env wins).
     pub enabled: Option<bool>,
     /// `otlp` | `console` | `none`.
     pub metrics_exporter: Option<String>,
@@ -140,10 +127,8 @@ pub struct ExternalOtelFileConfig {
     pub log_tool_details: Option<bool>,
 }
 
-/// Fully resolved configuration for the external stream. Returned by
-/// [`ExternalOtelConfig::resolve`] only when the double opt-in is satisfied;
-/// `None` means the module is never constructed (zero allocation, zero
-/// threads, zero sockets).
+/// Returned by [`ExternalOtelConfig::resolve`] only when the double opt-in is satisfied.
+/// `None` means the module is never constructed (zero allocation, zero threads, zero sockets).
 #[derive(Debug, Clone)]
 pub struct ExternalOtelConfig {
     pub metrics_exporter: ExporterSelection,
@@ -154,20 +139,16 @@ pub struct ExternalOtelConfig {
     pub logs_endpoint: String,
     /// Resolved metrics endpoint (full `…/v1/metrics` for HTTP; collector origin for gRPC).
     pub metrics_endpoint: String,
-    /// Customer collector headers for log exports, parsed from
-    /// `OTEL_EXPORTER_OTLP_HEADERS` plus `OTEL_EXPORTER_OTLP_LOGS_HEADERS`.
-    /// The **only** headers the external log exporter ever sends.
+    /// Customer collector headers for log exports, parsed from `OTEL_EXPORTER_OTLP_HEADERS` plus `OTEL_EXPORTER_OTLP_LOGS_HEADERS`.
+    /// These are the **only** headers the external log exporter ever sends.
     pub logs_headers: Vec<(String, String)>,
-    /// Customer collector headers for metric exports, parsed from
-    /// `OTEL_EXPORTER_OTLP_HEADERS` plus `OTEL_EXPORTER_OTLP_METRICS_HEADERS`.
-    /// The **only** headers the external metric exporter ever sends.
+    /// Customer collector headers for metric exports, parsed from `OTEL_EXPORTER_OTLP_HEADERS` plus `OTEL_EXPORTER_OTLP_METRICS_HEADERS`.
+    /// These are the **only** headers the external metric exporter ever sends.
     pub metrics_headers: Vec<(String, String)>,
-    /// PEM file with additional trusted CA certificate(s) for verifying the
-    /// logs collector (`OTEL_EXPORTER_OTLP_CERTIFICATE`, overridden by
-    /// `OTEL_EXPORTER_OTLP_LOGS_CERTIFICATE`). Additive to the default roots.
+    /// PEM file with additional trusted CA certificate(s) for verifying the logs collector, additive to the default roots.
+    /// `OTEL_EXPORTER_OTLP_LOGS_CERTIFICATE` overrides `OTEL_EXPORTER_OTLP_CERTIFICATE`.
     pub logs_ca_certificate: Option<String>,
-    /// Same for the metrics collector (`OTEL_EXPORTER_OTLP_CERTIFICATE`,
-    /// overridden by `OTEL_EXPORTER_OTLP_METRICS_CERTIFICATE`).
+    /// Same for the metrics collector; `OTEL_EXPORTER_OTLP_METRICS_CERTIFICATE` overrides `OTEL_EXPORTER_OTLP_CERTIFICATE`.
     pub metrics_ca_certificate: Option<String>,
     pub logs_client_certificate: Option<String>,
     pub logs_client_key: Option<String>,
@@ -177,28 +158,21 @@ pub struct ExternalOtelConfig {
     pub timeout: Duration,
     /// `OTEL_METRIC_EXPORT_INTERVAL` (ms). Default 60 s.
     pub metric_export_interval: Duration,
-    /// `OTEL_BLRP_SCHEDULE_DELAY` (spec name, wins) /
-    /// `OTEL_LOGS_EXPORT_INTERVAL` (compatibility alias). Default 5 s.
+    /// `OTEL_BLRP_SCHEDULE_DELAY` (spec name, wins) / `OTEL_LOGS_EXPORT_INTERVAL` (compatibility alias). Default 5 s.
     pub logs_export_interval: Duration,
     pub gates: ContentGates,
     pub temporality: TemporalityPreference,
-    /// `OTEL_METRICS_INCLUDE_SESSION_ID` (default on): `session.id` on
-    /// metrics (cardinality opt-out).
+    /// `OTEL_METRICS_INCLUDE_SESSION_ID` (default on): `session.id` on metrics (cardinality opt-out).
     pub include_session_id_on_metrics: bool,
-    /// `OTEL_METRICS_INCLUDE_VERSION` (default off): `app.version` on
-    /// metrics.
+    /// `OTEL_METRICS_INCLUDE_VERSION` (default off): `app.version` on metrics.
     pub include_version_on_metrics: bool,
     /// Resource identity, filled by the caller at init.
     pub client: ExternalClientInfo,
-    /// Set by the shell when the **internal** firehose resolved its
-    /// endpoint/headers from `OTEL_EXPORTER_OTLP_*` (the deprecated
-    /// fallback). [`crate::external::init`] refuses to activate when true —
-    /// the no-double-send invariant is enforced in code, not release
-    /// discipline.
+    /// Set by the shell when the **internal** firehose resolved its endpoint/headers from `OTEL_EXPORTER_OTLP_*` (the deprecated fallback).
+    /// [`crate::external::init`] refuses to activate when true, so the same vars can never feed both the internal and the external exporters.
     pub internal_pipeline_consumed_otel_vars: bool,
-    /// Which layer supplied the master switch (`"env"` | `"config"`), for the
-    /// internal adoption meta-event. `remote` is not a possible startup
-    /// source (init reads env + local config only).
+    /// Which layer supplied the master switch (`"env"` | `"config"`), for the internal adoption meta-event.
+    /// `remote` is not a possible startup source (init reads env and local config only).
     pub enabled_source: &'static str,
 }
 
@@ -216,7 +190,7 @@ fn parse_ms(raw: Option<String>, default: Duration) -> Duration {
         .unwrap_or(default)
 }
 
-/// Parse `k=v,k2=v2` header lists (OTLP env spec); blank keys skipped.
+/// Parse `k=v,k2=v2` header lists (OTLP env spec); blank keys are skipped.
 pub fn parse_header_list(raw: &str) -> Vec<(String, String)> {
     raw.split(',')
         .filter_map(|kv| {
@@ -263,9 +237,8 @@ fn resolve_client_identity(
     }
 }
 
-/// Resolve a cert/key pair where the upper layer (env) is atomic over the lower
-/// layer (file or base): a half-set upper layer never crosses with the lower
-/// layer's complementary path.
+/// Resolve a cert/key pair where the upper layer (env) is atomic over the lower layer (file or base).
+/// A half-set upper layer never crosses with the lower layer's complementary path.
 fn resolve_identity_layer(
     signal: &str,
     upper_certificate: Option<String>,
@@ -281,8 +254,7 @@ fn resolve_identity_layer(
     if upper_any {
         let upper_partial = upper_certificate.is_some() ^ upper_key.is_some();
         let lower_complete = lower_certificate.is_some() && lower_key.is_some();
-        // A single leftover upper-layer variable must not silently discard a
-        // complete managed/base pair: the only symptom is an empty collector.
+        // A single leftover upper-layer variable must not silently discard a complete managed/base pair: the only symptom is an empty collector
         if upper_partial && lower_complete {
             let set_source = if upper_certificate.is_some() {
                 upper_cert_source
@@ -341,21 +313,18 @@ fn resolve_signal_endpoint(
 }
 
 impl ExternalOtelConfig {
-    /// Resolve from process env layered over the optional `[telemetry]`
-    /// `otel_*` config-file layer. Returns `None` unless the double opt-in is
-    /// satisfied (master switch + at least one real exporter) and the
-    /// transport is supported.
+    /// Resolve from process env layered over the optional `[telemetry]` `otel_*` config-file layer.
+    /// Returns `None` unless the double opt-in is satisfied (master switch and at least one real exporter) and the transport is supported.
     pub fn resolve(file: Option<&ExternalOtelFileConfig>) -> Option<Self> {
         Self::resolve_with(|name| std::env::var(name).ok(), file)
     }
 
-    /// Testable resolution core: `getenv` abstracts `std::env::var` so tests
-    /// don't race on process-global env state.
+    /// Testable resolution core: `getenv` abstracts `std::env::var` so tests don't race on process-global env state.
     pub fn resolve_with(
         getenv: impl Fn(&str) -> Option<String>,
         file: Option<&ExternalOtelFileConfig>,
     ) -> Option<Self> {
-        // Master switch: env > config file > default off.
+        // Master switch: env wins over the config file; default off
         let (enabled, enabled_source) =
             match getenv(ENV_MASTER_SWITCH).as_deref().and_then(env_bool) {
                 Some(v) => (v, "env"),
@@ -390,21 +359,19 @@ impl ExternalOtelConfig {
             "OTEL_LOGS_EXPORTER",
             file.and_then(|f| f.logs_exporter.as_deref()),
         );
-        // Double opt-in (RQ7): the master switch alone enables nothing.
+        // Double opt-in: the master switch alone enables nothing
         if !metrics_exporter.is_active() && !logs_exporter.is_active() {
             return None;
         }
 
-        // Unrecognized protocol on an *active* signal disables the stream; on an
-        // *inactive* signal it is ignored so a stray fleet env var for a disabled
-        // signal cannot take down the other.
+        // Unrecognized protocol on an *active* signal disables the stream
+        // On an *inactive* signal it is ignored, so a stray fleet env var for a disabled signal cannot take down the other
         let resolve_protocol = |raw: Option<String>,
                                 label: &str,
                                 signal_active: bool|
          -> Option<Option<OtlpTransport>> {
             match raw {
-                // Blank is treated as unset so signal vars inherit the base protocol
-                // instead of `parse("")` forcing HttpProtobuf.
+                // Blank is treated as unset so signal vars inherit the base protocol instead of `parse("")` forcing HttpProtobuf
                 None => Some(None),
                 Some(s) if s.trim().is_empty() => Some(None),
                 Some(s) => match OtlpTransport::parse(&s) {
@@ -428,9 +395,8 @@ impl ExternalOtelConfig {
                 },
             }
         };
-        // Base is soft: an invalid generic protocol must not block valid
-        // per-signal overrides (OTLP signal-over-generic precedence). Only
-        // active signals that actually inherit a missing/invalid base fail.
+        // Base is soft: an invalid generic protocol must not block valid per-signal overrides (OTLP signal-over-generic precedence)
+        // Only active signals that actually inherit a missing/invalid base fail
         #[derive(Clone, Copy)]
         enum BaseProtocol {
             Explicit(OtlpTransport),
@@ -506,8 +472,8 @@ impl ExternalOtelConfig {
             metrics_transport,
         );
 
-        // Headers: env only (RQ4) — never from the config file. Resolve them
-        // per signal so signal-specific overrides never bleed across streams.
+        // Headers: env only, never from the config file
+        // Resolve them per signal so signal-specific overrides never bleed across streams
         let base_headers = parse_header_list(
             getenv("OTEL_EXPORTER_OTLP_HEADERS")
                 .as_deref()
@@ -616,7 +582,7 @@ impl ExternalOtelConfig {
             .as_deref()
         {
             Some("cumulative") => TemporalityPreference::Cumulative,
-            // `delta`, `lowmemory`, unset, or unrecognized → Delta default.
+            // `delta`, `lowmemory`, unset, or unrecognized all resolve to the Delta default
             _ => TemporalityPreference::Delta,
         };
 
@@ -684,7 +650,6 @@ mod tests {
 
     #[test]
     fn master_switch_alone_enables_nothing() {
-        // RQ7: GROK_EXTERNAL_OTEL=1 without an explicit exporter is inert.
         assert!(
             ExternalOtelConfig::resolve_with(env(&[("GROK_EXTERNAL_OTEL", "1")]), None).is_none()
         );
@@ -784,7 +749,7 @@ mod tests {
             None,
         )
         .unwrap();
-        // Signal-specific endpoint used verbatim; base + spec path otherwise.
+        // The signal-specific endpoint is used verbatim; the other signal gets the base plus the spec path
         assert_eq!(cfg.logs_endpoint, "https://logs.corp.example/custom");
         assert_eq!(
             cfg.metrics_endpoint,

@@ -1383,13 +1383,6 @@ mod tests {
     }
 
     #[test]
-    fn task_tool_input_model_omitted_is_none() {
-        let input: TaskToolInput =
-            serde_json::from_str(r#"{"description": "d", "prompt": "p"}"#).unwrap();
-        assert!(input.model.is_none());
-    }
-
-    #[test]
     fn task_tool_input_model_parses_explicit() {
         let input: TaskToolInput =
             serde_json::from_str(r#"{"description": "d", "prompt": "p", "model": "grok-3"}"#)

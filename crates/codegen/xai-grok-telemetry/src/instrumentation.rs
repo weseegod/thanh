@@ -89,15 +89,9 @@ fn default_output_path(mode: InstrumentationMode) -> PathBuf {
     }
 }
 
-/// A wrapper layer that filters events by target name.
-///
-/// This is used instead of `.with_filter()` because `Filtered<L, F, S>` layers
-/// require `FilterId` registration with the subscriber. When boxed as
-/// `Box<dyn Layer<S>>`, the type information needed for registration is lost,
-/// causing a panic: "a Filtered layer was used, but it had no FilterId".
-///
-/// This wrapper avoids that issue by implementing filtering in the `enabled()`
-/// method directly, without using the per-layer filter mechanism.
+/// A wrapper layer that filters events by target name in `enabled()` directly rather than via `.with_filter()`.
+/// A `Filtered<L, F, S>` layer needs `FilterId` registration with the subscriber; boxing as `Box<dyn Layer<S>>` loses that.
+/// The result is a panic: "a Filtered layer was used, but it had no FilterId".
 pub struct TargetFilterLayer<L, S> {
     inner: L,
     target: &'static str,
@@ -171,8 +165,7 @@ where
     }
 }
 
-/// A no-op layer that does nothing.
-/// Used when instrumentation is disabled to avoid any overhead.
+/// Returned when instrumentation is disabled, so the subscriber stack pays no overhead.
 pub struct NoOpLayer<S>(PhantomData<fn(S)>);
 
 impl<S> Default for NoOpLayer<S> {
@@ -248,16 +241,13 @@ fn build_log_layer<S>(mode: InstrumentationMode) -> Box<dyn Layer<S> + Send + Sy
 where
     S: Subscriber + for<'span> LookupSpan<'span> + Send + Sync + 'static,
 {
-    // When disabled, return a true no-op layer that does nothing.
-    // This avoids any overhead and potential issues with complex layer types.
     if mode == InstrumentationMode::Disabled {
         return Box::new(NoOpLayer::new());
     }
 
     let writer = build_writer(resolve_log_path());
 
-    // Use TargetFilterLayer instead of .with_filter() to avoid the FilterId
-    // registration issue when the layer is boxed as Box<dyn Layer<S>>.
+    // Use TargetFilterLayer instead of .with_filter() to avoid the FilterId registration issue when the layer is boxed as Box<dyn Layer<S>>
     let fmt_layer = tracing_subscriber::fmt::layer()
         .json()
         .with_current_span(false) // `spans` array already carries the full ancestor list
@@ -313,8 +303,7 @@ where
         *slot = Some(guard);
     }
 
-    // Use TargetFilterLayer instead of .with_filter() to avoid the FilterId
-    // registration issue when the layer is boxed as Box<dyn Layer<S>>.
+    // Use TargetFilterLayer instead of .with_filter() to avoid the FilterId registration issue when the layer is boxed as Box<dyn Layer<S>>
     Box::new(TargetFilterLayer::new(layer, TARGET))
 }
 
@@ -333,9 +322,8 @@ where
     }
 }
 
-/// Install a global panic hook that emits a structured tracing event before
-/// invoking the default hook.  Call this once, early in `main`, after the
-/// tracing subscriber has been installed.
+/// Install a global panic hook that emits a structured tracing event before invoking the default hook.
+/// Call this once, early in `main`, after the tracing subscriber has been installed.
 pub fn install_panic_hook() {
     let default_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
@@ -349,9 +337,8 @@ pub fn install_panic_hook() {
         let location = info
             .location()
             .map(|l| format!("{}:{}:{}", l.file(), l.line(), l.column()));
-        // `location` is the panic's source `file:line:col` (no user content);
-        // path-scrubbed by the redact layer. Gives the panic counter a place
-        // to point without exporting the message/stack.
+        // `location` is the panic's source `file:line:col` (no user content); the redact layer scrubs the paths
+        // It gives the panic counter a place to point without exporting the message or stack
         let err_span = tracing::info_span!(
             "internal_error",
             error_type = "panic",
@@ -361,9 +348,9 @@ pub fn install_panic_hook() {
             err_span.record("location", loc);
         }
         err_span.in_scope(|| {});
-        // External OTEL stream: error class only — no message, no location
-        // (RQ5). Synchronous queue hand-off; no-op unless the stream is
-        // active. The internal pipelines keep the richer span/event above.
+        // The external OTEL stream gets the error class only, never the message or location
+        // `emit` is a synchronous queue push and a no-op unless the stream is active
+        // The internal pipelines keep the richer span and event above
         crate::external::emit(&crate::events::InternalError {
             error_type: "panic".to_owned(),
         });
@@ -603,11 +590,11 @@ impl InstrumentationTimer {
         self
     }
 
-    /// Route this timer's elapsed into a typed startup sub-phase field on drop
-    /// (while startup is active), so producer to field is checked at compile time.
+    /// Route this timer's elapsed into a typed startup sub-phase field on drop (while startup is active).
+    /// The mapping from producer to field is checked at compile time.
     pub fn with_subphase(&mut self, sp: crate::startup::Subphase) -> &mut Self {
         self.subphase = Some(sp);
-        // Gated like the drop-time field mirror: a span only when recording is.
+        // Gated like the drop-time field mirror: create the span only while startup recording is active
         if self.subphase_span.is_none() && crate::startup::is_active() {
             self.subphase_span = Some(crate::startup::subphase_span(sp, &self.timer_span));
         }
@@ -624,8 +611,8 @@ impl Drop for InstrumentationTimer {
             &mut self.timer_span,
             tracing::Span::none(),
         ));
-        // Mirror into `unified.jsonl` while startup is active, so a slow-launch
-        // report needs no env vars or repro; the first usable session latches this off.
+        // Mirror into `unified.jsonl` while startup is active, so a slow-launch report needs no env vars or repro
+        // The first usable session latches this off
         if crate::startup::is_active() {
             if let Some(sp) = self.subphase {
                 crate::startup::record_subphase(sp, elapsed);

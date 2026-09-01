@@ -97,6 +97,7 @@ async fn create_test_actor_with_memory(
         .map(|_| crate::session::memory::MemoryStorage::new(&cwd_path, None));
     let state = TokioMutex::new(State {
         running_task: None,
+        finalization_gate: Default::default(),
         pending_inputs: VecDeque::new(),
         edit_holds: HashMap::new(),
         pending_notifications: Vec::new(),
@@ -135,6 +136,11 @@ async fn create_test_actor_with_memory(
         .as_ref()
         .map_or_else(Default::default, |mc| mc.initial_injection.clone());
     SessionActor {
+        repo_status_prefetch: crate::session::repo_status_prefix::RepoStatusPrefetchState::default(
+        ),
+        transient_retry_enabled: true,
+        transient_retries_prompt_total: std::cell::Cell::new(0),
+        transient_episode_start: std::cell::Cell::new(None),
         status_wake: Default::default(),
         session_info: SessionInfo {
             id: acp::SessionId::new("test-memory"),
@@ -329,8 +335,9 @@ async fn create_test_actor_with_memory(
         title_refresh_enabled: false,
         session_turn_active: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
         streaming_turn_capture: parking_lot::Mutex::new(StreamingTurnCapture::default()),
-        turn_stream_drained: parking_lot::Mutex::new(None),
-        pending_image_strip: parking_lot::Mutex::new(None),
+        turn_stream_drained: parking_lot::Mutex::new(std::collections::HashMap::new()),
+        pending_image_strip: parking_lot::Mutex::new(std::collections::HashMap::new()),
+        image_strip_rewrite_barrier: ImageStripRewriteBarrier::new(),
         sampler_handle: xai_grok_sampler::SamplerHandle::noop(),
         sampling_gate: None,
         rebuild_spec: crate::session::agent_rebuild::test_rebuild_spec_default(),
@@ -369,8 +376,7 @@ async fn test_is_flushing_suppresses_auto_compact() {
         })
         .await;
 }
-/// Test that `force_compact` triggers auto-compact even below threshold,
-/// and is consumed (reset to false) after a single use.
+/// Test that `force_compact` triggers auto-compact even below threshold, and is consumed (reset to false) after a single use.
 #[tokio::test(flavor = "current_thread")]
 async fn test_force_compact_triggers_below_threshold() {
     let local = tokio::task::LocalSet::new();
@@ -514,9 +520,8 @@ async fn test_memory_storage_created_when_enabled() {
         })
         .await;
 }
-/// Actor with injection enabled and an FTS index matching the test query, so
-/// `first_turn_memory_reminder()` WOULD inject — tests can then prove the
-/// idempotency guard alone is what suppresses re-injection.
+/// Actor with injection enabled and an FTS index matching the test query, so `first_turn_memory_reminder()` would inject.
+/// Tests can then prove the idempotency guard alone is what suppresses re-injection.
 #[allow(clippy::field_reassign_with_default)]
 async fn create_injection_ready_actor(
     initial_conversation: Vec<xai_grok_sampling_types::ConversationItem>,
@@ -573,8 +578,7 @@ async fn create_injection_ready_actor(
         .replace_conversation(initial_conversation);
     actor
 }
-/// Control: proves the harness setup is sufficient for injection, so the
-/// companion test below isolates the idempotency guard.
+/// Control: proves the harness setup is sufficient for injection, so the companion test below isolates the idempotency guard.
 #[tokio::test(flavor = "current_thread")]
 async fn test_first_turn_reminder_injects_without_persisted_block() {
     let local = tokio::task::LocalSet::new();
@@ -642,8 +646,8 @@ async fn test_first_turn_reminder_skips_all_displayed_zero_results() {
         })
         .await;
 }
-/// A block persisted by an earlier `--resume` segment must suppress the
-/// re-search — a re-scored block would bust the prompt-prefix KV cache.
+/// A block persisted by an earlier `--resume` segment must suppress the re-search.
+/// A re-scored block would bust the prompt-prefix KV cache.
 #[tokio::test(flavor = "current_thread")]
 async fn test_first_turn_reminder_skips_when_block_persisted() {
     let local = tokio::task::LocalSet::new();

@@ -348,8 +348,7 @@ impl WorkflowManager {
                             .into(),
                 };
             }
-            // Epoch check and lifecycle mutation stay under one lock, or a
-            // quick resume could let this stale watcher stomp the successor.
+            // Epoch check and lifecycle mutation stay under one lock, or a quick resume could let this stale watcher stomp the successor
             let (epoch_matches, state) = {
                 let mut tracker = tracker.lock();
                 if tracker.execution_epoch(&watcher_run_id) != Some(execution_epoch) {
@@ -375,8 +374,7 @@ impl WorkflowManager {
                 }
             };
             if !epoch_matches {
-                // A quick resume took over; close this episode as superseded
-                // (cumulative fields may reflect the successor).
+                // A quick resume took over; close this episode as superseded (cumulative fields may reflect the successor)
                 let (elapsed, agents_used, agent_budget) = {
                     let tracker = tracker.lock();
                     let run = tracker.get(&watcher_run_id);
@@ -402,8 +400,7 @@ impl WorkflowManager {
                 return;
             }
             if state.is_none() {
-                // The run left the tracker; close the episode so its
-                // `workflow_run_started` is not orphaned.
+                // The run left the tracker; close the episode so its `workflow_run_started` is not orphaned
                 log_run_ended(
                     RunEndMetadata {
                         run_id: &watcher_run_id,
@@ -439,7 +436,7 @@ impl WorkflowManager {
                         tracing::error!(run_id = %watcher_run_id, %interrupt_error, "failed to persist workflow interruption marker");
                     }
                 }
-                // Emit before the persist-failure return: starts always pair.
+                // Emit before the persist-failure return: every start event gets an end event
                 let elapsed = tracker.lock().elapsed_ms(&watcher_run_id);
                 log_run_ended(
                     RunEndMetadata {
@@ -762,8 +759,7 @@ fn log_run_started(
             WorkflowSource::Inline => WorkflowSourceKind::Inline,
             WorkflowSource::File(_) => WorkflowSourceKind::File,
         },
-        // Only built-in workflow names leave the machine; user script names
-        // and paths stay local.
+        // Only built-in workflow names leave the machine; user script names and paths stay local
         workflow_name: (*source == WorkflowSource::Builtin).then(|| state.name.clone()),
         agent_budget: state.agent_budget,
         max_concurrent_agents: u32::try_from(max_concurrent_agents).unwrap_or(u32::MAX),

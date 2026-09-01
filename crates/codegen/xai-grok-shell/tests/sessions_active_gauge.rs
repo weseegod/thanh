@@ -1,6 +1,5 @@
-//! `sessions_active` follows the one spawn seam every topology shares. Sole
-//! test in this binary so the process-global gauge sees no other session
-//! traffic and the counts can be exact.
+//! `sessions_active` is counted at the one spawn point shared by every way the agent hosts a session.
+//! This is the sole test in its binary, so the process-global gauge sees no other session traffic and the counts can be exact.
 
 #[allow(dead_code)]
 mod acp_harness;

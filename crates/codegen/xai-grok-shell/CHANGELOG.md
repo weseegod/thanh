@@ -1,5 +1,90 @@
 # Changelog
 
+# 1.0.13 — 2026-08-28
+
+## Features
+
+- **Length-truncated responses** now continue automatically instead of failing the turn.
+- **Hooks** can now ask the user to confirm a tool call instead of always allowing or denying.
+- **Hooks** can now request deferral or add context shown to the model after a tool runs.
+- **Session close** now records detailed timing data for performance analysis.
+- **Credit limit upsell** now offers a Try Again button to retry the last prompt.
+- **Pasted images** now show a live pixel preview in the prompt box on iTerm2.
+
+## Bug Fixes
+
+- **Transient inference failures** (stalls, drops, 5xx) now retry automatically instead of ending the turn.
+- **Windows users** can now correctly open ~/.grok and worktree sessions.
+- **Session data** is now more reliably saved after prompts and on power loss.
+- **Compaction failures** now show the actual error instead of a generic message.
+- **Truncation error messages** now show the right guidance instead of suggesting an unhelpful retry.
+- **Truncated tool calls** are now executed instead of failing the turn when arguments are complete.
+- **Images larger than 2000px** no longer brick sessions on many-image requests.
+- **Wrapped hyperlinks** in the pager now remain fully clickable on Windows Terminal instead of only the first line.
+- **Recurring scheduled tasks** now include a reminder to stop the monitor when work finishes.
+- **Scheduled task IDs** are now full UUID strings, preventing collisions when tasks are created in the same millisecond.
+
+## Performance
+
+- **Subagent spawning** is faster when connections drop during bursts.
+- **Session startup** with MCP servers is now much faster when auth is already configured.
+- **MCP server startup** no longer stalls behind a fixed batch size.
+- **CLI downloads** are now compressed, making fresh installs and updates substantially faster.
+
+
+# 1.0.12 — 2026-08-27
+
+## Features
+
+- **Credit-limit upsell** now includes a Try Again option. Max-tier users see the same question modal without Upgrade tier.
+
+## Bug Fixes
+
+- **Copying wrapped table cells** no longer inserts unwanted spaces at line breaks.
+- **MCP server connections** that fail transiently now retry instead of staying unavailable.
+- **Waiting on subagents** after an interjection no longer blocks on unrelated background work.
+- **Prompt blocks** now show friendly hook descriptions instead of internal IDs.
+- **Truncation error message** no longer suggests asking for a shorter answer.
+- **Context estimates** for conversations with reasoning are now more accurate.
+- **Token usage** after rewinding or switching modes now matches the actual server-reported count instead of overestimating.
+- **Context bar** now updates immediately when auto-compaction begins instead of waiting until it finishes.
+- **File system monitoring** for .NET projects no longer creates excessive watchers on Linux.
+- **Auto recap** no longer appears while a background task or monitor wake turn is streaming.
+
+## Performance
+
+- **Worktree creation** is faster by skipping stale reflog copies.
+
+
+# 1.0.11 — 2026-08-26
+
+## Features
+
+- **Headless sessions** are now browsable in the resume picker without mixing into default history.
+- **Default permission mode** for new interactive sessions is now configurable.
+- **Turn duration** now appears in session history after resume.
+- **Turn footers** (Worked for, cancelled, failed) now appear after /resume.
+- **mkdir and touch** no longer prompt in auto mode or safe-command lists.
+- **Subagent messages** are now allowed automatically in permission Auto mode.
+- **Headless sessions** can now auto-allow permission prompts via a startup hint.
+
+## Bug Fixes
+
+- **Permission prompts** for common command chains and subcommands are now more reliable.
+- **Blocked prompts** no longer appear in conversation history or scrollback after restart.
+- **Background monitors** no longer have a 10-hour default timeout.
+- **Mouse input** at the right margin no longer types characters into the prompt on certain terminals.
+- **Pasting text ending in a newline** no longer accidentally submits the prompt on some terminals.
+- **Auto mode** now shows a permission card when the classifier blocks an action on interactive sessions.
+- **Image previews** no longer leave ghost artifacts when using the Kitty protocol on Warp.
+- **Expanded Execute tool output** no longer snaps closed during live progress.
+- **/voice** now falls back to parec/arecord on older PipeWire installs.
+
+## Performance
+
+- **Background command waits** now finish as soon as the process exits.
+
+
 # 1.0.10 — 2026-08-24
 
 ## Performance

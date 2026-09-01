@@ -1,6 +1,5 @@
-//! Integration test for the external OTEL stream against an in-process OTLP
-//! collector: wire payloads, delta temporality, gates-off canary absence at
-//! the wire layer, flush-on-shutdown ≤ 2 s, and post-shutdown silence.
+//! Integration test for the external OTEL stream against an in-process OTLP collector.
+//! Covers wire payloads, delta temporality, canary absence at the wire layer with gates off, flush on shutdown within 2 s, and post-shutdown silence.
 
 mod otlp_collector;
 
@@ -38,10 +37,8 @@ fn external_stream_end_to_end() {
     xai_grok_telemetry::external::init(Some(cfg));
     assert!(xai_grok_telemetry::external::is_active());
 
-    // Emit through the same funnel production uses — with the product events client
-    // never initialized (TelemetryMode effectively Disabled) and no auth at
-    // all, pinning the Disabled half of the G7 independence matrix at the
-    // funnel level: the external sink fires anyway.
+    // Emit through the same funnel production uses, with the product events client never initialized and no auth at all
+    // The external sink must fire anyway: it does not depend on product telemetry being enabled
     assert!(!xai_grok_telemetry::is_enabled());
     xai_grok_telemetry::log_event(xai_grok_telemetry::events::SessionNew {
         session_id: "sess-int-1".into(),
@@ -74,7 +71,7 @@ fn external_stream_end_to_end() {
         screen_mode: None,
         prompt_text: Some(CANARY_PROMPT.into()),
     });
-    // Model-id canary for the metrics body (increment-time scrub).
+    // The model id is a canary: the scrub that runs when the metric increments must keep it out of the metrics body
     xai_grok_telemetry::log_event(xai_grok_telemetry::events::ModelResponseReceived {
         model_id: CANARY_MODEL.into(),
         duration_ms: 5,
@@ -83,6 +80,8 @@ fn external_stream_end_to_end() {
         completion_tokens: Some(7),
         reasoning_tokens: None,
         cached_prompt_tokens: None,
+        cache_creation_tokens: None,
+        cost_usd_ticks: None,
     });
 
     xai_grok_telemetry::external::flush();
@@ -136,8 +135,7 @@ fn external_stream_end_to_end() {
             "missing {expected} in {event_names:?}"
         );
     }
-    // session_start arrives exactly once per emission (no double-send from
-    // the funnel).
+    // session_start arrives exactly once per emission (no double-send from the funnel)
     assert_eq!(
         event_names
             .iter()
@@ -202,7 +200,7 @@ fn external_stream_end_to_end() {
             "MCP server name reached the {label} wire"
         );
     }
-    // Prompt length exported, text not (already covered by the canary scan).
+    // The prompt length exports; the canary scan above already proves the text does not
 
     // ── Shutdown: ≤ 2 s + post-shutdown silence ─────────────────────────
     let start = std::time::Instant::now();

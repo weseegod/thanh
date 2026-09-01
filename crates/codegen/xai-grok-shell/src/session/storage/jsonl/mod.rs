@@ -29,9 +29,47 @@ pub struct JsonlStorageAdapter {
     dir_mode: SessionDirMode,
     #[cfg(test)]
     update_append_probe: Option<std::sync::Arc<AppendProbe>>,
+    #[cfg(test)]
+    session_sync_probe: Option<std::sync::Arc<SessionSyncProbe>>,
+    #[cfg(test)]
+    file_sync_probe: Option<std::sync::Arc<FileSyncProbe>>,
+    #[cfg(test)]
+    parent_sync_probe: Option<std::sync::Arc<ParentSyncProbe>>,
 }
 #[cfg(test)]
 type AppendProbe = dyn Fn(AppendDurability) -> io::Result<()> + Send + Sync;
+#[cfg(test)]
+type SessionSyncProbe = dyn Fn(super::SessionFileSet) -> io::Result<()> + Send + Sync;
+#[cfg(test)]
+type FileSyncProbe = dyn Fn() -> io::Result<()> + Send + Sync;
+#[cfg(test)]
+type ParentSyncProbe = dyn Fn() -> io::Result<()> + Send + Sync;
+/// `Committed` means `write_all` succeeded: the record is in the file (at least the page cache) and a later fsync can still make it durable.
+#[derive(Debug)]
+enum AppendLineError {
+    NotCommitted(io::Error),
+    Committed(io::Error),
+}
+impl AppendLineError {
+    fn into_io_error(self) -> io::Error {
+        match self {
+            Self::NotCommitted(error) | Self::Committed(error) => error,
+        }
+    }
+    fn into_update_error(self) -> super::AppendUpdateError {
+        match self {
+            Self::NotCommitted(error) => super::AppendUpdateError::NotCommitted(error),
+            Self::Committed(error) => super::AppendUpdateError::Committed(error),
+        }
+    }
+}
+impl std::fmt::Display for AppendLineError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NotCommitted(error) | Self::Committed(error) => error.fmt(formatter),
+        }
+    }
+}
 impl Default for JsonlStorageAdapter {
     fn default() -> Self {
         Self::new()
@@ -43,6 +81,12 @@ impl JsonlStorageAdapter {
             dir_mode: SessionDirMode::FromRoot(crate::util::grok_home::grok_home()),
             #[cfg(test)]
             update_append_probe: None,
+            #[cfg(test)]
+            session_sync_probe: None,
+            #[cfg(test)]
+            file_sync_probe: None,
+            #[cfg(test)]
+            parent_sync_probe: None,
         }
     }
     pub fn with_root(root_dir: PathBuf) -> Self {
@@ -50,17 +94,27 @@ impl JsonlStorageAdapter {
             dir_mode: SessionDirMode::FromRoot(root_dir),
             #[cfg(test)]
             update_append_probe: None,
+            #[cfg(test)]
+            session_sync_probe: None,
+            #[cfg(test)]
+            file_sync_probe: None,
+            #[cfg(test)]
+            parent_sync_probe: None,
         }
     }
-    /// Create an adapter that writes directly to `session_dir`, bypassing
-    /// the `{root}/sessions/{cwd}/{id}/` path computation. Used for subagent
-    /// child sessions (top-level dirs; only their metadata nests under the
-    /// parent's session dir).
+    /// Create an adapter that writes directly to `session_dir`, bypassing the `{root}/sessions/{cwd}/{id}/` path computation.
+    /// Subagent child sessions use this (top-level dirs; only their metadata nests under the parent's session dir).
     pub fn with_explicit_session_dir(session_dir: PathBuf) -> Self {
         Self {
             dir_mode: SessionDirMode::Explicit(session_dir),
             #[cfg(test)]
             update_append_probe: None,
+            #[cfg(test)]
+            session_sync_probe: None,
+            #[cfg(test)]
+            file_sync_probe: None,
+            #[cfg(test)]
+            parent_sync_probe: None,
         }
     }
     #[cfg(test)]
@@ -71,10 +125,46 @@ impl JsonlStorageAdapter {
         Self {
             dir_mode: SessionDirMode::Explicit(session_dir),
             update_append_probe: Some(std::sync::Arc::new(append_probe)),
+            session_sync_probe: None,
+            file_sync_probe: None,
+            parent_sync_probe: None,
         }
     }
-    /// Load chat history from a specific directory.
-    /// Used by fork bootstrap to load the copied parent conversation.
+    /// [`Self::with_update_append_probe`] plus a probe observing (and able to fail) every [`StorageAdapter::sync_session_files_selected`] barrier.
+    /// That probe receives the file set the barrier flushes.
+    #[cfg(test)]
+    pub(crate) fn with_probes(
+        session_dir: PathBuf,
+        append_probe: impl Fn(AppendDurability) -> io::Result<()> + Send + Sync + 'static,
+        session_sync_probe: impl Fn(super::SessionFileSet) -> io::Result<()> + Send + Sync + 'static,
+    ) -> Self {
+        Self {
+            dir_mode: SessionDirMode::Explicit(session_dir),
+            update_append_probe: Some(std::sync::Arc::new(append_probe)),
+            session_sync_probe: Some(std::sync::Arc::new(session_sync_probe)),
+            file_sync_probe: None,
+            parent_sync_probe: None,
+        }
+    }
+    /// Fail (or observe) the per-append file barrier after `write_all`.
+    #[cfg(test)]
+    pub(crate) fn with_file_sync_probe(
+        mut self,
+        file_sync_probe: impl Fn() -> io::Result<()> + Send + Sync + 'static,
+    ) -> Self {
+        self.file_sync_probe = Some(std::sync::Arc::new(file_sync_probe));
+        self
+    }
+    /// Fail (or observe) the first-create `summary.json` parent-directory sync.
+    #[cfg(test)]
+    pub(crate) fn with_parent_sync_probe(
+        mut self,
+        parent_sync_probe: impl Fn() -> io::Result<()> + Send + Sync + 'static,
+    ) -> Self {
+        self.parent_sync_probe = Some(std::sync::Arc::new(parent_sync_probe));
+        self
+    }
+    /// Fork bootstrap uses this to load the copied parent conversation.
     pub fn load_chat_history_from_dir(
         &self,
         dir: &std::path::Path,
@@ -91,14 +181,21 @@ impl JsonlStorageAdapter {
             SessionDirMode::Explicit(dir) => dir.clone(),
         }
     }
-    /// Create `info`'s session dir owner-only. `FromRoot` also ensures the
-    /// `<encoded-cwd>` shield + root; `Explicit` parents are caller-owned.
+    /// Create `info`'s session dir owner-only and durable.
+    /// `FromRoot` also makes the `<encoded-cwd>` dir and the sessions root owner-only; `Explicit` parents are caller-owned.
     fn create_session_dir_owner_only(&self, info: &Info) -> io::Result<PathBuf> {
         let dir = self.session_dir(info);
-        if let SessionDirMode::FromRoot(root) = &self.dir_mode {
-            let _ = crate::util::grok_home::ensure_sessions_cwd_dir_in(root, &info.cwd);
-        }
-        crate::util::grok_home::create_dir_all_owner_only(&dir)?;
+        super::create_dir_all_durable(&dir, |dir| match &self.dir_mode {
+            SessionDirMode::FromRoot(root) => {
+                if let Ok(cwd_dir) =
+                    crate::util::grok_home::ensure_sessions_cwd_dir_in(root, &info.cwd)
+                {
+                    super::sync_cwd_marker_if_present(&cwd_dir)?;
+                }
+                crate::util::grok_home::create_dir_all_owner_only(dir)
+            }
+            SessionDirMode::Explicit(_) => crate::util::grok_home::create_dir_all_owner_only(dir),
+        })?;
         Ok(dir)
     }
     pub(super) fn updates_file(&self, info: &Info) -> PathBuf {
@@ -133,6 +230,9 @@ impl JsonlStorageAdapter {
     fn signals_file(&self, info: &Info) -> PathBuf {
         self.session_dir(info).join(super::SIGNALS_FILE)
     }
+    fn usage_file(&self, info: &Info) -> PathBuf {
+        self.session_dir(info).join(super::USAGE_FILE)
+    }
     fn announcement_state_file(&self, info: &Info) -> PathBuf {
         self.session_dir(info).join(super::ANNOUNCEMENT_STATE_FILE)
     }
@@ -158,11 +258,7 @@ impl JsonlStorageAdapter {
     fn btw_history_file(&self, info: &Info) -> PathBuf {
         self.session_dir(info).join("btw_history.jsonl")
     }
-    /// Enumerate all session directories, optionally filtered by cwd.
-    ///
-    /// Returns the path to each session directory (not the summary file).
-    /// Shared by both `list_sessions` (full scan) and `list_sessions_recent`
-    /// (mtime-based tail).
+    /// Both `list_sessions` (full scan) and `list_sessions_recent` (mtime-based tail) share this.
     fn scan_session_dirs(&self, cwd: Option<&str>) -> io::Result<Vec<PathBuf>> {
         let root_dir = match &self.dir_mode {
             SessionDirMode::FromRoot(root) => root,
@@ -179,9 +275,14 @@ impl JsonlStorageAdapter {
             let summary_path = session_dir.join(super::SUMMARY_FILE);
             match std::fs::read(&summary_path) {
                 Ok(bytes) => {
-                    if let Ok(summary) = serde_json::from_slice::<Summary>(&bytes)
+                    if let Ok(mut summary) = serde_json::from_slice::<Summary>(&bytes)
                         && !summary.is_hidden()
                     {
+                        super::summary_write::repair_untagged_worktree_summary(
+                            &mut summary,
+                            &summary_path,
+                            &session_dir.join(format!("{}.lock", super::SUMMARY_FILE)),
+                        );
                         summaries.push(summary);
                     }
                 }
@@ -196,19 +297,22 @@ impl JsonlStorageAdapter {
         });
         Ok(summaries)
     }
-    /// Extra `summary.json` reads allowed past `limit` while skipping
-    /// hidden/headless rows. Keeps refill behavior for a mixed store without
-    /// scanning a headless-dominated tree.
+    /// Extra `summary.json` reads allowed past `limit` while skipping hidden/headless rows.
+    /// The slack lets a mixed store still fill a page without scanning a headless-dominated tree.
     const RECENT_LIST_READ_SLACK: usize = 8;
-    /// List the N most recently modified session summaries across all
-    /// workspaces.
+    /// List the N most recently modified session summaries across all workspaces.
     ///
-    /// Instead of reading every `summary.json` (expensive at scale — ~12K
-    /// files), this stats each file to get its mtime, sorts by mtime, and
-    /// reads newest-first only until `limit` rows are kept. On a machine with
-    /// ~12K sessions this reduces cold-boot `workspace_list` from ~3s to ~200ms.
+    /// Instead of reading every `summary.json` (expensive at scale, ~12K files), this stats each file to get its mtime.
+    /// It then sorts by mtime and reads newest-first only until `limit` rows are kept.
+    /// On a machine with ~12K sessions this reduces cold-boot `workspace_list` from ~3s to ~200ms.
     /// Final order among candidates uses `last_active_at` else `updated_at`.
     pub async fn list_sessions_recent(&self, limit: usize) -> io::Result<Vec<Summary>> {
+        let adapter = self.clone();
+        tokio::task::spawn_blocking(move || adapter.list_sessions_recent_sync(limit))
+            .await
+            .map_err(io::Error::other)?
+    }
+    fn list_sessions_recent_sync(&self, limit: usize) -> io::Result<Vec<Summary>> {
         let session_dirs = self.scan_session_dirs(None)?;
         let mut candidates: Vec<(PathBuf, std::time::SystemTime)> =
             Vec::with_capacity(session_dirs.len());
@@ -231,10 +335,17 @@ impl JsonlStorageAdapter {
             }
             match std::fs::read(&summary_path) {
                 Ok(bytes) => {
-                    if let Ok(summary) = serde_json::from_slice::<Summary>(&bytes)
+                    if let Ok(mut summary) = serde_json::from_slice::<Summary>(&bytes)
                         && !summary.is_hidden()
                         && !summary.is_headless()
                     {
+                        let lock_path =
+                            summary_path.with_file_name(format!("{}.lock", super::SUMMARY_FILE));
+                        super::summary_write::repair_untagged_worktree_summary(
+                            &mut summary,
+                            &summary_path,
+                            &lock_path,
+                        );
                         summaries.push(summary);
                     }
                 }
@@ -273,29 +384,22 @@ impl JsonlStorageAdapter {
             .await
             .map_err(io::Error::other)?
     }
-    /// Append one JSONL record, healing a torn tail before writing.
-    ///
-    /// Appends are not crash-atomic: a process kill / `ENOSPC` mid-`write_all`
-    /// (e.g. the auto-update leader relaunch aborting a persistence actor
-    /// mid-append) leaves the file ending in a *partial* record with no
-    /// trailing newline. Because append failures are logged-and-continued by
-    /// the persistence actor, a plain `O_APPEND` write of the next record
-    /// would concatenate it onto that partial line, producing a merged line
-    /// that fails to parse (``expected `,` or `}` at line 1 column N``) and —
-    /// before the readers became corruption-tolerant — bricked session resume.
-    ///
-    /// Before writing, check the last byte: if it isn't `\n`, prepend one so
-    /// the torn record is terminated as its own (single) corrupt line. This
-    /// bounds the damage of any torn write to exactly one record, which the
-    /// lenient readers (e.g. [`Self::read_chat_history_sync`]) then skip.
     async fn sync_file_path_durable(path: PathBuf) -> io::Result<()> {
         tokio::task::spawn_blocking(move || {
-            let file = OpenOptions::new().read(true).open(&path)?;
+            let file = OpenOptions::new().write(true).open(&path)?;
             Self::sync_file_durable(&file)
         })
         .await
         .map_err(io::Error::other)?
     }
+    /// Append one JSONL record, healing a torn tail before writing.
+    ///
+    /// Appends are not crash-atomic: a process kill / `ENOSPC` mid-`write_all` leaves the file ending in a *partial* record with no trailing newline.
+    /// The next record's plain `O_APPEND` write would then concatenate onto that partial line.
+    /// The merged line fails to parse (``expected `,` or `}` at line 1 column N``).
+    ///
+    /// Before writing, check the last byte: if it isn't `\n`, prepend one so the torn record is terminated as its own (single) corrupt line.
+    /// This bounds the damage of any torn write to exactly one record, which the lenient readers (e.g. [`Self::read_chat_history_sync`]) then skip.
     fn append_jsonl_line_sync(
         path: &Path,
         line: Vec<u8>,
@@ -304,6 +408,7 @@ impl JsonlStorageAdapter {
         Self::append_jsonl_line_sync_with(path, line, durability, Self::sync_file_durable, || {
             Self::sync_parent_directory(path)
         })
+        .map_err(AppendLineError::into_io_error)
     }
     fn append_jsonl_line_sync_with(
         path: &Path,
@@ -311,20 +416,26 @@ impl JsonlStorageAdapter {
         durability: AppendDurability,
         mut sync_file: impl FnMut(&std::fs::File) -> io::Result<()>,
         mut sync_parent: impl FnMut() -> io::Result<()>,
-    ) -> io::Result<()> {
+    ) -> Result<(), AppendLineError> {
         debug_assert!(line.ends_with(b"\n"), "JSONL record must end with \\n");
-        let lock = Self::lock_append(path)?;
+        let lock = Self::lock_append(path).map_err(AppendLineError::NotCommitted)?;
         let result = (|| {
             let mut file = OpenOptions::new()
                 .read(true)
                 .create(true)
                 .append(true)
-                .open(path)?;
-            let len = file.metadata()?.len();
+                .open(path)
+                .map_err(AppendLineError::NotCommitted)?;
+            let len = file
+                .metadata()
+                .map_err(AppendLineError::NotCommitted)?
+                .len();
             if len > 0 {
-                file.seek(io::SeekFrom::Start(len - 1))?;
+                file.seek(io::SeekFrom::Start(len - 1))
+                    .map_err(AppendLineError::NotCommitted)?;
                 let mut last = [0u8; 1];
-                file.read_exact(&mut last)?;
+                file.read_exact(&mut last)
+                    .map_err(AppendLineError::NotCommitted)?;
                 if last[0] != b'\n' {
                     tracing::warn!(
                         path = %path.display(),
@@ -333,12 +444,13 @@ impl JsonlStorageAdapter {
                     line.insert(0, b'\n');
                 }
             }
-            file.write_all(&line)?;
-            file.flush()?;
+            file.write_all(&line)
+                .map_err(AppendLineError::NotCommitted)?;
+            file.flush().map_err(AppendLineError::Committed)?;
             if matches!(durability, AppendDurability::Durable) {
-                sync_file(&file)?;
+                sync_file(&file).map_err(AppendLineError::Committed)?;
                 drop(file);
-                sync_parent()?;
+                sync_parent().map_err(AppendLineError::Committed)?;
             } else {
                 drop(file);
             }
@@ -488,27 +600,11 @@ impl JsonlStorageAdapter {
     fn sync_file_durable(file: &std::fs::File) -> io::Result<()> {
         super::sync_file_durable(file)
     }
-    #[cfg(unix)]
     fn sync_parent_directory(path: &Path) -> io::Result<()> {
-        let parent = path
-            .parent()
-            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "update has no parent"))?;
-        std::fs::File::open(parent)?.sync_all()
+        super::sync_parent_dir_durable(path)
     }
-    #[cfg(windows)]
-    fn sync_parent_directory(_path: &Path) -> io::Result<()> {
-        Ok(())
-    }
-    #[cfg(not(any(unix, windows)))]
-    fn sync_parent_directory(_path: &Path) -> io::Result<()> {
-        Err(io::Error::new(
-            io::ErrorKind::Unsupported,
-            "durable directory sync is unsupported on this platform",
-        ))
-    }
-    /// Write a full JSONL file (rewriting all items), crash-atomically: serialize
-    /// to a temp file then rename over the target, so a crash / `ENOSPC` mid-write
-    /// can't truncate the existing file (e.g. lose `rewind_points.jsonl` history).
+    /// Write a full JSONL file (rewriting all items), crash-atomically: serialize to a temp file then rename over the target.
+    /// A crash / `ENOSPC` mid-write therefore can't truncate the existing file (e.g. lose `rewind_points.jsonl` history).
     async fn write_jsonl<T: serde::Serialize>(&self, path: PathBuf, items: &[T]) -> io::Result<()> {
         super::write_jsonl_atomic_async(&path, items).await
     }
@@ -536,17 +632,38 @@ impl JsonlStorageAdapter {
         path: PathBuf,
         update: &super::SessionUpdate,
         durability: AppendDurability,
-    ) -> io::Result<()> {
+    ) -> Result<(), super::AppendUpdateError> {
         #[cfg(test)]
         if let Some(append_probe) = &self.update_append_probe {
-            append_probe(durability)?;
+            append_probe(durability).map_err(super::AppendUpdateError::NotCommitted)?;
         }
-        let envelope = SessionUpdateEnvelope::from_update(update)
-            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
-        let mut line = serde_json::to_vec(&envelope)
-            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+        let envelope = SessionUpdateEnvelope::from_update(update).map_err(|e| {
+            super::AppendUpdateError::NotCommitted(io::Error::new(io::ErrorKind::InvalidData, e))
+        })?;
+        let mut line = serde_json::to_vec(&envelope).map_err(|e| {
+            super::AppendUpdateError::NotCommitted(io::Error::new(io::ErrorKind::InvalidData, e))
+        })?;
         line.push(b'\n');
-        Self::append_jsonl_line_blocking(path, line, durability).await
+        #[cfg(test)]
+        let file_sync_probe = self.file_sync_probe.clone();
+        tokio::task::spawn_blocking(move || {
+            Self::append_jsonl_line_sync_with(
+                &path,
+                line,
+                durability,
+                |file| {
+                    #[cfg(test)]
+                    if let Some(probe) = &file_sync_probe {
+                        probe()?;
+                    }
+                    Self::sync_file_durable(file)
+                },
+                || Self::sync_parent_directory(&path),
+            )
+            .map_err(AppendLineError::into_update_error)
+        })
+        .await
+        .map_err(|error| super::AppendUpdateError::NotCommitted(io::Error::other(error)))?
     }
     async fn append_update_with_bookkeeping(
         &self,
@@ -555,8 +672,7 @@ impl JsonlStorageAdapter {
         durability: AppendDurability,
     ) -> Result<(), super::AppendUpdateError> {
         self.append_update_to_file(self.updates_file(info), update, durability)
-            .await
-            .map_err(super::AppendUpdateError::NotCommitted)?;
+            .await?;
         self.apply_summary_patch(
             info,
             super::summary_write::SummaryPatch {
@@ -570,13 +686,11 @@ impl JsonlStorageAdapter {
     }
     /// Read session updates from an updates.jsonl file, handling both envelope and legacy formats.
     ///
-    /// Uses direct string-to-typed deserialization (via `SessionUpdateEnvelope::from_str`)
-    /// with a borrowing envelope and `&RawValue` to avoid intermediate `Value` allocation.
+    /// The borrowing envelope and `&RawValue` avoid an intermediate `Value` allocation.
     ///
-    /// Corruption-tolerant like [`Self::read_chat_history_sync`]: updates are
-    /// display/replay data appended non-atomically, so a torn line (crashed or
-    /// racing append) is skipped with a warning instead of failing the caller
-    /// (session load). The live replay and fork-copy paths are equally lenient.
+    /// Corruption-tolerant like [`Self::read_chat_history_sync`]: a torn line (crashed or racing append) is skipped with a warning.
+    /// Updates are display/replay data appended non-atomically, so skipping beats failing the session load.
+    /// The live replay and fork-copy paths are equally lenient.
     fn read_updates_jsonl(&self, path: PathBuf) -> io::Result<Vec<super::SessionUpdate>> {
         if !path.exists() {
             return Ok(Vec::new());
@@ -616,10 +730,36 @@ impl JsonlStorageAdapter {
         }
         Ok(updates)
     }
-    /// Write summary to disk atomically (sync version for `spawn_blocking`).
-    ///
-    /// A plain `std::fs::write` truncates before writing, so a concurrent reader
-    /// may see an empty file. Temp-file + rename avoids this.
+    /// A first `summary.json` create that renamed then failed its parent-dir sync leaves the file in place.
+    /// Retrying `init_session` would otherwise load it as an existing session and never re-run that sync.
+    /// Occupied dirs (chat/updates) already paid later parent syncs; skip them so a normal resume does not fsync (network home / macOS F_FULLFSYNC).
+    fn sync_parent_if_first_create_summary(
+        &self,
+        info: &Info,
+        summary_path: &Path,
+    ) -> io::Result<()> {
+        let lock_name = format!("{}.lock", super::SUMMARY_FILE);
+        let only_first_create = std::fs::read_dir(self.session_dir(info))
+            .map(|entries| {
+                entries.flatten().all(|entry| {
+                    matches!(
+                        entry.file_name().to_str(),
+                        Some(name) if name == super::SUMMARY_FILE || name == lock_name
+                    )
+                })
+            })
+            .unwrap_or(false);
+        if !only_first_create {
+            return Ok(());
+        }
+        #[cfg(test)]
+        if let Some(probe) = &self.parent_sync_probe {
+            probe()?;
+        }
+        super::sync_parent_dir_durable(summary_path)
+    }
+    /// A plain `std::fs::write` truncates before writing, so a concurrent reader may see an empty file.
+    /// Writing a temp file then renaming avoids this.
     fn write_summary_sync(&self, info: &Info, summary: &Summary) -> io::Result<()> {
         let summary_path = self.summary_file(info);
         let bytes = serde_json::to_vec_pretty(summary)
@@ -810,50 +950,37 @@ impl JsonlStorageAdapter {
         }
         Ok(restored)
     }
-    /// Read chat history from JSONL file, handling both legacy ChatRequestMessage format
-    /// (version 0) and new ConversationItem format (version >= 1).
+    /// Read chat history from JSONL file, handling both legacy ChatRequestMessage format (version 0) and new ConversationItem format (version >= 1).
     ///
-    /// Uses line-by-line format detection with fallback to handle mixed-format files
-    /// that can occur when continuing an old session with a newer binary.
+    /// Uses line-by-line format detection with fallback to handle mixed-format files that occur when continuing an old session with a newer binary.
     ///
     /// ## Corruption tolerance (torn / interleaved appends)
     ///
-    /// Appends to `chat_history.jsonl` are not crash-atomic: a process kill
-    /// mid-append (auto-update leader relaunch), `ENOSPC`, or two writers
-    /// racing (a second persistence actor on reconnect) can leave a torn or
-    /// merged line — the classic symptom is a serde error like
-    /// ``expected `,` or `}` at line 1 column 571``. Failing the whole load on
-    /// one bad line bricks the session forever ("Couldn't load session:
-    /// FS_OTHER"), which is strictly worse than resuming without the damaged
-    /// record. Unparseable / undecodable lines are therefore *skipped* with a
-    /// warning, and the first time corruption is detected the raw file is
-    /// preserved as `chat_history.jsonl.corrupt` next to the original — the
-    /// post-load snapshot rewrite (`persist_chat_history_jsonl_sync`) scrubs
-    /// the bad lines from the live file, so the quarantine copy is the only
-    /// surviving evidence for debugging / manual recovery.
+    /// Appends to `chat_history.jsonl` are not crash-atomic.
+    /// A process kill mid-append (auto-update leader relaunch), `ENOSPC`, or two racing writers can leave a torn or merged line.
+    /// (A second persistence actor on reconnect is one such racing writer.)
+    /// The classic symptom is a serde error like ``expected `,` or `}` at line 1 column 571``.
+    /// Failing the whole load on one bad line bricks the session forever ("Couldn't load session: FS_OTHER").
+    /// Unparseable / undecodable lines are therefore *skipped* with a warning.
+    /// The first time corruption is detected, the raw file is preserved as `chat_history.jsonl.corrupt` next to the original.
+    /// The post-load snapshot rewrite (`persist_chat_history_jsonl_sync`) scrubs the bad lines from the live file.
+    /// That leaves the quarantine copy as the only surviving evidence for debugging / manual recovery.
     ///
-    /// Lines are split on raw `\n` bytes and parsed with `from_slice` so a
-    /// write torn mid-UTF-8-codepoint poisons only its own line, not the
-    /// whole-file `read_to_string`.
+    /// Lines are split on raw `\n` bytes and parsed with `from_slice`.
+    /// A write torn mid-UTF-8-codepoint therefore poisons only its own line, not a whole-file `read_to_string`.
     ///
     /// ## Legacy reasoning reconstruction (in-memory upgrade)
     ///
-    /// Older sessions stored reasoning either inline on the
-    /// assistant (`AssistantItem.reasoning`) or, for early
-    /// backend-search sessions, as `AssistantItem.raw_output: Vec<Value>`.
-    /// Newer sessions don't have those fields on `AssistantItem` so serde
-    /// would silently drop them. We pre-extract them via
-    /// [`xai_grok_sampling_types::upgrade_legacy_reasoning`] and emit
-    /// sibling `Reasoning` / `BackendToolCall` items *before* the
-    /// corresponding assistant — matching the order
-    /// `response_to_conversation_items` would produce. The file on disk
-    /// is not rewritten; this is a load-time-only transform so resumed
-    /// sessions get sibling-shape replay without any disk-write risk.
-    /// Idempotent: newer sessions have no `reasoning` / `raw_output` /
-    /// `reasoning_content` fields, so the upgrader produces no siblings.
-    /// The upgrader runs only for lines that decode successfully, so a
-    /// skipped corrupt line never emits orphaned siblings or pollutes the
-    /// sibling-dedup set.
+    /// Older sessions stored reasoning inline on the assistant (`AssistantItem.reasoning`).
+    /// Early backend-search sessions stored it as `AssistantItem.raw_output: Vec<Value>`.
+    /// Newer sessions don't have those fields on `AssistantItem` so serde would silently drop them.
+    /// We pre-extract them via [`xai_grok_sampling_types::upgrade_legacy_reasoning`].
+    /// The sibling `Reasoning` / `BackendToolCall` items are emitted *before* the corresponding assistant.
+    /// That matches the order `response_to_conversation_items` would produce.
+    /// The file on disk is not rewritten; this is a load-time-only transform so resumed sessions get sibling-shape replay without disk-write risk.
+    /// Idempotent: newer sessions have no `reasoning` / `raw_output` / `reasoning_content` fields, so the upgrader produces no siblings.
+    /// The upgrader runs only for lines that decode successfully.
+    /// A skipped corrupt line therefore never emits orphaned siblings or pollutes the sibling-dedup set.
     fn read_chat_history_sync(
         &self,
         path: PathBuf,
@@ -965,11 +1092,9 @@ impl JsonlStorageAdapter {
         }
         Ok(items)
     }
-    /// Apply a typed [`SummaryPatch`](super::summary_write::SummaryPatch) to
-    /// this session's `summary.json` under an exclusive sidecar lock, so the
-    /// read-modify-write serializes against every other writer (including a
-    /// second persistence actor on reconnect, or another process). This is the
-    /// only path live sessions use to mutate the summary.
+    /// Apply a typed [`SummaryPatch`](super::summary_write::SummaryPatch) to this session's `summary.json` under an exclusive sidecar lock.
+    /// The read-modify-write thus serializes against every other writer (including a second persistence actor on reconnect, or another process).
+    /// This is the only path live sessions use to mutate the summary.
     pub(crate) async fn apply_summary_patch(
         &self,
         info: &Info,
@@ -978,9 +1103,8 @@ impl JsonlStorageAdapter {
         self.apply_summary_patch_reporting(info, patch).await?;
         Ok(())
     }
-    /// Like [`Self::apply_summary_patch`], but returns whether a
-    /// `generated_title_if_absent` was applied or a manual pin was
-    /// cleared by `reset_title_to_auto` (see [`Summary::apply_patch`]).
+    /// Like [`Self::apply_summary_patch`], but returns whether a `generated_title_if_absent` was applied or a manual pin was cleared.
+    /// (`reset_title_to_auto` clears the pin; see [`Summary::apply_patch`].)
     async fn apply_summary_patch_reporting(
         &self,
         info: &Info,
@@ -995,7 +1119,6 @@ impl JsonlStorageAdapter {
         .map_err(io::Error::other)?
     }
 }
-/// Rewrite the session id an update carries. Shared by the fork copy and the
 fn transform_session_id_in_update(
     update: super::SessionUpdate,
     new_id: &acp::SessionId,
@@ -1011,8 +1134,8 @@ fn transform_session_id_in_update(
         }
     }
 }
-/// Next `segment_NNN` index in `compaction_dir`: one past the highest existing
-/// segment, or 0 when none exist. Resume-safe — derived from disk, not memory.
+/// Next `segment_NNN` index in `compaction_dir`: one past the highest existing segment, or 0 when none exist.
+/// Resume-safe: the index is derived from disk, not memory.
 async fn next_compaction_segment_index(compaction_dir: &std::path::Path) -> u64 {
     let Ok(mut entries) = tokio::fs::read_dir(compaction_dir).await else {
         return 0;
@@ -1035,10 +1158,25 @@ impl StorageAdapter for JsonlStorageAdapter {
         self.create_session_dir_owner_only(info)?;
         let summary_path = self.summary_file(info);
         if Path::new(&summary_path).exists() {
+            self.sync_parent_if_first_create_summary(info, &summary_path)?;
             tracing::info!("Loading existing session from JSONL");
             let bytes = tokio::fs::read(&summary_path).await?;
-            serde_json::from_slice::<Summary>(&bytes)
-                .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
+            let mut summary = serde_json::from_slice::<Summary>(&bytes)
+                .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+            if summary.session_kind.is_none() || summary.worktree_label.is_none() {
+                let lock_path = self.summary_lock_file(info);
+                summary = tokio::task::spawn_blocking(move || {
+                    super::summary_write::repair_untagged_worktree_summary(
+                        &mut summary,
+                        &summary_path,
+                        &lock_path,
+                    );
+                    summary
+                })
+                .await
+                .map_err(io::Error::other)?;
+            }
+            Ok(summary)
         } else {
             tracing::info!("Creating new session in JSONL");
             let mut summary = Summary::new(info, model_id)?;
@@ -1151,7 +1289,18 @@ impl StorageAdapter for JsonlStorageAdapter {
             .await
     }
     async fn append_chat_message(&self, info: &Info, message: &ConversationItem) -> io::Result<()> {
-        self.append_jsonl(self.chat_file(info), message).await?;
+        self.append_chat_message_commit_aware(info, message)
+            .await
+            .map_err(super::AppendChatError::into_io_error)
+    }
+    async fn append_chat_message_commit_aware(
+        &self,
+        info: &Info,
+        message: &ConversationItem,
+    ) -> Result<(), super::AppendChatError> {
+        self.append_jsonl(self.chat_file(info), message)
+            .await
+            .map_err(super::AppendChatError::NotCommitted)?;
         self.apply_summary_patch(
             info,
             super::summary_write::SummaryPatch {
@@ -1162,6 +1311,7 @@ impl StorageAdapter for JsonlStorageAdapter {
             },
         )
         .await
+        .map_err(super::AppendChatError::Committed)
     }
     async fn append_cwd_switch_commit_aware(
         &self,
@@ -1236,7 +1386,7 @@ impl StorageAdapter for JsonlStorageAdapter {
     async fn write_plan_state(&self, info: &Info, state: &TodoState) -> io::Result<()> {
         let state_json = serde_json::to_vec_pretty(state)
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
-        tokio::fs::write(self.plan_file(info), state_json).await
+        super::write_bytes_atomic_async(&self.plan_file(info), state_json).await
     }
     async fn write_plan_mode_state(
         &self,
@@ -1255,6 +1405,32 @@ impl StorageAdapter for JsonlStorageAdapter {
         let signals_json = serde_json::to_vec(signals)
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
         super::write_bytes_atomic_async(&self.signals_file(info), signals_json).await
+    }
+    async fn read_usage(
+        &self,
+        info: &Info,
+    ) -> io::Result<Option<crate::session::usage_file::SessionUsageFile>> {
+        let path = self.usage_file(info);
+        let data = match std::fs::read(&path) {
+            Ok(data) => data,
+            Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
+            Err(e) => return Err(e),
+        };
+        if data.iter().all(u8::is_ascii_whitespace) {
+            return Ok(None);
+        }
+        serde_json::from_slice(&data)
+            .map(Some)
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
+    }
+    async fn write_usage(
+        &self,
+        info: &Info,
+        usage: &crate::session::usage_file::SessionUsageFile,
+    ) -> io::Result<()> {
+        let json = serde_json::to_vec_pretty(usage)
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+        super::write_bytes_atomic_async(&self.usage_file(info), json).await
     }
     async fn write_announcement_state(
         &self,
@@ -1399,9 +1575,9 @@ impl StorageAdapter for JsonlStorageAdapter {
         );
         Ok(result)
     }
-    /// Resume path: loads everything except updates and rewind points. Rewind
-    /// points can be huge (full file-content snapshots) and are needed only on an
-    /// actual rewind, so they're deferred — loaded lazily by `FileStateTracker`.
+    /// Resume path: loads everything except updates and rewind points.
+    /// Rewind points can be huge (full file-content snapshots) and are needed only on an actual rewind.
+    /// So they're deferred and loaded lazily by `FileStateTracker`.
     async fn load_session_without_updates(
         &self,
         info: &Info,
@@ -1507,27 +1683,42 @@ impl StorageAdapter for JsonlStorageAdapter {
         self.write_jsonl(self.rewind_points_file(info), &merged)
             .await
     }
-    async fn sync_session_files(&self, info: &Info) -> io::Result<()> {
+    async fn sync_session_files_selected(
+        &self,
+        info: &Info,
+        files: super::SessionFileSet,
+    ) -> io::Result<()> {
         let info_clone = info.clone();
         let adapter_clone = self.clone();
         tokio::task::spawn_blocking(move || -> io::Result<()> {
             use std::fs::OpenOptions;
             let adapter = adapter_clone;
+            #[cfg(test)]
+            if let Some(session_sync_probe) = &adapter.session_sync_probe {
+                session_sync_probe(files)?;
+            }
             let files_to_sync = [
-                adapter.updates_file(&info_clone),
-                adapter.chat_file(&info_clone),
-                adapter.summary_file(&info_clone),
-                adapter.plan_file(&info_clone),
-                adapter.rewind_points_file(&info_clone),
+                (files.updates, adapter.updates_file(&info_clone)),
+                (files.chat, adapter.chat_file(&info_clone)),
+                (files.summary, adapter.summary_file(&info_clone)),
+                (files.plan, adapter.plan_file(&info_clone)),
+                (files.rewind_points, adapter.rewind_points_file(&info_clone)),
             ];
-            for file_path in &files_to_sync {
-                if file_path.exists()
-                    && let Ok(file) = OpenOptions::new().write(true).open(file_path)
-                {
-                    let _ = file.sync_all();
+            for (selected, file_path) in &files_to_sync {
+                if !selected {
+                    continue;
+                }
+                match OpenOptions::new().write(true).open(file_path) {
+                    Ok(file) => super::sync_file_durable(&file)?,
+                    Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+                    Err(error) => return Err(error),
                 }
             }
-            Ok(())
+            match super::sync_dir_durable(&adapter.session_dir(&info_clone)) {
+                Ok(()) => Ok(()),
+                Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+                Err(error) => Err(error),
+            }
         })
         .await
         .map_err(io::Error::other)?
@@ -1731,15 +1922,13 @@ impl StorageAdapter for JsonlStorageAdapter {
     }
 }
 /// Max decoded size for a data-URI image loaded from persisted history.
-/// Generous (20 MB) — fresh images use 5 MB, but loaded ones just need sanity-checking.
+/// Generous (20 MB): fresh images use 5 MB, but loaded ones just need sanity-checking.
 const MAX_LOADED_IMAGE_BYTES: usize = 20 * 1024 * 1024;
-/// Strip data-URI images the API would reject (see
-/// [`persisted_image_reject_reason`](crate::session::image_normalize::persisted_image_reject_reason):
-/// malformed/oversized payloads, truncated or API-rejected formats,
-/// dimensions outside the floors/ceiling) from loaded conversation items,
-/// so a poisoned history recovers instead of 400ing on every turn.
-/// User parts become a text placeholder; `ToolResultItem.images` entries
-/// are removed. HTTP(S) URLs are left untouched.
+/// Strip data-URI images the API would reject from loaded conversation items, so a poisoned history recovers instead of 400ing on every turn.
+/// The verdicts come from [`persisted_image_reject_reason`](crate::session::image_normalize::persisted_image_reject_reason).
+/// They cover malformed/oversized payloads, truncated or API-rejected formats, and dimensions outside the floors/ceiling.
+/// User parts become a text placeholder; `ToolResultItem.images` entries are removed.
+/// HTTP(S) URLs are left untouched.
 ///
 /// Returns the number of images stripped.
 pub(crate) fn strip_invalid_images(items: &mut [ConversationItem]) -> usize {
@@ -1774,8 +1963,7 @@ pub(crate) fn strip_invalid_images(items: &mut [ConversationItem]) -> usize {
     }
     stripped
 }
-/// Check that a `data:` URI has a valid `;base64,` header and decodable payload
-/// within the size limit.
+/// Check that a `data:` URI has a valid `;base64,` header and decodable payload within the size limit.
 fn is_valid_data_uri_image(url: &str) -> bool {
     use base64::Engine as _;
     let after_data = match url.strip_prefix("data:") {
@@ -1813,3 +2001,5 @@ fn is_valid_data_uri_image(url: &str) -> bool {
 mod durable_tests;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod worktree_heal_tests;

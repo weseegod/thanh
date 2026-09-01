@@ -54,9 +54,6 @@ impl WorktreeHintMode {
 }
 
 /// Resolved `[hints]` worktree preferences for `/new` and `/fork`.
-///
-/// Read via effective config merge when available; falls back to partial layer
-/// merge so a bad user `config.toml` does not drop managed/requirements hints.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResolvedHints {
     pub new_session_worktree_mode: WorktreeHintMode,
@@ -82,7 +79,7 @@ impl ResolvedHints {
     }
 }
 
-/// Resolved per-tip contextual-hint gates (one bool per tip). Defaults all on.
+/// Resolved per-tip contextual-hint gates. Defaults all on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ResolvedContextualHints {
     pub undo: bool,
@@ -108,11 +105,8 @@ impl Default for ResolvedContextualHints {
     }
 }
 
-/// Resolve the per-tip contextual-hint gates. Per tip the precedence is:
-/// env master `GROK_CONTEXTUAL_HINTS` (all-on/off) > user config
-/// `[ui.contextual_hints].X` > remote settings `contextual_hints.X` >
-/// default ON. User-explicit beats the remote tier (which only sets the
-/// default / soft-disables); the env master is a global kill/force switch.
+/// Per tip, the env master `GROK_CONTEXTUAL_HINTS` (all-on/off) beats user config `[ui.contextual_hints].X`.
+/// User config beats the remote tier `contextual_hints.X` (which only sets the default or soft-disables), and that beats the default ON.
 pub fn resolve_contextual_hints(
     ui: &ContextualHints,
     remote: Option<&ContextualHintsRemote>,
@@ -154,11 +148,8 @@ fn merge_hints_config_layers(
     layers.effective_config_base()
 }
 
-/// Resolve `[hints]` from effective config or partial layer merge.
-///
-/// Prefer passing a pre-loaded `effective_config` when startup already called
-/// [`crate::config::load_effective_config`]. When it is `None`, merges the
-/// same layers tips/announcements use so managed/requirements still apply.
+/// Prefer passing a pre-loaded `effective_config` when startup already called [`crate::config::load_effective_config`].
+/// When it is `None`, this merges the same layers tips/announcements use so managed/requirements still apply.
 pub fn resolve_hints(
     effective_config: Option<&TomlValue>,
     requirements: Option<&TomlValue>,
@@ -185,7 +176,6 @@ mod tests {
         assert_eq!(resolved.new_session_worktree_mode, WorktreeHintMode::Never);
     }
 
-    /// `/new` defaults to Never and `/fork` to Ask, so an absent key is not the same answer for both.
     #[test]
     fn resolve_hints_defaults_differ_per_command() {
         let resolved = resolve_hints(None, None, None, None);
@@ -203,8 +193,8 @@ mod tests {
 
     const ENV_CONTEXTUAL_HINTS: &str = "GROK_CONTEXTUAL_HINTS";
 
-    // `GROK_CONTEXTUAL_HINTS` is process-global; serialize the tests reading it
-    // and force it unset so a developer's shell value can't make them flaky.
+    // `GROK_CONTEXTUAL_HINTS` is process-global
+    // Serialize the tests reading it and force it unset so a developer's shell value can't make them flaky
     static CONTEXTUAL_HINTS_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     fn contextual_hints_guard() -> std::sync::MutexGuard<'static, ()> {
@@ -249,7 +239,6 @@ mod tests {
     #[test]
     fn contextual_hints_config_opts_out_per_tip() {
         let _g = contextual_hints_guard();
-        // User disables only the undo tip; the others stay on.
         let ui = ContextualHints {
             undo: Some(false),
             ..ContextualHints::default()
@@ -267,9 +256,7 @@ mod tests {
     #[test]
     fn contextual_hints_remote_tier_controls_default_per_tip() {
         let _g = contextual_hints_guard();
-        // Remote disables plan_mode + ssh_wrap; absent tips fall through to
-        // default ON. Setting two distinct fields also catches a cross-wired
-        // resolver line (reading one remote field into another's gate).
+        // Disabling two distinct fields catches a cross-wired resolver line (reading one remote field into another's gate)
         let r = ContextualHintsRemote {
             ssh_wrap: Some(false),
             ..remote(None, Some(false), None, None, None)
@@ -286,7 +273,6 @@ mod tests {
     #[test]
     fn contextual_hints_config_true_overrides_remote_disable() {
         let _g = contextual_hints_guard();
-        // Explicit user opt-in beats a remote `false` (the disable tier).
         let ui = ContextualHints {
             image_input: Some(true),
             ..ContextualHints::default()
@@ -303,7 +289,6 @@ mod tests {
     fn contextual_hints_env_master_forces_all_on() {
         let _g = contextual_hints_guard();
         unsafe { std::env::set_var(ENV_CONTEXTUAL_HINTS, "1") };
-        // User + remote both disable every tip; the env master forces all on.
         let ui = ContextualHints {
             undo: Some(false),
             plan_mode: Some(false),
@@ -337,7 +322,6 @@ mod tests {
     fn contextual_hints_env_master_zero_forces_all_off() {
         let _g = contextual_hints_guard();
         unsafe { std::env::set_var(ENV_CONTEXTUAL_HINTS, "0") };
-        // User + remote both enable; the env master forces all off (global kill).
         let ui = ContextualHints {
             undo: Some(true),
             plan_mode: Some(true),

@@ -5,6 +5,7 @@ version = "0.1.220-alpha.4"
 edition.workspace = true
 
 [dependencies]
+dunce = { workspace = true }
 anyhow = { workspace = true }
 futures = { workspace = true }
 indicatif = { workspace = true }
@@ -18,10 +19,13 @@ time = { workspace = true, features = ["serde"] }
 tokio = { workspace = true, features = ["fs", "process", "io-util", "macros", "time"] }
 tracing = { workspace = true }
 url = { workspace = true }
+xai-dirs = { workspace = true }
 xai-grok-shell = { workspace = true }
 xai-grok-telemetry = { workspace = true }
 xai-grok-tools = { workspace = true }
 xai-grok-version = { workspace = true }
+flate2 = { workspace = true }
+zstd = { workspace = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 libc = { workspace = true }
@@ -34,4 +38,3 @@ tempfile = { workspace = true }
 time = { workspace = true, features = ["serde"] }
 tokio = { workspace = true, features = ["fs", "macros", "rt-multi-thread", "test-util"] }
 wiremock = { workspace = true }
-dunce = { workspace = true }

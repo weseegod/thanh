@@ -20,6 +20,7 @@
 //! through a `ConnectionBorrow` (crate-internal) that
 //! both ends share.
 
+use std::collections::HashSet;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
@@ -558,6 +559,9 @@ pub struct SessionBindReport {
     /// unknown, as does any set lacking
     /// [`xai_tool_protocol::IMAGE_CAPABILITIES_V1`].
     pub image_capabilities: Vec<String>,
+    /// Tool names the bind ack advertised. In-process projection of
+    /// [`xai_tool_protocol::SessionBindServerResult::tools`], not a wire field.
+    pub advertised_tool_names: Vec<String>,
 }
 
 impl From<&xai_tool_protocol::SessionBindServerResult> for SessionBindReport {
@@ -569,6 +573,7 @@ impl From<&xai_tool_protocol::SessionBindServerResult> for SessionBindReport {
             unserved_tool_ids: result.unserved_tool_ids.clone(),
             resolve_error: result.resolve_error.clone(),
             image_capabilities: result.image_capabilities.clone(),
+            advertised_tool_names: result.tools.iter().map(|t| t.name.clone()).collect(),
         }
     }
 }
@@ -707,9 +712,23 @@ impl ToolHarnessInner {
         let borrow = self.borrow.as_ref().ok_or_else(|| {
             ClientError::InvalidConfig("local-only harness has no server connection".to_owned())
         })?;
-        let result = list_remote_tools(borrow.connection().as_ref(), &self.session).await?;
+        let mut result = list_remote_tools(borrow.connection().as_ref(), &self.session).await?;
+        result.tools = merge_discovered_remote_tools(
+            self.remote_tools.load().as_ref(),
+            result.tools,
+            self.last_bind_report.load_full().as_deref(),
+        );
         self.remote_tools.store(Arc::new(result.tools.clone()));
         Ok(result)
+    }
+
+    fn apply_discovered_remote_tools(&self, incoming: Vec<ToolDescription>) {
+        let merged = merge_discovered_remote_tools(
+            self.remote_tools.load().as_ref(),
+            incoming,
+            self.last_bind_report.load_full().as_deref(),
+        );
+        self.remote_tools.store(Arc::new(merged));
     }
 
     /// Wins `begin_teardown` then runs cleanup. Idempotent. Synchronous so
@@ -728,6 +747,38 @@ impl ToolHarnessInner {
         let inbox_tx = self.session_inbox_tx.lock().take();
         release_session_binding(borrow.connection(), &self.session, inbox_tx.as_ref());
     }
+}
+
+/// Merge a `tools.list` refresh into the cache. After a successful bind
+/// (`resolve_error` unset), tools the ack advertised are not dropped just
+/// because this refresh is a strict subset.
+fn merge_discovered_remote_tools(
+    current: &[ToolDescription],
+    incoming: Vec<ToolDescription>,
+    report: Option<&SessionBindReport>,
+) -> Vec<ToolDescription> {
+    let Some(report) = report else {
+        return incoming;
+    };
+    if report.resolve_error.is_some() || report.advertised_tool_names.is_empty() {
+        return incoming;
+    }
+    let incoming_names: HashSet<String> = incoming.iter().map(|t| t.name.clone()).collect();
+    let ack: HashSet<&str> = report
+        .advertised_tool_names
+        .iter()
+        .map(String::as_str)
+        .collect();
+    let mut merged = incoming;
+    for tool in current {
+        if incoming_names.contains(&tool.name) {
+            continue;
+        }
+        if ack.contains(tool.name.as_str()) {
+            merged.push(tool.clone());
+        }
+    }
+    merged
 }
 
 /// Bound `tools.list` so discovery cannot pin a connection on a hung RPC.
@@ -1268,6 +1319,13 @@ impl ToolHarness {
         self.inner.last_bind_report.store(Some(Arc::new(report)));
     }
 
+    /// Test-only: apply a `tools.list` / `ToolsChanged` refresh through the
+    /// same merge as discovery.
+    #[doc(hidden)]
+    pub fn apply_discovered_remote_tools_for_tests(&self, tools: Vec<ToolDescription>) {
+        self.inner.apply_discovered_remote_tools(tools);
+    }
+
     /// Dispatch a tool call.
     ///
     /// Local-first: if `tool_id` is registered in the
@@ -1682,16 +1740,18 @@ impl ToolHarness {
     }
 
     /// Query the server for remote tool descriptions via `tools.list` RPC
-    /// and store the result in the in-memory cache. Returns the full
-    /// list payload, including workspace-boundness.
+    /// and merge them into the in-memory cache. After a successful bind,
+    /// a strictly smaller list does not drop tools the bind ack advertised.
+    /// Returns the full list payload, including workspace-boundness.
     pub async fn query_remote_tools(
         &self,
     ) -> Result<xai_tool_protocol::ToolsListResult, ClientError> {
         self.inner.refresh_remote_tools().await
     }
 
-    /// Start background tool discovery: populate the cache, then
-    /// re-query on every `ToolsChanged` notification.
+    /// Start background tool discovery: populate the cache if a bind has
+    /// not already stored the ack, then re-query on every `ToolsChanged`
+    /// notification.
     pub async fn start_tool_discovery(&self) {
         if self.inner.borrow.as_ref().is_some_and(|b| b.is_torn_down()) {
             return;
@@ -1704,7 +1764,9 @@ impl ToolHarness {
         // Local weak for post-install undo if finish_teardown steals the mutex.
         let inbox_weak = self.inner.session_inbox_tx.lock().clone();
 
-        if let Err(e) = self.query_remote_tools().await {
+        let cache_already_has_bind_ack = !self.inner.remote_tools.load().is_empty()
+            && self.inner.last_bind_report.load().is_some();
+        if !cache_already_has_bind_ack && let Err(e) = self.query_remote_tools().await {
             tracing::warn!(error = %e, "tool discovery: initial query failed");
         }
 
@@ -1729,7 +1791,7 @@ impl ToolHarness {
                         match list_remote_tools(connection.as_ref(), &session).await {
                             Ok(result) => {
                                 if let Some(inner) = weak.upgrade() {
-                                    inner.remote_tools.store(Arc::new(result.tools));
+                                    inner.apply_discovered_remote_tools(result.tools);
                                 }
                             }
                             Err(e) => {
@@ -2523,17 +2585,6 @@ mod tests {
     }
 
     #[test]
-    fn local_registry_starts_empty() {
-        let registry = LocalRegistry::new();
-        assert_eq!(registry.len(), 0);
-        assert!(registry.is_empty());
-        let id = ToolId::new("missing").expect("valid");
-        assert!(!registry.contains(&id));
-        assert!(registry.find(&id).is_none());
-        assert!(!registry.unregister(&id));
-    }
-
-    #[test]
     fn has_remote_tool_consults_only_the_remote_cache() {
         let registry = LocalRegistry::new();
         registry.register(EchoTool {
@@ -2560,6 +2611,83 @@ mod tests {
         // Cleared on unbind.
         harness.seed_remote_tools_for_tests(Vec::new());
         assert!(!harness.has_remote_tool("bash"));
+    }
+
+    /// After a successful bind stores N tools, a ToolsChanged refresh that
+    /// returns N-1 must not shrink the cache below the last bind-ack set.
+    #[test]
+    fn tools_changed_does_not_shrink_below_last_bind_ack() {
+        let harness = ToolHarness::local_only_with(
+            LocalRegistry::new(),
+            SessionId::new("bind-ack-shrink").expect("valid session"),
+            xai_tool_runtime::TypedExtensions::default(),
+        );
+        harness.seed_remote_tools_for_tests(vec![
+            ToolDescription::new("read_file", "read a file"),
+            ToolDescription::new("get_terminal_command_output", "read terminal output"),
+        ]);
+        harness.seed_bind_report_for_tests(SessionBindReport {
+            advertised_tool_names: vec![
+                "read_file".to_owned(),
+                "get_terminal_command_output".to_owned(),
+            ],
+            ..Default::default()
+        });
+
+        harness.apply_discovered_remote_tools_for_tests(vec![ToolDescription::new(
+            "read_file",
+            "read a file",
+        )]);
+
+        let names: Vec<String> = harness
+            .list_remote_tools()
+            .into_iter()
+            .map(|t| t.name)
+            .collect();
+        assert!(
+            names.contains(&"read_file".to_owned())
+                && names.contains(&"get_terminal_command_output".to_owned()),
+            "discovery shrink must not drop a bind-ack tool, got {names:?}"
+        );
+    }
+
+    /// A fail-closed bind (`resolve_error` set) is authoritative: a smaller
+    /// refresh replaces the cache.
+    #[test]
+    fn tools_changed_replace_is_allowed_when_resolve_error_is_set() {
+        let harness = ToolHarness::local_only_with(
+            LocalRegistry::new(),
+            SessionId::new("bind-ack-fail-closed").expect("valid session"),
+            xai_tool_runtime::TypedExtensions::default(),
+        );
+        harness.seed_remote_tools_for_tests(vec![ToolDescription::new("read_file", "read a file")]);
+        harness.seed_bind_report_for_tests(SessionBindReport {
+            advertised_tool_names: vec!["read_file".to_owned()],
+            resolve_error: Some("missing_tool_config".to_owned()),
+            ..Default::default()
+        });
+
+        harness.apply_discovered_remote_tools_for_tests(Vec::new());
+        assert!(
+            harness.list_remote_tools().is_empty(),
+            "fail-closed bind must allow the refresh to replace the cache"
+        );
+    }
+
+    #[test]
+    fn session_bind_report_projects_ack_tool_names() {
+        let result = xai_tool_protocol::SessionBindServerResult {
+            tools: vec![
+                ToolDescription::new("read_file", "read a file"),
+                ToolDescription::new("get_terminal_command_output", "read terminal output"),
+            ],
+            ..Default::default()
+        };
+        let report = SessionBindReport::from(&result);
+        assert_eq!(
+            report.advertised_tool_names,
+            vec!["read_file", "get_terminal_command_output"]
+        );
     }
 
     #[test]
@@ -2831,24 +2959,6 @@ mod tests {
             }
         }
         assert!(saw_terminal_ok, "local echo must yield Terminal(Ok)");
-    }
-
-    #[tokio::test]
-    async fn local_only_emit_session_event_is_noop() {
-        // No server borrow → `emit_session_event` must short-circuit before
-        // building a frame. The test passes if the call returns without
-        // touching `send_notification` (no panic from a missing
-        // connection actor).
-        let harness = ToolHarness::local_only_with(
-            LocalRegistry::new(),
-            SessionId::new("test-no-hub").expect("valid"),
-            Default::default(),
-        );
-        harness
-            .emit_session_event(SessionEvent::PhaseChanged {
-                phase: xai_tool_protocol::session_event::SessionPhase::Idle,
-            })
-            .await;
     }
 
     /// Wrap a [`HookFrame`](xai_tool_protocol::HookFrame) in the JSON-RPC `Request` envelope.

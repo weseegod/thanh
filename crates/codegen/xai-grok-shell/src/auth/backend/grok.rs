@@ -1,4 +1,4 @@
-//! The Grok Build backend: xAI OAuth2 / enterprise OIDC, the operator's auth binary, devbox.
+//! The Grok Build backend: xAI OAuth2, enterprise OIDC, the operator's auth binary, or a devbox.
 
 use std::sync::Arc;
 
@@ -18,9 +18,25 @@ impl AuthBackend for GrokAuthBackend {
         config.auth_scope()
     }
 
-    /// Pre-OIDC devbox auth files wrote this key, and only this backend ever minted into it.
+    /// Devbox auth files from before the OIDC flow wrote this key, and only this backend ever minted credentials into it.
     fn inherited_scopes(&self) -> &'static [&'static str] {
         &[crate::auth::model::LEGACY_SCOPE]
+    }
+
+    /// An xAI login can come from OAuth2, a customer's own login provider, the auth binary, or a devbox, so there is no one issuer to check for.
+    /// Saying yes to all of them is safe: a credential minted elsewhere still gets sent to xAI, which rejects it.
+    fn owns(&self, _auth: &GrokAuth) -> bool {
+        true
+    }
+
+    /// Some customers run their own gateway and sign in there with the session xAI issued them, so a list of allowed hosts would lock them out.
+    /// The models cache stops one backend's models from being used by another: it remembers the URL each entry came from and ignores the rest.
+    fn may_receive_session(&self, _url: &str) -> bool {
+        true
+    }
+
+    fn login_host(&self, config: &GrokComConfig) -> String {
+        super::host_of(&config.grok_ws_origin)
     }
 
     fn is_xai_authority(&self) -> bool {

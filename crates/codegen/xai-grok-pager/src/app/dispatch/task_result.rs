@@ -234,7 +234,6 @@ pub(crate) fn deliver_doctor_message(app: &mut AppView, preferred: AgentId, mess
         action: None,
     });
 }
-/// Handle a completed async task result.
 pub(super) fn dispatch_task_result(result: TaskResult, app: &mut AppView) -> Vec<Effect> {
     if result.ends_startup() {
         app.finish_startup(xai_grok_telemetry::startup::StartupOutcome::Ok);

@@ -1,9 +1,5 @@
-//! Mouse input handling for [`AgentView`]: the `handle_mouse` event handler
-//! (click-to-focus, hit-testing of cached click rects, per-pane click
-//! dispatch) and the scrollbar click helper.
-//!
-//! Extracted from `agent_view.rs` as a sibling `impl AgentView` block (same
-//! pattern as `queue_edit.rs`).
+//! Mouse input handling for [`AgentView`]: the `handle_mouse` event handler and the scrollbar click helper.
+//! `handle_mouse` covers click-to-focus, hit-testing of cached click rects, and per-pane click dispatch.
 //!
 //! Hit-tests here assume the cached rects come from the last rendered frame.
 use super::actions::Action;
@@ -18,8 +14,7 @@ use crate::views::prompt_widget::PromptEvent;
 use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
 use std::time::Instant;
 impl AgentView {
-    /// Time-paired multi-click check for the prompt textarea. Pairing is
-    /// time-only (no coordinates); a mispaired action is one undo step.
+    /// Multi-click check for the prompt textarea, paired by time only (no coordinates); a mispaired action is one undo step.
     /// Records the click for the next pairing.
     pub(super) fn prompt_click_is_double(&mut self) -> bool {
         let now = std::time::Instant::now();
@@ -31,7 +26,7 @@ impl AgentView {
     }
     /// Handle mouse events: click-to-focus, forward to prompt textarea.
     ///
-    /// Scroll events are handled at app level (not here).
+    /// Scroll events are handled at app level.
     pub(super) fn handle_mouse(&mut self, mouse: &MouseEvent) -> InputOutcome {
         match mouse.kind {
             MouseEventKind::Down(MouseButton::Left) => {
@@ -412,6 +407,21 @@ impl AgentView {
                     return InputOutcome::Unchanged;
                 }
                 match self.pane_areas.hit_test(mouse.column, mouse.row) {
+                    Some(AgentPane::Dock) => {
+                        self.set_active_pane(AgentPane::Dock, false);
+                        let row = mouse.row.saturating_sub(self.pane_areas.dock.y);
+                        let items = self.dock_items();
+                        match crate::views::dock::item_at(&self.dock_counts(), row) {
+                            Some(item) => {
+                                if let Some(idx) = items.iter().position(|it| *it == item) {
+                                    self.dock_cursor = idx;
+                                }
+                                self.dock_activate(item);
+                                InputOutcome::Changed
+                            }
+                            None => InputOutcome::Changed,
+                        }
+                    }
                     Some(AgentPane::Todo) => {
                         self.set_active_pane(AgentPane::Todo, false);
                         self.todo.handle_mouse(
@@ -947,7 +957,8 @@ impl AgentView {
                         | AgentPane::Queue
                         | AgentPane::Prompt
                         | AgentPane::Tasks
-                        | AgentPane::Catalog => None,
+                        | AgentPane::Catalog
+                        | AgentPane::Dock => None,
                     })
                 };
                 let new_prompt_hover = hit == Some(AgentPane::Prompt)
@@ -1160,11 +1171,10 @@ impl AgentView {
             _ => InputOutcome::Unchanged,
         }
     }
-    /// Apply a scrollbar click/drag at the given screen row.
+    /// Apply a scrollbar click or drag at the given screen row.
     ///
-    /// Uses [`scrollbar_click_to_offset`] (same math as the thumb renderer)
-    /// so the resulting scroll position is the exact inverse of where the
-    /// thumb would be drawn for that offset.
+    /// Uses [`scrollbar_click_to_offset`], the same math as the thumb renderer.
+    /// The resulting scroll position is the exact inverse of where the thumb would be drawn for that offset.
     pub(super) fn apply_scrollbar_click(&mut self, screen_y: u16) -> bool {
         use crate::render::scrollbar::{ScrollbarClickResult, scrollbar_click_to_offset};
         let Some(sb) = self.hit_scrollbar.rect else {
@@ -1209,8 +1219,7 @@ mod tests {
     use crossterm::event::KeyModifiers;
     use ratatui::buffer::Buffer;
     use ratatui::layout::Rect;
-    /// Render the queue, locate the action-button cell where `hit` resolves
-    /// to `selected_id`, and dispatch a left-click on it; returns the outcome.
+    /// Render the queue, locate the action-button cell where `hit` resolves to `selected_id`, and dispatch a left-click on it; returns the outcome.
     fn click_queue_button(
         agent: &mut AgentView,
         selected_id: u64,
@@ -1254,8 +1263,7 @@ mod tests {
     fn click_edit(agent: &mut AgentView, selected_id: u64) -> InputOutcome {
         click_queue_button(agent, selected_id, |a, c, r| a.queue.edit_click(c, r))
     }
-    /// Mouse "Send now" (interject) on the last local row keeps the pane open
-    /// when a server row remains — the third sibling site of the same fix.
+    /// Mouse "Send now" (interject) on the last local row keeps the pane open when a server row remains.
     #[test]
     fn mouse_send_now_last_local_row_keeps_pane_open_when_server_remains() {
         let mut agent = make_running_agent();
@@ -1278,8 +1286,7 @@ mod tests {
         assert!(agent.queue.overlay.focused);
         assert_eq!(agent.active_pane, AgentPane::Queue);
     }
-    /// Hide via the mouse "Send now" path (site 3): with no server rows left,
-    /// interjecting the last local row empties the merged view → hide.
+    /// With no server rows left, interjecting the last local row via the mouse "Send now" path empties the merged view, so the pane hides.
     #[test]
     fn mouse_send_now_last_local_row_hides_pane_when_shared_queue_empty() {
         let mut agent = running_agent_local_only();
@@ -1297,10 +1304,8 @@ mod tests {
         assert!(!agent.queue.overlay.focused);
         assert_eq!(agent.active_pane, AgentPane::Scrollback);
     }
-    /// Send-now `[Interject]` on the lone local row while it is being
-    /// DIRTY-edited: the removal must discard the edit via the canonical
-    /// helper — the old inline removal stranded `EditingQueued` and armed
-    /// the invisible modal.
+    /// Send-now `[Interject]` on the lone local row while it is being dirty-edited: the removal must discard the edit via the canonical helper.
+    /// The old inline removal stranded `EditingQueued` and left an invisible modal active.
     #[test]
     fn mouse_send_now_edited_lone_local_row_discards_edit_without_orphaned_modal() {
         let mut agent = running_agent_local_only();
@@ -1336,10 +1341,8 @@ mod tests {
         assert_eq!(agent.prompt.text(), "draft");
         assert!(!agent.queue.overlay.visible);
     }
-    /// Mouse `[cancel]` of the FRONT local row being edited while idle:
-    /// discarding the edit releases the drain block, so the click must kick
-    /// `DrainQueue` like the modal Delete arm (the row behind must not sit
-    /// stuck until an unrelated trigger).
+    /// Mouse `[cancel]` of the front local row being edited while idle: discarding the edit releases the drain block.
+    /// The click must kick `DrainQueue` like the modal Delete arm, so the row behind does not sit stuck until an unrelated trigger.
     #[test]
     fn mouse_delete_edited_front_row_while_idle_kicks_drain() {
         let mut agent = running_agent_local_only();
@@ -1379,10 +1382,8 @@ mod tests {
         assert!(agent.active_modal.is_none());
         assert_eq!(agent.prompt.text(), "draft");
     }
-    /// Mouse `[edit]` on a queued row enters the same queued-edit flow as the
-    /// keyboard `e` (`QueueEvent::EditSelected` → `enter_queue_edit`): the
-    /// composer loads the row text and the prompt pane takes focus in
-    /// `EditingQueued` mode, leaving the row itself queued.
+    /// Mouse `[edit]` on a queued row enters the same queued-edit flow as the keyboard `e` (`QueueEvent::EditSelected`, then `enter_queue_edit`).
+    /// The composer loads the row text and the prompt pane takes focus in `EditingQueued` mode, leaving the row itself queued.
     #[test]
     fn mouse_edit_click_enters_queued_edit_mode() {
         let mut agent = running_agent_local_only();
@@ -1412,11 +1413,9 @@ mod tests {
         assert_eq!(agent.active_pane, AgentPane::Prompt);
         assert_eq!(agent.session.pending_prompts.len(), 1);
     }
-    /// Clicking another row's `[edit]` while a DIRTY queued edit is active
-    /// must not re-enter `enter_queue_edit` — that would bypass the
-    /// dirty-edit lock and overwrite `stashed_prompt`, so Esc would restore
-    /// the edit text instead of the user's original draft. The click falls
-    /// through to the pane switch, which the lock blocks.
+    /// Clicking another row's `[edit]` while a dirty queued edit is active must not re-enter `enter_queue_edit`.
+    /// That would bypass the dirty-edit lock and overwrite `stashed_prompt`, so Esc would restore the edit text instead of the user's original draft.
+    /// The click falls through to the pane switch, which the lock blocks.
     #[test]
     fn mouse_edit_click_during_dirty_edit_preserves_first_edit_and_stash() {
         let mut agent = make_running_agent();
@@ -1457,9 +1456,8 @@ mod tests {
             "no hold effect may be emitted for the clicked row"
         );
     }
-    /// Same guard for a dirty SERVER-row edit: clicking another row's
-    /// `[edit]` must not replace the edit (which would strand the first
-    /// row's combine hold) nor emit a second `QueueHoldEdit`.
+    /// Same guard for a dirty server-row edit: clicking another row's `[edit]` must not replace the edit nor emit a second `QueueHoldEdit`.
+    /// Replacing it would strand the first row's combine hold.
     #[test]
     fn mouse_edit_click_during_dirty_server_edit_keeps_hold_target() {
         let mut agent = make_running_agent();
@@ -1487,11 +1485,9 @@ mod tests {
             "no second QueueHoldEdit may be emitted while one row is held"
         );
     }
-    /// Clicking another row's `[edit]` while a CLEAN (unchanged) edit is
-    /// active must open the clicked row's edit on the SAME click: the
-    /// canonical pane switch exits the clean edit — releasing its server
-    /// combine hold — and the arm then enters the clicked row instead of
-    /// letting the click die on the pane switch.
+    /// Clicking another row's `[edit]` while a clean (unchanged) edit is active must open the clicked row's edit on the same click.
+    /// The canonical pane switch exits the clean edit and releases its server combine hold.
+    /// The arm then enters the clicked row instead of letting the click die on the pane switch.
     #[test]
     fn mouse_edit_click_during_clean_edit_switches_to_clicked_row() {
         let mut agent = make_running_agent();
@@ -1564,8 +1560,7 @@ mod tests {
             "no QueueHoldEdit may be emitted for a row the shell doesn't have"
         );
     }
-    /// A synthetic left-click on a rendered follow-up chip yields the LITERAL
-    /// `SubmitFollowUp` action (never a slash-command path).
+    /// A synthetic left-click on a rendered follow-up chip yields the literal `SubmitFollowUp` action (never a slash-command path).
     #[test]
     fn follow_up_chip_click_yields_literal_submit_action() {
         use crate::app::agent_view::test_fixtures::make_agent;
@@ -1591,8 +1586,7 @@ mod tests {
             other => panic!("expected SubmitFollowUp, got {other:?}"),
         }
     }
-    /// Double-click on a `[Pasted: N lines]` chip expands it into plain
-    /// editable text; the first click only places the cursor on the chip.
+    /// Double-click on a `[Pasted: N lines]` chip expands it into plain editable text; the first click only places the cursor on the chip.
     #[test]
     fn double_click_on_paste_chip_expands_it() {
         use crate::app::agent_view::test_fixtures::make_agent;

@@ -1,13 +1,10 @@
 //! `thanh wrap` — run any command in a local PTY that forwards its clipboard.
 //!
-//! Generalizes the `grok ssh` wrapper: spawns an arbitrary command inside a
-//! local pseudo-terminal, intercepts OSC 52 clipboard escape sequences from
-//! its output, and writes their payload to the local system clipboard. Useful
-//! for containerized or remote shells (`docker exec`, `kubectl exec`, ...)
-//! whose clipboard cannot otherwise reach the user — especially in terminals
-//! that do not handle OSC 52 themselves (for example Apple Terminal). Also
-//! stamps `LC_GROK_APPEARANCE` from the local OS theme so a remote
-//! `theme = "auto"` can resolve over SSH + tmux.
+//! Generalizes the `grok ssh` wrapper: spawns an arbitrary command inside a local pseudo-terminal.
+//! It intercepts OSC 52 clipboard escape sequences from the command's output and writes their payload to the local system clipboard.
+//! It is useful for containerized or remote shells (`docker exec`, `kubectl exec`, ...) whose clipboard cannot otherwise reach the user.
+//! That matters most in terminals that do not handle OSC 52 themselves (for example Apple Terminal).
+//! It also stamps `LC_GROK_APPEARANCE` from the local OS theme so a remote `theme = "auto"` can resolve over SSH and tmux.
 //!
 //! Resolvable programs spawn directly. On Unix, commands a direct spawn cannot
 //! run — a single shell-quoted string (`thanh wrap "mycli ssh host"`) or a shell
@@ -24,9 +21,9 @@ use crate::app::WrapArgs;
 
 /// Run the `thanh wrap` command.
 ///
-/// On Unix interactive sessions the command runs inside a local PTY so its
-/// OSC 52 clipboard sequences can be intercepted and written to the local
-/// clipboard. Otherwise the command is executed directly (no wrapping).
+/// On Unix interactive sessions the command runs inside a local PTY.
+/// Its OSC 52 clipboard sequences are intercepted and written to the local clipboard.
+/// Otherwise the command is executed directly (no wrapping).
 pub fn run(args: &WrapArgs) -> Result<()> {
     // `command` is `required` in clap, so it always has at least one element.
     let program = args
@@ -34,12 +31,9 @@ pub fn run(args: &WrapArgs) -> Result<()> {
         .first()
         .ok_or_else(|| anyhow::anyhow!("thanh wrap: no command given"))?;
 
-    // Unix: derive both spawn plans up front from one env snapshot so the PTY
-    // attempt and its fallback route consistently. The wrapped run uses
-    // `$SHELL -i` when routing through the shell (rc files load, aliases
-    // expand — safe because it runs inside our PTY); the exec fallback drops
-    // `-i` because an interactive shell without our PTY risks job-control
-    // noise.
+    // Unix: derive both spawn plans up front from one env snapshot so the PTY attempt and its fallback route consistently
+    // The wrapped run uses `$SHELL -i` when routing through the shell (rc files load, aliases expand; safe because it runs inside our PTY)
+    // The exec fallback drops `-i` because an interactive shell without our PTY risks job-control noise
     #[cfg(unix)]
     let (wrapped, fallback) = {
         let shell = user_shell();
@@ -90,11 +84,9 @@ enum ShellMode {
     Plain,
 }
 
-/// Decide how to launch the wrapped command: direct spawn, or via the user's
-/// shell when a direct spawn cannot work.
+/// Decide how to launch the wrapped command: direct spawn, or via the user's shell when a direct spawn cannot work.
 ///
-/// Pure so it is testable without the real environment: `program_in_path` is
-/// the caller's `PATH` lookup result for `command[0]`.
+/// Pure so it is testable without the real environment: `program_in_path` is the caller's `PATH` lookup result for `command[0]`.
 #[cfg(unix)]
 fn derive_spawn(
     command: &[String],
@@ -140,9 +132,9 @@ fn derive_spawn(
     }
 }
 
-/// Join argv back into one shell command line, leaving the first word bare:
-/// shells only expand aliases on unquoted words, so quoting it would break
-/// the very case this route exists for. Every following word is quoted.
+/// Join argv back into one shell command line, leaving the first word bare.
+/// Shells only expand aliases on unquoted words, so quoting it would break the very case this route exists for.
+/// Every following word is quoted.
 #[cfg(unix)]
 fn join_command_line(command: &[String]) -> String {
     let mut line = command[0].clone();
@@ -153,28 +145,25 @@ fn join_command_line(command: &[String]) -> String {
     line
 }
 
-/// Single-quote `word` for a POSIX shell. Always quotes: a hand-maintained
-/// bare-word safe set rots per shell (zsh alone expands bare `=word`), and
-/// only the shell ever reads the composed line.
+/// Single-quote `word` for a POSIX shell.
+/// Always quotes: a hand-maintained bare-word safe set rots per shell (zsh alone expands bare `=word`).
+/// Only the shell ever reads the composed line.
 #[cfg(unix)]
 fn quote_word(word: &str) -> String {
-    // Single quotes are literal in POSIX shells except `'` itself, which must
-    // close the quote, escape, and reopen: `'` → `'\''`.
+    // Single quotes are literal in POSIX shells except `'` itself, which must close the quote, escape, and reopen: `'` becomes `'\''`
     format!("'{}'", word.replace('\'', "'\\''"))
 }
 
-/// The user's shell from `$SHELL` when it points at an existing file,
-/// otherwise `/bin/sh`. `$SHELL` is preferred because the user typed the
-/// wrapped command in their own shell's dialect (aliases live there);
-/// deliberately not `xai_grok_config::shell::unix_shell_path`, which coerces
-/// to bash/zsh and would drop fish/other-shell aliases.
+/// The user's shell from `$SHELL` when it points at an existing file, otherwise `/bin/sh`.
+/// `$SHELL` is preferred because the user typed the wrapped command in their own shell's dialect (aliases live there).
+/// This deliberately avoids `xai_grok_config::shell::unix_shell_path`, which coerces to bash/zsh and would drop fish/other-shell aliases.
 #[cfg(unix)]
 fn user_shell() -> String {
     resolve_shell(std::env::var("SHELL").ok().as_deref())
 }
 
-/// Pure core of [`user_shell`], split from the env read so tests never touch
-/// the process environment. `shell` is the raw `$SHELL` value, if any.
+/// Pure core of [`user_shell`], split from the env read so tests never touch the process environment.
+/// `shell` is the raw `$SHELL` value, if any.
 #[cfg(unix)]
 fn resolve_shell(shell: Option<&str>) -> String {
     match shell {
@@ -190,15 +179,12 @@ fn resolve_shell(shell: Option<&str>) -> String {
 /// regardless of whether the outer terminal supports OSC 52 (the payload is
 /// written to the local clipboard directly).
 ///
-/// It requires a platform `portable-pty` can drive — Unix (`openpty`) or
-/// Windows (ConPTY) — and an interactive (TTY) session. Wrapping a
-/// non-interactive pipe would make the child think it has a terminal and has no
-/// clipboard destination anyway. On Windows the OSC 52 → clipboard bridge works
-/// the same; only the live outer→inner resize is not forwarded (see
-/// [`crate::pty_wrap::run_wrapped_command`]).
+/// It requires a platform `portable-pty` can drive, Unix (`openpty`) or Windows (ConPTY), and an interactive (TTY) session.
+/// Wrapping a non-interactive pipe would make the child think it has a terminal and has no clipboard destination anyway.
+/// On Windows the OSC 52 clipboard bridge works the same.
+/// Only the live outer-to-inner resize is not forwarded (see [`crate::pty_wrap::run_wrapped_command`]).
 fn should_wrap() -> bool {
-    // PTY wrapping requires native pseudo-terminal APIs (Unix openpty / Windows
-    // ConPTY), both of which `portable-pty` supports.
+    // PTY wrapping requires native pseudo-terminal APIs (Unix openpty / Windows ConPTY), both of which `portable-pty` supports
     if !cfg!(any(unix, windows)) {
         return false;
     }

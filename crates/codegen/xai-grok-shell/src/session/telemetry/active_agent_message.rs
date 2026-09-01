@@ -1,4 +1,4 @@
-//! Shell projection and emission for active-agent message lifecycle telemetry.
+//! Turns active-agent message tool outputs and settlements into telemetry events and emits them.
 
 use std::time::Instant;
 

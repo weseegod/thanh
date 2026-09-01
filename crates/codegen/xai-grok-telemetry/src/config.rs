@@ -1,17 +1,12 @@
-//! Telemetry-engine configuration.
+//! These types live here so the data-collector engine can construct a [`TelemetryClient`](crate::client::TelemetryClient) without depending on shell.
 //!
-//! Extracted from `xai-grok-shell::agent::config` so the data-collector
-//! engine can construct a [`TelemetryClient`](crate::client::TelemetryClient)
-//! without a build-time dependency on the shell.
-//!
-//! Shell still re-exports these types from their original paths so existing
-//! call sites (and `Config` derive impls) compile unchanged.
+//! Shell still re-exports these types from their original paths so existing call sites (and `Config` derive impls) compile unchanged.
 use serde::{Deserialize, Serialize};
 /// Telemetry mode: `true`/`false` (legacy bool) or `"session_metrics"` (string).
 ///
-/// - `Disabled` -- nothing sent (enterprise default)
-/// - `SessionMetrics` -- metadata-only lifecycle events, no content
-/// - `Enabled` -- full product telemetry (events + Mixpanel)
+/// - `Disabled`: nothing sent (enterprise default)
+/// - `SessionMetrics`: metadata-only lifecycle events, no content
+/// - `Enabled`: full product telemetry (events and Mixpanel)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum TelemetryMode {
     #[default]
@@ -42,9 +37,8 @@ impl TelemetryMode {
 #[cfg(test)]
 mod telemetry_mode_tests {
     use super::TelemetryMode;
-    /// A parent process hands its resolved mode to spawned children via
-    /// `GROK_TELEMETRY_ENABLED={mode}` (Display), so every Display output
-    /// must parse back to the same mode.
+    /// A parent process hands its resolved mode to spawned children via `GROK_TELEMETRY_ENABLED={mode}` (Display).
+    /// Every Display output must parse back to the same mode.
     #[test]
     fn display_round_trips_through_parse() {
         for mode in [
@@ -119,9 +113,9 @@ pub struct TelemetryConfig {
     pub events_api_key: Option<String>,
     pub mixpanel_token: Option<String>,
     pub mixpanel_enabled: bool,
-    /// `None` = inherit from `[features] telemetry`. `Some(false)` = disable GCS uploads only.
+    /// `None` inherits from `[features] telemetry`; `Some(false)` disables GCS uploads only.
     pub trace_upload: Option<bool>,
-    /// External OTEL master switch (`= GROK_EXTERNAL_OTEL`, env wins).
+    /// External OTEL master switch (env `GROK_EXTERNAL_OTEL` wins).
     pub otel_enabled: Option<bool>,
     /// External OTEL metrics exporter: `otlp` | `console` | `none`.
     pub otel_metrics_exporter: Option<String>,
@@ -224,9 +218,8 @@ impl TelemetryConfig {
 }
 /// Parse an env var as a boolean. Returns `None` if unset or unrecognized.
 ///
-/// Local copy of `xai_grok_shell::agent::config::env_bool` so this crate
-/// stays free of a shell back-edge. Shell keeps its own copy for callers
-/// outside the telemetry config path.
+/// Local copy of `xai_grok_shell::agent::config::env_bool` so this crate does not depend back on shell.
+/// Shell keeps its own copy for callers outside the telemetry config path.
 fn env_bool(name: &str) -> Option<bool> {
     let value = std::env::var(name).ok()?;
     match value.trim().to_ascii_lowercase().as_str() {

@@ -6,7 +6,7 @@
 use std::io::IsTerminal;
 use std::rc::Rc;
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use tokio_util::sync::CancellationToken;
@@ -25,6 +25,19 @@ use xai_grok_shell::{
 /// Extra slack when joining the agent OS thread after cancel so the flush
 /// can finish and the thread can unwind.
 const AGENT_JOIN_SLACK: Duration = Duration::from_secs(2);
+
+/// Grace for the worker runtime's teardown after the run loop exits: a plain
+/// drop waits out every in-flight `spawn_blocking` task (non-abortable), so a
+/// long detached archive build would otherwise hold `/quit` for its duration.
+const WORKER_RUNTIME_SHUTDOWN_GRACE: Duration = Duration::from_secs(2);
+
+/// Bounded worker-runtime teardown; see [`WORKER_RUNTIME_SHUTDOWN_GRACE`].
+///
+/// A timed-out blocking task is abandoned, not cancelled — safe only because
+/// the worker exits with the process, which reaps the leftover thread.
+fn shutdown_worker_runtime(rt: tokio::runtime::Runtime) {
+    rt.shutdown_timeout(WORKER_RUNTIME_SHUTDOWN_GRACE);
+}
 
 /// How long the join stays silent before telling an interactive user why exit
 /// is taking a moment. Short joins (the common case) print nothing.
@@ -99,19 +112,13 @@ impl Drop for AgentShutdownGuard {
     }
 }
 
-/// Why the join ended, so each case is explicit at the call site (and callers
-/// can tell a completed flush from an abandoned one).
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, strum::IntoStaticStr)]
+#[strum(serialize_all = "snake_case")]
 enum JoinOutcome {
-    /// Worker returned cleanly: session actors flushed within the grace.
     Joined,
-    /// Worker returned an error; the flush may be incomplete.
     Failed(String),
-    /// Worker panicked, with the payload rendered as text.
     Panicked(String),
-    /// Worker was still running when the budget elapsed.
     TimedOut,
-    /// The join helper vanished without reporting (helper thread itself died).
     HelperLost,
 }
 
@@ -125,29 +132,44 @@ enum JoinOutcome {
 fn join_agent_thread(handle: thread::JoinHandle<Result<()>>, timeout: Duration) -> JoinOutcome {
     use std::sync::mpsc::RecvTimeoutError;
 
+    let span = xai_grok_telemetry::session_end::join_span();
+    let start = Instant::now();
+
     let (tx, rx) = std::sync::mpsc::channel();
     thread::spawn(move || {
         let _ = tx.send(handle.join());
     });
 
-    // Two-phase wait: silent for a short join (overwhelmingly the common case),
-    // then a one-line notice so a slow SessionEnd pipeline does not look like a
-    // frozen exit. Only for a terminal — piped/JSON consumers stay clean.
     let quiet = timeout.min(JOIN_NOTICE_AFTER);
-    match rx.recv_timeout(quiet) {
-        Ok(result) => return classify_join(result),
+    let mut notice_shown = false;
+    let outcome = match rx.recv_timeout(quiet) {
+        Ok(result) => classify_join(result),
+        Err(RecvTimeoutError::Disconnected) => JoinOutcome::HelperLost,
         Err(RecvTimeoutError::Timeout) => {
             if std::io::stderr().is_terminal() {
                 eprintln!("{JOIN_NOTICE}");
+                notice_shown = true;
+            }
+            match rx.recv_timeout(timeout.saturating_sub(quiet)) {
+                Ok(result) => classify_join(result),
+                Err(RecvTimeoutError::Timeout) => JoinOutcome::TimedOut,
+                Err(RecvTimeoutError::Disconnected) => JoinOutcome::HelperLost,
             }
         }
-        Err(RecvTimeoutError::Disconnected) => return JoinOutcome::HelperLost,
-    }
-    match rx.recv_timeout(timeout.saturating_sub(quiet)) {
-        Ok(result) => classify_join(result),
-        Err(RecvTimeoutError::Timeout) => JoinOutcome::TimedOut,
-        Err(RecvTimeoutError::Disconnected) => JoinOutcome::HelperLost,
-    }
+    };
+
+    let outcome_label: &'static str = (&outcome).into();
+    let elapsed_ms = u64::try_from(start.elapsed().as_millis()).unwrap_or(u64::MAX);
+    xai_grok_telemetry::session_end::record_join(&span, outcome_label, elapsed_ms, notice_shown);
+    crate::unified_log::write_direct_info(
+        "session_end.worker_join",
+        Some(serde_json::json!({
+            "elapsed_ms": elapsed_ms,
+            "outcome": outcome_label,
+            "notice_shown": notice_shown,
+        })),
+    );
+    outcome
 }
 
 fn classify_join(result: thread::Result<Result<()>>) -> JoinOutcome {
@@ -189,22 +211,17 @@ pub async fn spawn_grok_shell(
     // re-login). No-op where the OS listener is unavailable.
     auth_manager.start_system_power_listener();
 
-    // Both embedded-agent paths (`--no-leader` and leader fallback) converge
-    // here, so the agent's external-OTEL gate is applied exactly once, before boot.
     xai_grok_shell::agent::app::apply_otel_config(&auth_manager, &agent_config.grok_com_config);
 
-    // Best-effort refresh of managed policy before bootstrap reads it (repairs a
-    // wrong-identity/missing cache). Never errors — the OS-protected system/MDM
-    // layers still apply, and every network step inside is bounded
-    // (SESSION_START_AUTH_DEADLINE / SyncBudget::SessionStart).
-    startup::enter(StartupPhase::ManagedPolicy);
+    xai_grok_shell::agent::models::startup_prefetch::begin_before_policy_gate(&agent_config);
+
     xai_grok_shell::managed_config::ensure_managed_policy_present(&auth_manager).await;
 
     // Run the full bootstrap sequence: config resolution, process-level
     // singletons, and model catalog construction.
     let (agent_config, models_manager) =
         xai_grok_shell::agent::init::bootstrap(&agent_config, &auth_manager, None)
-            .map_err(|e| anyhow::anyhow!(e))?;
+            .map_err(anyhow::Error::new)?;
     models_manager.spawn_background_refresh();
 
     let agent_cancel = cancel.child_token();
@@ -267,7 +284,7 @@ async fn spawn_agent_thread_direct(
         .name("acp-agent-worker".into())
         .spawn(move || -> Result<()> {
             let local = tokio::task::LocalSet::new();
-            local.block_on(&rt, async move {
+            let result = local.block_on(&rt, async move {
                 let client_tx = channel.tx.clone();
                 let agent_rc = spawn_agent(client_tx)?;
 
@@ -323,13 +340,40 @@ async fn spawn_agent_thread_direct(
                 agent_rc.flush_all_sessions(SESSION_FLUSH_GRACE).await;
                 xai_grok_telemetry::session_ctx::drain_at_process_exit().await;
                 anyhow::Result::Ok(())
-            })
+            });
+            // LocalSet before runtime, as an implicit scope-end drop would do.
+            drop(local);
+            shutdown_worker_runtime(rt);
+            result
         })?)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Teardown must stay grace-bounded with a non-abortable blocking task
+    /// still in flight (a plain drop would wait it out).
+    #[test]
+    fn worker_runtime_teardown_bounded_despite_inflight_blocking_task() {
+        let mut builder = tokio::runtime::Builder::new_current_thread();
+        let rt = xai_tty_utils::runtime::build_with_blocking_pool(builder.enable_all()).unwrap();
+        let (started_tx, started_rx) = std::sync::mpsc::channel();
+        rt.handle().spawn_blocking(move || {
+            let _ = started_tx.send(());
+            std::thread::sleep(Duration::from_secs(6));
+        });
+        started_rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("blocking task must start");
+        let start = std::time::Instant::now();
+        shutdown_worker_runtime(rt);
+        assert!(
+            start.elapsed() < Duration::from_secs(5),
+            "teardown blocked on the blocking task: {:?}",
+            start.elapsed()
+        );
+    }
 
     #[test]
     fn join_reports_clean_worker_exit() {

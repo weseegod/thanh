@@ -1,8 +1,7 @@
 #![allow(clippy::disallowed_methods)] // test clients hit localhost mocks
-//! Wire test: `log_event(ManualAuth)` must POST to the product events endpoint as
-//! `grok-shell-manual_auth` with the `reason`/`trigger`/`token_kind`/`principal`
-//! the `distinct(principal)` alert consumes. Mocks the observability backend
-//! (real HTTP collector) so the emit->wire path is checked, not just the struct.
+//! Wire test: `log_event(ManualAuth)` must POST to the product events endpoint as `grok-shell-manual_auth`.
+//! It must carry the `reason`/`trigger`/`token_kind`/`principal` fields the `distinct(principal)` alert consumes.
+//! The test mocks the observability backend with a real HTTP collector, so the path from emit to the wire is checked, not just the struct.
 
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};

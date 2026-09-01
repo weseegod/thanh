@@ -5,7 +5,7 @@ use serde::Serialize;
 #[derive(Serialize, Clone, Copy, Debug, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum ActiveAgentMessageOutcome {
-    /// The child host admitted the message; this does not describe follow-up completion.
+    /// The child host admitted the message; it says nothing about whether the message later completed.
     Accepted,
     NotFoundOrNotOwned,
     NotActiveOrFinalizing,

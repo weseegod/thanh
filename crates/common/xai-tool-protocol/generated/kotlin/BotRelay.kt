@@ -32,7 +32,13 @@ data class BotCommandParams(
 
 typealias BotCommandResult = JsonElement
 
-typealias BotVncDescriptorParams = BotEmptyParams
+/**
+ * `bot.vncDescriptor` params.
+ */
+@Serializable
+data class BotVncDescriptorParams(
+    val agentId: String,
+)
 
 /**
  * `bot.vncDescriptor` result.
@@ -153,6 +159,24 @@ typealias BotBindConversationResult = BotEmptyResult
 enum class BotRelayErrorCode {
     @SerialName("identity_unavailable")
     IdentityUnavailable,
+    @SerialName("link_required")
+    LinkRequired,
+    @SerialName("link_removed")
+    LinkRemoved,
+    @SerialName("consent_required")
+    ConsentRequired,
+    @SerialName("enterprise_unsupported")
+    EnterpriseUnsupported,
+    @SerialName("legacy_pricing_unsupported")
+    LegacyPricingUnsupported,
+    @SerialName("email_unverified")
+    EmailUnverified,
+    @SerialName("link_conflict")
+    LinkConflict,
+    @SerialName("cursor_account_unavailable")
+    CursorAccountUnavailable,
+    @SerialName("link_unsupported")
+    LinkUnsupported,
     @SerialName("no_plan")
     NoPlan,
     @SerialName("usage_exhausted")
@@ -185,7 +209,9 @@ data class BotRelayErrorDetail(
  *
  * Wire form: `{code, retryable, detail, reason?}`.
  * `detail` is always present (empty object when unused).
- * `reason` is set only for [`BotRelayErrorCode::CommandRejected`].
+ * `reason` is set for [`BotRelayErrorCode::CommandRejected`] and for the
+ * link-state codes ([`BotRelayErrorCode::is_link_state`]), where it
+ * carries the exchange's machine reason token for per-case client copy.
  *
  * On the JSON-RPC envelope this object is `error.data`. Receivers
  * switch on `data.code`. The envelope `error.message` is the snake_case
@@ -273,3 +299,29 @@ const val BOT_EVENT_ENVELOPE_V: Int = 1
 const val COMMAND_REJECTED_NOT_YET_ENABLED: String = "not_yet_enabled"
 /** `reason` on `command_rejected` when envelope `agentId` and `args.agentId` disagree. */
 const val COMMAND_REJECTED_AGENT_ID_MISMATCH: String = "agent_id_mismatch"
+/** `reason` on `command_rejected` when `uploadAttachment` args JSON exceeds 3 MiB. */
+const val COMMAND_REJECTED_ARGS_TOO_LARGE: String = "args_too_large"
+/** `reason` on `command_rejected` when required command args are missing or empty. */
+const val COMMAND_REJECTED_ARGS_INVALID: String = "args_invalid"
+/** `reason` on `command_rejected` when Live mode cannot accept attachments. */
+const val COMMAND_REJECTED_ATTACHMENTS_NOT_SUPPORTED_IN_LIVE: String = "attachments_not_supported_in_live"
+/** `reason` on `command_rejected` when Live mode cannot interrupt or look up */
+const val COMMAND_REJECTED_NOT_SUPPORTED_IN_LIVE: String = "not_supported_in_live"
+/** `reason` on `command_rejected` when attachUpload cannot fetch the file because this connection has no usable credential. */
+const val COMMAND_REJECTED_ATTACHMENT_CREDENTIAL_UNAVAILABLE: String = "attachment_credential_unavailable"
+/** `reason` on `command_rejected` when the owning harness refused the send. */
+const val COMMAND_REJECTED_HARNESS_REFUSED: String = "harness_refused"
+/** `reason` on `command_rejected` when attachUpload cannot see the file (missing or not the caller's). */
+const val COMMAND_REJECTED_ATTACHMENT_NOT_FOUND: String = "attachment_not_found"
+/** `reason` on `command_rejected` when the file exists but is not a BOT_CHAT upload. */
+const val COMMAND_REJECTED_ATTACHMENT_WRONG_SOURCE: String = "attachment_wrong_source"
+/** `reason` on `command_rejected` when the stored BotChat object exceeds 25 MiB. */
+const val COMMAND_REJECTED_ATTACHMENT_TOO_LARGE: String = "attachment_too_large"
+/** `reason` on `command_rejected` when the BotChat upload is not PostProcessDone. */
+const val COMMAND_REJECTED_ATTACHMENT_NOT_READY: String = "attachment_not_ready"
+/** `reason` on `command_rejected` when the box refused a well-formed */
+const val COMMAND_REJECTED_GATEWAY_UNKNOWN_METHOD: String = "gateway/unknown-method"
+
+fun isGatewayMethodUnsupported(error: BotRelayError): Boolean =
+    error.code == "command_rejected" &&
+        error.reason == COMMAND_REJECTED_GATEWAY_UNKNOWN_METHOD

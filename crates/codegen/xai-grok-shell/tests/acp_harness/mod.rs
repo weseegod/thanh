@@ -1,6 +1,5 @@
-//! Drives a real in-process `MvpAgent` over ACP on duplex pipes. Outside
-//! `tests/common/` because that compiles into every integration binary and
-//! would pull the transport stack into all of them.
+//! Drives a real in-process `MvpAgent` over ACP on duplex pipes.
+//! This lives outside `tests/common/` because that compiles into every integration binary and would pull the transport stack into all of them.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -20,8 +19,7 @@ pub const DUPLEX_BUFFER_BYTES: usize = 8 * 1024 * 1024;
 
 pub const RPC_TIMEOUT: Duration = Duration::from_secs(60);
 
-/// Compiled into each including binary, so a client only one uses is dead code
-/// in the others.
+/// This is compiled into each including binary, so a client only one uses is dead code in the others.
 #[allow(dead_code)]
 pub struct AutoApproveClient;
 
@@ -58,9 +56,8 @@ pub struct AgentPipes {
     pub from_agent: tokio::io::DuplexStream,
 }
 
-/// Stand up `MvpAgent` plus its ACP plumbing on the current `LocalSet`;
-/// callers wanting another topology build the same pieces elsewhere and hand
-/// [`connect_client`] the pipes.
+/// Stand up `MvpAgent` plus its ACP connection and IO tasks on the current `LocalSet`.
+/// Callers wanting another topology build the same pieces elsewhere and hand [`connect_client`] the pipes.
 pub fn spawn_agent_local() -> AgentPipes {
     let (c2a_a, c2a_b) = tokio::io::duplex(DUPLEX_BUFFER_BYTES);
     let (a2c_a, a2c_b) = tokio::io::duplex(DUPLEX_BUFFER_BYTES);
@@ -101,8 +98,7 @@ where
     connect_client(client, client_type, pipes).await
 }
 
-/// Initialize plus API-key auth over `pipes`; the one handshake every
-/// harness topology shares.
+/// Initialize plus API-key auth over `pipes`; the one handshake every harness topology shares.
 pub async fn connect_client<C>(
     client: C,
     client_type: &str,
@@ -170,8 +166,7 @@ where
     (client_conn, init)
 }
 
-// Dead-code allows below: same per-binary compilation as `AutoApproveClient`
-// above — each helper is used by some including test binaries, not all.
+// Dead-code allows below: same per-binary compilation as `AutoApproveClient` above; each helper is used by some including test binaries, not all
 #[allow(dead_code)]
 pub async fn ext_method(
     conn: &acp::ClientSideConnection,
@@ -243,16 +238,15 @@ fn set_test_env(grok_home: &std::path::Path, server_url: &str) {
         std::env::set_var("GROK_TELEMETRY_ENABLED", "false");
         std::env::set_var("GROK_FEEDBACK_ENABLED", "false");
         std::env::set_var("GROK_TRACE_UPLOAD", "false");
-        // Turn summaries fire a post-turn side-call to the same mock endpoint
-        // on a spawned task; the race makes request-count assertions flaky.
+        // Turn summaries fire one more request to the same mock endpoint after the turn, on a spawned task
+        // The race makes request-count assertions flaky
         std::env::set_var("GROK_TURN_SUMMARY", "false");
     }
 }
 
-/// Runs `body` against a mock inference server with `GROK_HOME` isolated to a
-/// temp dir. `body` gets the cwd and the mock, and opens its own connection,
-/// since each test wants a different `acp::Client`. One `#[test]` per binary:
-/// the env is global.
+/// Runs `body` against a mock inference server with `GROK_HOME` isolated to a temp dir.
+/// `body` gets the cwd and the mock, and opens its own connection, since each test wants a different `acp::Client`.
+/// One `#[test]` per binary: the env is global.
 pub fn run_agent_test<F, Fut>(body: F)
 where
     F: FnOnce(std::path::PathBuf, std::rc::Rc<xai_grok_test_support::MockInferenceServer>) -> Fut,

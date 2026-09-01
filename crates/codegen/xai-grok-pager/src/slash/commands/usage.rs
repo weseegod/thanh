@@ -1,8 +1,7 @@
 //! `/usage` — session token/cost.
 //!
-//! External-auth deployments (`auth_provider_command`) never reach grok.com
-//! billing, so the command is hidden and refused via
-//! [`AppCtx::usage_command_visible`].
+//! External-auth deployments (`auth_provider_command`) never reach grok.com billing.
+//! [`AppCtx::usage_command_visible`] hides and refuses the command there.
 
 use crate::app::actions::Action;
 use crate::slash::command::{AppCtx, CommandExecCtx, CommandResult, SlashCommand};

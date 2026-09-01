@@ -1,7 +1,5 @@
 #![cfg_attr(rustfmt, rustfmt::skip)]
 #![allow(unused_imports)]
-//! [`acp::Agent`] trait implementation for [`MvpAgent`].
-//! Co-located child of `mvp_agent` (`use super::*`).
 use super::*;
 use xai_grok_telemetry::instrument_task;
 use xai_grok_telemetry::region;
@@ -30,19 +28,14 @@ fn tool_overrides_capability() -> serde_json::Value {
 }
 #[async_trait::async_trait(?Send)]
 impl acp::Agent for MvpAgent {
-    /// In the meta, we provide
-    ///   - model_state: the model state, useful for the client to display available models and the default model.
+    /// The response meta carries `model_state` so the client can display the available models and the default model.
     ///
-    /// SINGLE-CALL INVARIANT: this method is the sole writer of
-    /// `self.auth_method_id` during initialization. It is called exactly once
-    /// per agent process by the ACP server before any session-creating
-    /// requests, while `auth_method_id` is still `None` (initialized at
-    /// `MvpAgent::new`). The auth-method block below relies on that
-    /// invariant when it unconditionally writes the default id returned by
-    /// `auth_method::build_auth_methods`. If you ever need to call
-    /// `initialize()` more than once, restore an `is_none()` guard around
-    /// the `auth_method_id` write at the call site so a re-init doesn't
-    /// silently downgrade an api-key user to a session-token user.
+    /// SINGLE-CALL INVARIANT: this method is the sole writer of `self.auth_method_id` during initialization.
+    /// It is called exactly once per agent process by the ACP server before any session-creating requests.
+    /// At that point `auth_method_id` is still `None` (initialized at `MvpAgent::new`).
+    /// The auth-method block below relies on that invariant when it unconditionally writes the default id from `auth_method::build_auth_methods`.
+    /// If you ever need to call `initialize()` more than once, restore an `is_none()` guard around the `auth_method_id` write at the call site.
+    /// Without the guard a re-init silently downgrades an api-key user to a session-token user.
     async fn initialize(
         &self,
         arguments: acp::InitializeRequest,
@@ -452,8 +445,7 @@ impl acp::Agent for MvpAgent {
                         .meta(
                             serde_json::json!({
                     "x.ai/fs_notify": true,
-                    // Advertised so SDKs can warn when a registration depends on
-                    // hook behavior this agent doesn't honor.
+                    // Advertised so SDKs can warn when a registration depends on hook behavior this agent doesn't honor
                     "x.ai/hooks": {
                         "blockingEvents": crate::extensions::hooks::ADVERTISED_BLOCKING_EVENTS,
                         "decisions": crate::extensions::hooks::ADVERTISED_DECISIONS,
@@ -479,14 +471,13 @@ impl acp::Agent for MvpAgent {
                     let metadata = parse_json_object_env("GROK_AGENT_METADATA");
                     serde_json::json!({
                     "grokShell": true,
-                    // Re-deriving this precedence client-side has regressed OIDC
-                    // refresh, so clients consume the agent's choice from here.
+                    // Re-deriving this precedence client-side has regressed OIDC refresh, so clients consume the agent's choice from here
                     "defaultAuthMethodId": default_auth_method_id_wire,
-                    // The agent can drive in-process SDK MCP servers over the ACP reverse
-                    // channel (`x.ai/mcp/sdk_call`); the SDK reads this to enable transport="acp".
+                    // The agent can drive in-process SDK MCP servers over the ACP reverse channel (`x.ai/mcp/sdk_call`)
+                    // The SDK reads this to enable transport="acp"
                     (xai_grok_mcp::wire::MCP_SDK): true,
-                    // `session/new` / `session/load` accept per-session plugin roots in
-                    // `_meta.pluginDirs`; the SDKs gate `GrokOptions.plugins` on this.
+                    // `session/new` / `session/load` accept per-session plugin roots in `_meta.pluginDirs`
+                    // The SDKs gate `GrokOptions.plugins` on this
                     (SESSION_PLUGIN_DIRS_CAPABILITY_KEY): true,
                     "currentWorkingDirectory": current_working_directory.to_string_lossy().to_string(),
                     "agentVersion": xai_grok_version::VERSION,
@@ -502,10 +493,9 @@ impl acp::Agent for MvpAgent {
                         .cfg
                         .borrow()
                         .is_feature_enabled(crate::agent::config::Feature::CancelRewind),
-                    // Resolved session-recap state (remote settings / config / env;
-                    // default ON). The client gates BOTH its automatic
-                    // away-recap poll and the manual `/recap` on this so a
-                    // disabled feature produces zero `x.ai/recap` traffic.
+                    // Resolved session-recap state (remote settings / config / env; default ON)
+                    // The client gates BOTH its automatic away-recap poll and the manual `/recap` on this
+                    // A disabled feature produces zero `x.ai/recap` traffic
                     "sessionRecap": self.cfg.borrow().is_session_recap_enabled(),
                     "feedbackTraceOffer": self.feedback_trace_offer(),
                     "voiceMode": self.cfg.borrow().is_voice_mode_enabled(),
@@ -1201,7 +1191,7 @@ impl acp::Agent for MvpAgent {
                 let ctx = ctx.clone();
                 async move {
                     if let Ok(Ok(info)) = tokio::time::timeout(
-                            std::time::Duration::from_secs(120),
+                            crate::session::commands::PARSED_PROMPT_WAIT,
                             parsed_prompt_rx,
                         )
                         .await && !info.text.is_empty()
@@ -1210,10 +1200,11 @@ impl acp::Agent for MvpAgent {
                             info.full_text.is_some(),
                         );
                         if let Some(full_text) = &info.full_text {
-                            upload_full_prompt_txt(&ctx, full_text).await;
+                            upload_full_prompt_txt(&ctx, full_text, UploadWait::Confirm)
+                                .await;
                         }
                     }
-                    upload_metadata(&ctx, prompt_metadata).await;
+                    upload_metadata(&ctx, prompt_metadata, UploadWait::Confirm).await;
                 }
             });
             spawn_upload_task(
@@ -1280,32 +1271,78 @@ impl acp::Agent for MvpAgent {
                 }
             }
         };
-        handle
-            .cmd_tx
-            .send(SessionCommand::Prompt {
-                prompt_id: prompt_id.clone(),
-                prompt_blocks: arguments.prompt.clone(),
-                prompt_mode,
-                artifact_upload_ctx: trace_context
-                    .as_ref()
-                    .map(|ctx| ctx.artifact_upload_context()),
-                client_identifier: prompt_client_identifier,
-                screen_mode: prompt_screen_mode,
-                verbatim,
-                traceparent: xai_file_utils::trace_context::current_traceparent(),
-                json_schema,
-                send_now,
-                admission: None,
-                tool_overrides_update,
-                respond_to: tx,
-                prompt_admitted: None,
-                persist_ack: None,
-                parsed_prompt_tx,
-            })
-            .map_err(|e| {
-                acp::Error::internal_error()
-                    .data(format!("failed to dispatch prompt to session: {e}"))
-            })?;
+        let prompt_blocks = arguments.prompt.clone();
+        let artifact_upload_ctx = trace_context
+            .as_ref()
+            .map(|ctx| ctx.artifact_upload_context());
+        let traceparent = xai_file_utils::trace_context::current_traceparent();
+        let dispatch_result: Result<(), acp::Error> = if send_now {
+            handle
+                .cmd_tx
+                .send(SessionCommand::Prompt {
+                    prompt_id: prompt_id.clone(),
+                    prompt_blocks,
+                    prompt_mode,
+                    artifact_upload_ctx,
+                    client_identifier: prompt_client_identifier,
+                    screen_mode: prompt_screen_mode,
+                    verbatim,
+                    traceparent,
+                    json_schema,
+                    send_now: true,
+                    admission: None,
+                    tool_overrides_update,
+                    respond_to: tx,
+                    prompt_admitted: None,
+                    persist_ack: None,
+                    parsed_prompt_tx,
+                })
+                .map_err(|e| {
+                    acp::Error::internal_error()
+                        .data(format!("failed to dispatch prompt to session: {e}"))
+                })
+        } else {
+            let envelope = xai_message_delivery_core::DeliveryEnvelope::from_human(
+                xai_message_delivery_core::Operation::Queue,
+                crate::session::message_delivery::HumanPromptContent {
+                    prompt_blocks,
+                    prompt_mode,
+                    artifact_upload_ctx,
+                    client_identifier: prompt_client_identifier,
+                    screen_mode: prompt_screen_mode,
+                    verbatim,
+                    traceparent,
+                    json_schema,
+                    tool_overrides_update,
+                    respond_to: tx,
+                    parsed_prompt_tx,
+                },
+                crate::session::message_delivery::human_delivery_identity(
+                    prompt_id.clone(),
+                ),
+                crate::session::message_delivery::ResidentHumanGrant::new(
+                    handle.info.id.0.to_string(),
+                ),
+            );
+            handle
+                .message_delivery()
+                .send_human(envelope)
+                .map_err(|error| match error {
+                    crate::session::message_delivery::HumanDeliveryError::ChannelClosed(
+                        error,
+                    ) => {
+                        acp::Error::internal_error()
+                            .data(
+                                format!("failed to dispatch prompt to session: {error}"),
+                            )
+                    }
+                    crate::session::message_delivery::HumanDeliveryError::Rejected
+                    | crate::session::message_delivery::HumanDeliveryError::Unsupported => {
+                        unreachable!("resident human Queue is target-bound and supported")
+                    }
+                })
+        };
+        dispatch_result?;
         drop(dispatch_guard);
         self.push_roster_activity_delta(
             &arguments.session_id,
@@ -1381,20 +1418,16 @@ impl acp::Agent for MvpAgent {
                 .as_ref()
                 .map(|ok| ok.stop_reason)
                 .map_err(Clone::clone);
-            let (stop_reason_value, agent_result_value) = crate::sampling::error::prompt_complete_fields(
-                &mapped,
-            );
             let turn_id = arguments
                 .meta
                 .as_ref()
                 .and_then(|m| m.get("turnId"))
                 .and_then(|v| v.as_u64());
-            let mut payload = serde_json::json!({
-                "sessionId": arguments.session_id.to_string(),
-                "promptId": prompt_id.as_str(),
-                "stopReason": stop_reason_value,
-                "agentResult": agent_result_value,
-            });
+            let mut payload = crate::session::turn_completion::prompt_complete_payload(
+                &arguments.session_id,
+                prompt_id.as_str(),
+                &mapped,
+            );
             if let Some(tid) = turn_id {
                 payload["turnId"] = serde_json::json!(tid);
             }
@@ -1407,15 +1440,15 @@ impl acp::Agent for MvpAgent {
             if let Some(ref ctx) = cancellation_context {
                 payload["cancellationContext"] = ctx.clone();
             }
-            let params = serde_json::value::to_raw_value(&payload)
-                .expect("prompt_complete params serialization");
-            self.gateway
-                .forward_fire_and_forget(
-                    acp::ExtNotification::new(
-                        "x.ai/session/prompt_complete",
-                        params.into(),
-                    ),
-                );
+            if let Ok(params) = serde_json::value::to_raw_value(&payload) {
+                self.gateway
+                    .forward_fire_and_forget(
+                        acp::ExtNotification::new(
+                            "x.ai/session/prompt_complete",
+                            params.into(),
+                        ),
+                    );
+            }
         }
         {
             let end_activity = if handle
@@ -1491,7 +1524,7 @@ impl acp::Agent for MvpAgent {
                 let streaming_partial = crate::upload::turn::take_streaming_partial(
                         &handle.cmd_tx,
                         prompt_id.clone(),
-                        matches!(stop_reason, acp::StopReason::EndTurn),
+                        crate::upload::turn::stop_reason_commits_turn(stop_reason),
                         Some(model.clone()),
                     )
                     .await
@@ -1523,8 +1556,10 @@ impl acp::Agent for MvpAgent {
                             Some(s.turn_output_tokens),
                         ))
                         .unwrap_or((None, None, None));
+                    let completed = crate::upload::turn::stop_reason_commits_turn(
+                        stop_reason,
+                    );
                     if let Some(deadline) = upload_deadline {
-                        let completed = matches!(stop_reason, acp::StopReason::EndTurn);
                         let start_for_upload = turn_snapshot
                             .as_ref()
                             .and_then(|s| s.start_prompt_mode.clone())
@@ -1561,7 +1596,6 @@ impl acp::Agent for MvpAgent {
                             "turn_end.snapshot_upload",
                             Parent::Root,
                             async move {
-                            let completed = matches!(stop_reason, acp::StopReason::EndTurn);
                             let start_for_upload = snapshot_clone
                                 .as_ref()
                                 .and_then(|s| s.start_prompt_mode.clone())
@@ -1679,9 +1713,8 @@ impl acp::Agent for MvpAgent {
                                     "session registry register failed (non-fatal)"
                                 );
                             }
-                            // Read the generated title from disk (may already
-                            // be available if the LLM call completed during the
-                            // turn) and bundle it with the first-prompt update.
+                            // Read the generated title from disk and bundle it with the first-prompt update
+                            // It may already be available if the LLM call completed during the turn
                             let info = crate::session::info::Info {
                                 id: agent_client_protocol::SessionId::new(
                                     reg_req.session_id.clone(),
@@ -1731,11 +1764,7 @@ impl acp::Agent for MvpAgent {
                     }
                     let registry_turn = i32::try_from(turn_number).unwrap_or(i32::MAX);
                     let cwd_for_git = handle.info.cwd.clone();
-                    /// Advances `last_turn_number` immediately after a turn completes.
-                    ///
-                    /// Fired right after the session turn finishes, before any artifact uploads.
-                    /// Sets `last_turn_number` with `repo_head_at_end` and does not wait for
-                    /// session-state uploads.
+                    /// Advances `last_turn_number` immediately after a turn completes, without waiting for artifact or session-state uploads.
                     async fn advance_last_turn(
                         client: crate::agent::session_registry_client::SessionRegistryClient,
                         session_id: String,
@@ -1766,10 +1795,7 @@ impl acp::Agent for MvpAgent {
                             );
                         }
                     }
-                    /// Advances `restorable_turn_number` after required restore artifacts are
-                    /// confirmed durable.
-                    ///
-                    /// Called after the post-turn session archive is confirmed in cloud storage.
+                    /// Advances `restorable_turn_number` once the post-turn session archive is confirmed durable in cloud storage.
                     async fn advance_restorable_turn(
                         client: crate::agent::session_registry_client::SessionRegistryClient,
                         session_id: String,
@@ -1823,7 +1849,7 @@ impl acp::Agent for MvpAgent {
                                 ctx,
                                 permission_events,
                                 session_copy_rx,
-                                turn_messages,
+                                turn_messages.into(),
                                 streaming_partial,
                                 UploadWait::Defer { deadline },
                             )
@@ -1864,7 +1890,7 @@ impl acp::Agent for MvpAgent {
                                         ctx,
                                         permission_events,
                                         session_copy_rx,
-                                        turn_messages,
+                                        turn_messages.into(),
                                         streaming_partial,
                                         UploadWait::Confirm,
                                     )

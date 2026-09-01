@@ -13,16 +13,15 @@ pub use xai_grok_config_types::{
 };
 /// Configuration for subagent (task tool) support.
 ///
-/// Parsed from the `[subagents]` section of `~/.thanh/config.toml` or
-/// `.grok/config.toml`. Enabled by default; can be disabled via
-/// `GROK_SUBAGENTS=0` env var or `[subagents] enabled = false`
-/// in config.toml.
+/// Parsed from the `[subagents]` section of `~/.grok/config.toml` or
+/// `.grok/config.toml`.
+/// Enabled by default; can be disabled via the `GROK_SUBAGENTS=0` env var or `[subagents] enabled = false` in config.toml.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
 #[serde(default)]
 pub struct SubagentsConfig {
     /// Whether subagent support is enabled.
     pub enabled: bool,
-    /// Raw `[subagents] max_depth` (i64 so out-of-range parses; clamped ≥1 at resolve).
+    /// Raw `[subagents] max_depth` (i64 so out-of-range parses; clamped to at least 1 at resolve).
     #[serde(default)]
     pub max_depth: Option<i64>,
     #[serde(default)]
@@ -36,8 +35,8 @@ pub struct SubagentsConfig {
     #[serde(default)]
     pub workflow_max_concurrent: Option<i64>,
     /// Per-subagent model ID overrides.
-    /// Keys are agent names, values are model IDs that must exist in the
-    /// available models registry. Parsed from `[subagents.models]` in config.toml.
+    /// Keys are agent names, values are model IDs that must exist in the available models registry.
+    /// Parsed from `[subagents.models]` in config.toml.
     ///
     /// ```toml
     /// [subagents.models]
@@ -192,14 +191,13 @@ impl SubagentsConfig {
     /// Discover personas from `.grok/personas/` directory.
     ///
     /// File-based personas are loaded from `{cwd}/.grok/personas/*.toml`.
-    /// Each file defines a single `SubagentPersona`. The file stem becomes
-    /// the persona name. Inline config takes precedence.
+    /// Each file defines a single `SubagentPersona`. The file stem becomes the persona name.
+    /// Inline config takes precedence.
     pub(crate) fn discover_personas(&mut self, cwd: &std::path::Path) {
         let dir = cwd.join(".grok").join("personas");
         self.discover_personas_in_dir(&dir);
     }
-    /// Validate all role definitions. Returns a list of (role_name, error_message)
-    /// for invalid entries.
+    /// Validate all role definitions. Returns a list of (role_name, error_message) for invalid entries.
     pub fn validate_roles(&self) -> Vec<(String, String)> {
         let valid_modes = ["read-only", "read-write", "execute", "all"];
         let mut errors = Vec::new();
@@ -232,9 +230,8 @@ impl SubagentsConfig {
     }
     /// Discover roles from `.grok/roles/` directory and merge with inline config.
     ///
-    /// File-based roles are loaded from `{cwd}/.grok/roles/*.toml`. Each file
-    /// defines a single `SubagentRole` (same schema as inline `[subagents.roles.*]`).
-    /// The file stem becomes the role name.
+    /// File-based roles are loaded from `{cwd}/.grok/roles/*.toml`.
+    /// Each file defines a single `SubagentRole` (same schema as inline `[subagents.roles.*]`). The file stem becomes the role name.
     ///
     /// Precedence: inline config roles override file-based roles with the same name.
     pub(crate) fn discover_roles(&mut self, cwd: &std::path::Path) {
@@ -243,8 +240,7 @@ impl SubagentsConfig {
     }
     pub const ENV_MAX_DEPTH: &'static str = "GROK_SUBAGENTS_MAX_DEPTH";
     pub const DEFAULT_MAX_DEPTH: u32 = 1;
-    /// Clamp to `1..=u32::MAX`. Values below 1 (including 0 / negatives) warn
-    /// and become 1 so nesting is never accidentally disabled.
+    /// Clamp to `1..=u32::MAX`. Values below 1 (including 0 and negatives) warn and become 1 so nesting is never accidentally disabled.
     pub(crate) fn clamp_max_depth(raw: i64, source: &str) -> u32 {
         if raw < i64::from(Self::DEFAULT_MAX_DEPTH) {
             tracing::warn!(
@@ -266,9 +262,8 @@ impl SubagentsConfig {
     }
     /// Precedence: env > TOML > remote > [`Self::DEFAULT_MAX_DEPTH`].
     ///
-    /// Depth 0 is the top-level session; a child is parent+1. Spawn is rejected
-    /// when `depth >= max`. So `max = 1` allows only top-level spawns; nested
-    /// spawns from a first-level subagent need `max >= 2`.
+    /// Depth 0 is the top-level session; a child is parent+1. Spawn is rejected when `depth >= max`.
+    /// So `max = 1` allows only top-level spawns; nested spawns from a first-level subagent need `max >= 2`.
     pub(crate) fn resolve_max_depth(
         env: Option<&str>,
         config: Option<i64>,
@@ -310,11 +305,9 @@ impl SubagentsConfig {
             xai_grok_tools::implementations::grok_build::task::admission::DEFAULT_MAX_CONCURRENT,
         )
     }
-    /// Resolve the subagent turn-sampling limit, clamped to
-    /// [`crate::agent::subagent::MAX_SUBAGENT_SAMPLING_LIMIT`]. `default` is the
-    /// resolved concurrent-subagent bound (`GROK_MAX_CONCURRENT_SUBAGENTS`); a
-    /// lower `GROK_SUBAGENT_SAMPLING_LIMIT`, `[subagents] sampling_limit`, or
-    /// remote value caps sampling further.
+    /// Resolve the subagent turn-sampling limit, clamped to [`crate::agent::subagent::MAX_SUBAGENT_SAMPLING_LIMIT`].
+    /// `default` is the resolved concurrent-subagent bound (`GROK_MAX_CONCURRENT_SUBAGENTS`).
+    /// A lower `GROK_SUBAGENT_SAMPLING_LIMIT`, `[subagents] sampling_limit`, or remote value caps sampling further.
     pub(crate) fn resolve_sampling_limit(
         env: Option<&str>,
         config: Option<i64>,
@@ -370,17 +363,15 @@ impl SubagentsConfig {
         LimitBehavior::Queue
     }
     /// Resolve the final subagents config from all sources (in priority order):
-    /// 1. CLI flag `--subagents` (absolute highest — always enables)
+    /// 1. CLI flag `--subagents` (absolute highest, always enables)
     /// 2. `GROK_SUBAGENTS` env var: `1`/`true` enables, `0`/`false` force-disables
     /// 3. Config file `[subagents]` section
     /// 4. Default (enabled)
     ///
-    /// `enabled` is deliberately not remotely gated — only explicit local
-    /// intent (CLI flag, `GROK_SUBAGENTS`, `[subagents] enabled`) changes
-    /// the default.
+    /// `enabled` is deliberately not remotely gated.
+    /// Only explicit local intent (CLI flag, `GROK_SUBAGENTS`, `[subagents] enabled`) changes the default.
     ///
-    /// Project files are excluded from this trust-independent base; Task
-    /// boundaries overlay them using the parent cwd's authoritative trust verdict.
+    /// Project files are excluded from this trust-independent base; Task boundaries overlay them using the parent cwd's authoritative trust verdict.
     pub fn resolve(cli_flag: bool, config: &toml::Value) -> Self {
         let user_grok_root = xai_grok_config::user_grok_home();
         Self::resolve_base_with_sources(
@@ -509,8 +500,8 @@ pub(crate) struct ModelOverrideConfig {
     pub session_summary: Option<String>,
     /// Compiled default (`grok-4.6`) when unset locally, remotely, and via env.
     pub image_description: Option<String>,
-    /// Next-prompt suggestion model pin. Unlike the other overrides this does
-    /// NOT fill a compiled default — see [`PromptSuggestModelPin`].
+    /// Next-prompt suggestion model pin.
+    /// Unlike the other overrides this does NOT fill a compiled default; see [`PromptSuggestModelPin`].
     #[serde(skip)]
     pub prompt_suggestion: PromptSuggestModelPin,
 }
@@ -524,30 +515,21 @@ impl Default for ModelOverrideConfig {
         }
     }
 }
-/// Resolved model pin for the next-prompt suggestion call (tab-autocomplete
-/// ghost text), `env > config.toml > remote` — see
-/// [`ModelOverrideConfig::resolve`].
+/// Resolved model pin for the next-prompt suggestion call (tab-autocomplete ghost text).
+/// Precedence is `env > config.toml > remote`; see [`ModelOverrideConfig::resolve`].
 ///
-/// Unlike the other auxiliary overrides this does not collapse to a plain
-/// model string: the consumer (`handle_suggest_prompt`) must distinguish
-/// an explicit pin from "unpinned" (where the client hint and the built-in
-/// `grok-4.6` default apply), and whether the pin came from the env
-/// escape hatch. Every effective model except an env pin is catalog-guarded —
-/// when the model is not in the shell's catalog the per-turn suggestion
-/// request is skipped entirely rather than fired doomed. The env pin is
-/// deliberately exempt so `GROK_PROMPT_SUGGESTIONS_MODEL` keeps working for
-/// models a catalog does not list (mirrors the pager, which forwards the
-/// env value without checking its catalog).
+/// Unlike the other auxiliary overrides this does not collapse to a plain model string.
+/// The consumer (`handle_suggest_prompt`) must distinguish an explicit pin from "unpinned".
+/// When unpinned, the client hint wins; otherwise reasoning-disabled sampling uses the alias and reasoning-enabled sampling uses the session model.
+/// Every effective model is catalog-guarded.
+/// A model missing from the shell's catalog skips the per-turn suggestion request instead of firing one that must fail.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub enum PromptSuggestModelPin {
-    /// `GROK_PROMPT_SUGGESTIONS_MODEL` — used verbatim, bypasses the
-    /// catalog guard.
+    /// `GROK_PROMPT_SUGGESTIONS_MODEL`: catalog-guarded explicit pin.
     Env(String),
-    /// `[models] prompt_suggestion` in config.toml, or the remote
-    /// `prompt_suggestion_model` (remote settings) — catalog-guarded.
+    /// `[models] prompt_suggestion` in config.toml, or the remote `prompt_suggestion_model` (remote settings); catalog-guarded.
     Pinned(String),
-    /// No explicit pin: the client hint, then the built-in default apply
-    /// (both catalog-guarded).
+    /// No explicit pin: the client hint, then the built-in default apply (both catalog-guarded).
     #[default]
     Unpinned,
 }
@@ -564,11 +546,9 @@ fn non_empty_model_override(value: Option<&str>) -> Option<String> {
 }
 impl ModelOverrideConfig {
     /// CLI flag > env var > config.toml > remote settings > compiled default.
-    /// `image_description` and `session_summary` always resolve to `Some(_)`
-    /// (default `grok-4.6`), never the session model.
-    /// `prompt_suggestion` resolves to a [`PromptSuggestModelPin`] instead of
-    /// a model string (no CLI flag; the default and the catalog guard live at
-    /// the consumer, `handle_suggest_prompt`).
+    /// `image_description` and `session_summary` always resolve to `Some(_)` (default `grok-4.6`), never the session model.
+    /// `prompt_suggestion` resolves to a [`PromptSuggestModelPin`] instead of a model string.
+    /// It has no CLI flag; the default and the catalog guard live at the consumer, `handle_suggest_prompt`.
     pub(crate) fn resolve(
         cli_web_search_model: Option<&str>,
         cli_session_summary_model: Option<&str>,
@@ -648,8 +628,7 @@ impl ModelOverrideConfig {
         result
     }
 }
-/// Raw `[tools.media_gen]` counts; resolve via
-/// [`ToolsConfig::resolve_max_parallel_image_gen_calls`].
+/// Raw `[tools.media_gen]` counts; resolve via [`ToolsConfig::resolve_max_parallel_image_gen_calls`].
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
 #[serde(default)]
 pub struct MediaGenToolsConfig {
@@ -671,20 +650,18 @@ pub struct MediaGenToolsConfig {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
 #[serde(default)]
 pub struct ToolsConfig {
-    /// When `true`, all tools (including `read_file`) filter gitignored
-    /// files. When `false` (default), each tool picks its own default.
+    /// When `true`, all tools (including `read_file`) filter gitignored files.
+    /// When `false` (default), each tool picks its own default.
     pub respect_gitignore: bool,
-    /// Restrict tools whose xAI API requires server-side artifact storage
-    /// (currently just the video tools): without a valid
-    /// `[tools.zdr_video_output_s3]` bucket they stay advertised but return
-    /// setup guidance at call time. Intended for ZDR-bound teams via
-    /// `~/.thanh/managed_config.toml`. Defaults to `false`.
+    /// Restrict tools whose xAI API requires server-side artifact storage (currently just the video tools).
+    /// Without a valid `[tools.zdr_video_output_s3]` bucket they stay advertised but return setup guidance at call time.
+    /// Intended for ZDR-bound teams via
+    /// `~/.grok/managed_config.toml`. Defaults to `false`.
     pub disable_zdr_incompatible_tools: bool,
-    /// Optional S3 bucket config for ZDR video output. When present (and
-    /// valid), video tools presign an upload URL and pass it to the API so
-    /// the generated video lands in a team-owned bucket instead of being
-    /// downloaded locally. Only effective when `disable_zdr_incompatible_tools`
-    /// is `true`. Populated from `[tools.zdr_video_output_s3]` in config.
+    /// Optional S3 bucket config for ZDR video output.
+    /// When present (and valid), video tools presign an upload URL and pass it to the API.
+    /// The generated video then lands in a team-owned bucket instead of being downloaded locally.
+    /// Only effective when `disable_zdr_incompatible_tools` is `true`. Populated from `[tools.zdr_video_output_s3]` in config.
     pub zdr_video_output_s3:
         Option<xai_grok_tools::implementations::grok_build::video_gen::ZdrVideoOutputS3Config>,
     pub media_gen: MediaGenToolsConfig,
@@ -693,15 +670,12 @@ impl ToolsConfig {
     pub const ENV_MAX_PARALLEL_IMAGE_GEN_CALLS: &'static str = "GROK_MAX_PARALLEL_IMAGE_GEN_CALLS";
     pub const ENV_MAX_PARALLEL_VIDEO_GEN_CALLS: &'static str = "GROK_MAX_PARALLEL_VIDEO_GEN_CALLS";
     /// Resolve the final tools config, in priority order:
-    /// 1. Env vars `GROK_RESPECT_GITIGNORE` and
-    ///    `GROK_DISABLE_ZDR_INCOMPATIBLE_TOOLS` (`0`/`false` off,
-    ///    `1`/`true` on).
+    /// 1. Env vars `GROK_RESPECT_GITIGNORE` and `GROK_DISABLE_ZDR_INCOMPATIBLE_TOOLS` (`0`/`false` off, `1`/`true` on).
     /// 2. `[tools]` block from the merged effective config.
     /// 3. Defaults (both `false`).
     ///
-    /// Fields are read individually so a malformed
-    /// `[tools.zdr_video_output_s3]` cannot wipe `disable_zdr_incompatible_tools`
-    /// (or any other tools flag) via whole-table deserialize failure.
+    /// Fields are read individually.
+    /// A malformed `[tools.zdr_video_output_s3]` therefore cannot wipe `disable_zdr_incompatible_tools` or any other tools flag.
     pub fn resolve(config: &toml::Value) -> Self {
         let tools = config.get("tools");
         let mut result = Self {
@@ -794,8 +768,8 @@ impl ToolsConfig {
         )
     }
 }
-/// Media-gen ladder: env > TOML > remote > default, with every numeric layer
-/// clamping `< 1` to `1`. Non-numeric env warns and falls through.
+/// Media-gen ladder: env > TOML > remote > default, with every numeric layer clamping `< 1` to `1`.
+/// Non-numeric env warns and falls through.
 fn resolve_clamped_count(
     env_name: &str,
     env: Option<&str>,
@@ -866,7 +840,7 @@ pub enum StorageMode {
     /// Local JSONL only (default)
     #[default]
     Local,
-    /// Local + HTTP flush at end of turn
+    /// Local JSONL plus an HTTP flush at end of turn
     Writeback,
 }
 impl StorageMode {
@@ -896,10 +870,9 @@ impl StorageMode {
         }
         Self::Local
     }
-    /// Resolve from remote settings, enforcing the rule that `Writeback`
-    /// requires grok.com auth (it syncs to grok-code-backend). This is the
-    /// single home for that gate, used at boot ([`crate::agent::init`]) and by
-    /// the post-readiness self-heal (`MvpAgent::reapply_storage_mode`).
+    /// Resolve from remote settings, enforcing the rule that `Writeback` requires grok.com auth (it syncs session history to the user's account).
+    /// This is the single home for that gate.
+    /// It is used at boot ([`crate::agent::init`]) and by the post-readiness self-heal (`MvpAgent::reapply_storage_mode`).
     pub(crate) fn from_remote_gated(
         remote: Option<&crate::util::config::RemoteSettings>,
         has_xai_auth: bool,
@@ -974,13 +947,12 @@ fn walk_toml(
         }
     }
 }
-/// The `[skills]` table from an effective config, shared by the reload
-/// dispatch and `grok inspect`.
+/// The `[skills]` table from an effective config, shared by the reload dispatch and `grok inspect`.
 pub(crate) use crate::config::reloader::parse_skills_config;
-/// Effective config: layers + campaign overlay (remote cache + `GROK_CAMPAIGNS_OVERRIDE`).
+/// Effective config: the layers plus the campaign overlay (remote cache and `GROK_CAMPAIGNS_OVERRIDE`).
 pub use crate::util::config::load_effective_config;
-/// Effective config with disk campaigns only — for one-shot entrypoints that
-/// never fetch remote settings (avoids resolving against a never-seeded cache).
+/// Effective config with disk campaigns only, for one-shot entrypoints that never fetch remote settings.
+/// This avoids resolving against a never-seeded cache.
 pub use crate::util::config::load_effective_config_disk_only;
 /// Where a requirement or permission rule was loaded from.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1069,16 +1041,16 @@ fn apply_managed_settings_features_inner(
     }
     enforced
 }
-/// Load the on-disk config for a one-shot command and clamp it with policy. Without the clamp a
-/// pinned value reads as an ordinary config value, which the environment outranks.
+/// Load the on-disk config for a one-shot command and clamp it with policy.
+/// Without the clamp a pinned value reads as an ordinary config value, which the environment outranks.
 pub fn load_agent_config_disk_only() -> Result<crate::agent::config::Config, String> {
     let effective = load_effective_config_disk_only().map_err(|e| e.to_string())?;
     let mut config = crate::agent::config::Config::new_from_toml_cfg(&effective)?;
     apply_policy(&mut config);
     Ok(config)
 }
-/// Clamp a config with managed settings and then requirements pins, logging each field a policy
-/// took over. Requirements run second so a pin wins a conflict.
+/// Clamp a config with managed settings and then requirements pins, logging each field a policy took over.
+/// Requirements run second so a pin wins a conflict.
 pub(crate) fn apply_policy(config: &mut crate::agent::config::Config) {
     let managed = apply_managed_settings_features(config);
     let pinned = apply_requirements(config);
@@ -1106,10 +1078,9 @@ pub(crate) fn apply_requirements(config: &mut crate::agent::config::Config) -> V
         .collect();
     keep_the_deciding_layer(enforced)
 }
-/// Layers arrive user first, system last, and the last write is the pin that
-/// holds. Report that one, so an operator reading the log sees the file that
-/// decided rather than the first that asked. Keyed by value as well as path,
-/// because one layer can enforce the same path twice for different reasons.
+/// Layers arrive user first, system last, and the last write is the pin that holds.
+/// Report that one, so an operator reading the log sees the file that decided rather than the first that asked.
+/// Keyed by value as well as path, because one layer can enforce the same path twice for different reasons.
 fn keep_the_deciding_layer(mut enforced: Vec<EnforcedField>) -> Vec<EnforcedField> {
     let mut seen = std::collections::HashSet::new();
     enforced.reverse();
@@ -1151,9 +1122,8 @@ fn apply_requirements_inner(
             if let Some(val) = req_bool(req, "features", stringify!($name)) {
                 config.requirements.$name.pin(val, source.clone());
                 config.features.$name = Some(val);
-                // Unconditional, like the registry loop: a later layer repeating
-                // the pin must report, or the dedupe keeps the first layer that
-                // asked instead of the one that decided.
+                // Unconditional, like the registry loop
+                // A later layer repeating the pin must report, or the dedupe keeps the first layer that asked instead of the one that decided
                 push(concat!("features.", stringify!($name)), format!("{val}"));
             }
         };
@@ -1438,8 +1408,8 @@ fn route_bwrap_startup<T>(
 }
 /// Resolve sandbox profile and apply OS-level enforcement. Called once at startup.
 ///
-/// `cli_profile` is the resumed/forced base profile (a resumed session's saved
-/// profile, or an explicit `--sandbox`); it wins over a fresh env/config read.
+/// `cli_profile` is the resumed/forced base profile (a resumed session's saved profile, or an explicit `--sandbox`).
+/// It wins over a fresh env/config read.
 pub fn apply_sandbox(
     sandbox_config: Option<&crate::agent::config::SandboxSettingsConfig>,
     cli_profile: Option<&str>,
@@ -1596,16 +1566,14 @@ pub fn apply_sandbox(
     }
 }
 pub use xai_grok_workspace::project_config::find_project_configs;
-/// Resolve the effective `[plugins]` config for a working directory the same
-/// way a session does at reload time: global/user config
-/// ([`load_effective_config`]) plus every ancestor project `.grok/config.toml`
-/// ([`find_project_configs`], extending `paths` and `disabled`) plus the
-/// imported `enabledPlugins` merge.
+/// Resolve the effective `[plugins]` config for a working directory the same way a session does at reload time:
+/// global/user config ([`load_effective_config`]),
+/// plus every ancestor project `.grok/config.toml` ([`find_project_configs`], extending `paths` and `disabled`),
+/// plus the imported `enabledPlugins` merge.
 ///
-/// Shared by `reload_plugins_impl`, `x.ai/commands/list`, and the agent's
-/// eager plugin-registry fan-out so all three discover the same plugins for a
-/// given cwd. Centralizing it prevents the paths/disabled/discovered-command
-/// drift those callers would otherwise accumulate.
+/// Shared by `reload_plugins_impl`, `x.ai/commands/list`, and the agent's eager plugin-registry fan-out.
+/// All three must discover the same plugins for a given cwd.
+/// Centralizing it prevents the paths/disabled/discovered-command drift those callers would otherwise accumulate.
 pub(crate) fn resolve_effective_plugins_config(
     cwd: &std::path::Path,
 ) -> crate::agent::config::PluginsConfig {
@@ -1633,7 +1601,7 @@ pub(crate) fn resolve_effective_plugins_config(
     plugins_cfg
 }
 pub use xai_grok_config::{deep_merge_toml, expand_env_vars_in_string, expand_env_vars_in_toml};
-/// Add a plugin path to `[plugins].paths` in `~/.thanh/config.toml`.
+/// Add a plugin path to `[plugins].paths` in `~/.grok/config.toml`.
 ///
 /// Creates the `[plugins]` section and `paths` array if they don't exist.
 /// Deduplicates: if the path is already present, this is a no-op.
@@ -1675,7 +1643,7 @@ pub(crate) fn add_plugin_path(path: &str) -> Result<(), Box<dyn std::error::Erro
     std::fs::write(&config_path, toml::to_string_pretty(&config)?)?;
     Ok(())
 }
-/// Remove a plugin path from `[plugins].paths` in `~/.thanh/config.toml`.
+/// Remove a plugin path from `[plugins].paths` in `~/.grok/config.toml`.
 ///
 /// If the path is not found, this is a no-op (returns Ok).
 pub(crate) fn remove_plugin_path(path: &str) -> Result<(), Box<dyn std::error::Error>> {
@@ -1698,7 +1666,7 @@ pub(crate) fn remove_plugin_path(path: &str) -> Result<(), Box<dyn std::error::E
     std::fs::write(&config_path, toml::to_string_pretty(&config)?)?;
     Ok(())
 }
-/// Add a plugin to `[plugins].disabled` in `~/.thanh/config.toml`.
+/// Add a plugin to `[plugins].disabled` in `~/.grok/config.toml`.
 ///
 /// Creates the `[plugins]` section and `disabled` array if they don't exist.
 /// Deduplicates: if already present, this is a no-op.
@@ -1742,7 +1710,7 @@ pub fn add_disabled_plugin(plugin_id: &str) -> Result<(), Box<dyn std::error::Er
     std::fs::write(&config_path, toml::to_string_pretty(&config)?)?;
     Ok(())
 }
-/// Remove a plugin from `[plugins].disabled` in `~/.thanh/config.toml`.
+/// Remove a plugin from `[plugins].disabled` in `~/.grok/config.toml`.
 ///
 /// If the plugin is not in the disabled list, this is a no-op.
 pub fn remove_disabled_plugin(plugin_id: &str) -> Result<(), Box<dyn std::error::Error>> {
@@ -1765,7 +1733,7 @@ pub fn remove_disabled_plugin(plugin_id: &str) -> Result<(), Box<dyn std::error:
     std::fs::write(&config_path, toml::to_string_pretty(&config)?)?;
     Ok(())
 }
-/// Add a plugin to `[plugin_cta].dismissed` in `~/.thanh/config.toml`.
+/// Add a plugin to `[plugin_cta].dismissed` in `~/.grok/config.toml`.
 ///
 /// Creates the `[plugin_cta]` section and `dismissed` array if they don't exist.
 /// Deduplicates: if already present, this is a no-op.
@@ -1817,10 +1785,9 @@ pub fn add_dismissed_plugin_cta_to_file(
     std::fs::write(config_path, toml::to_string_pretty(&config)?)?;
     Ok(())
 }
-/// All plugin ids listed in `[plugin_cta].dismissed` in `~/.thanh/config.toml`.
+/// All plugin ids listed in `[plugin_cta].dismissed` in `~/.grok/config.toml`.
 ///
-/// Read once (e.g. on catalog load) and cached so the matched-debounce recompute
-/// doesn't parse the config from disk on the UI thread.
+/// Read once (e.g. on catalog load) and cached so the matched-debounce recompute doesn't parse the config from disk on the UI thread.
 pub fn dismissed_plugin_ctas() -> std::collections::HashSet<String> {
     let config_path = crate::util::grok_home::grok_home().join("config.toml");
     dismissed_plugin_ctas_in_file(&config_path)
@@ -1849,9 +1816,9 @@ pub fn dismissed_plugin_ctas_in_file(
         })
         .unwrap_or_default()
 }
-/// Validate that a hook path is safe to add to `~/.thanh/hooks-paths`.
+/// Validate that a hook path is safe to add to `~/.grok/hooks-paths`.
 ///
-/// CWE-427: Only paths under `~/.thanh/` are allowed to prevent
+/// CWE-427: Only paths under `~/.grok/` are allowed to prevent
 /// arbitrary hook path injection that bypasses the project trust gate.
 /// Paths are canonicalized (resolving symlinks and `..`) before checking.
 pub(crate) fn validate_hooks_path(path: &str) -> Result<(), Box<dyn std::error::Error>> {
@@ -1882,7 +1849,7 @@ pub(crate) fn validate_hooks_path(path: &str) -> Result<(), Box<dyn std::error::
     let canonical_home = dunce::canonicalize(&grok_home).unwrap_or_else(|_| grok_home.clone());
     if !canonical.starts_with(&canonical_home) {
         return Err(format!(
-            "Hook path must be under ~/.thanh/ ({}). Got: {}",
+            "Hook path must be under ~/.grok/ ({}). Got: {}",
             canonical_home.display(),
             canonical.display()
         )
@@ -1911,7 +1878,7 @@ pub(crate) fn post_install_plugin(repo_key: &str) -> (Vec<String>, Vec<String>) 
     }
     (names, warnings)
 }
-/// Add a plugin to `[plugins].enabled` in `~/.thanh/config.toml`.
+/// Add a plugin to `[plugins].enabled` in `~/.grok/config.toml`.
 ///
 /// Used for project-scope plugins that are disabled by default.
 /// Deduplicates: if already present, this is a no-op.
@@ -1955,7 +1922,7 @@ pub fn add_enabled_plugin(plugin_id: &str) -> Result<(), Box<dyn std::error::Err
     std::fs::write(&config_path, toml::to_string_pretty(&config)?)?;
     Ok(())
 }
-/// Remove a plugin from `[plugins].enabled` in `~/.thanh/config.toml`.
+/// Remove a plugin from `[plugins].enabled` in `~/.grok/config.toml`.
 pub fn remove_enabled_plugin(plugin_id: &str) -> Result<(), Box<dyn std::error::Error>> {
     let config_path = crate::util::grok_home::grok_home().join("config.toml");
     let content = match std::fs::read_to_string(&config_path) {
@@ -1976,10 +1943,10 @@ pub fn remove_enabled_plugin(plugin_id: &str) -> Result<(), Box<dyn std::error::
     std::fs::write(&config_path, toml::to_string_pretty(&config)?)?;
     Ok(())
 }
-/// Add a hook path to `~/.thanh/hooks-paths` (one path per line).
+/// Add a hook path to `~/.grok/hooks-paths` (one path per line).
 ///
 /// If the path is already present (exact string match), this is a no-op.
-/// CWE-427: The path is validated to be under `~/.thanh/` before writing.
+/// CWE-427: The path is validated to be under `~/.grok/` before writing.
 pub(crate) fn add_hooks_path(path: &str) -> Result<(), Box<dyn std::error::Error>> {
     validate_hooks_path(path)?;
     add_hooks_path_to_file(
@@ -2007,11 +1974,25 @@ pub(crate) fn add_hooks_path_to_file(
     writeln!(file, "{}", path)?;
     Ok(())
 }
-/// Remove a hook path from `~/.thanh/hooks-paths`.
+/// The user-registered hook directories (`~/.grok/hooks-paths` lines) —
+/// exactly what `remove_hooks_path` can remove (same exact-string match).
+pub(crate) fn registered_hook_paths() -> std::collections::HashSet<String> {
+    let path = crate::util::grok_home::grok_home().join("hooks-paths");
+    match std::fs::read_to_string(&path) {
+        Ok(content) => content
+            .lines()
+            .map(str::trim)
+            .filter(|l| !l.is_empty())
+            .map(str::to_owned)
+            .collect(),
+        Err(_) => std::collections::HashSet::new(),
+    }
+}
+/// Remove a hook path from `~/.grok/hooks-paths`.
 ///
-/// If the path is not found (exact string match), this is a no-op.
-/// Matches the same exact-string behavior as `add_hooks_path`.
-pub(crate) fn remove_hooks_path(path: &str) -> Result<(), Box<dyn std::error::Error>> {
+/// Returns whether the path was present (exact string match, like `add_hooks_path`).
+/// On `false` nothing was removed and callers must not claim success.
+pub(crate) fn remove_hooks_path(path: &str) -> Result<bool, Box<dyn std::error::Error>> {
     remove_hooks_path_from_file(
         path,
         &crate::util::grok_home::grok_home().join("hooks-paths"),
@@ -2021,10 +2002,10 @@ pub(crate) fn remove_hooks_path(path: &str) -> Result<(), Box<dyn std::error::Er
 pub(crate) fn remove_hooks_path_from_file(
     path: &str,
     paths_file: &std::path::Path,
-) -> Result<(), Box<dyn std::error::Error>> {
+) -> Result<bool, Box<dyn std::error::Error>> {
     let content = match std::fs::read_to_string(paths_file) {
         Ok(c) => c,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(false),
         Err(e) => return Err(e.into()),
     };
     let mut found = false;
@@ -2040,7 +2021,7 @@ pub(crate) fn remove_hooks_path_from_file(
         })
         .collect();
     if !found {
-        return Ok(());
+        return Ok(false);
     }
     if let Some(parent) = paths_file.parent() {
         std::fs::create_dir_all(parent)?;
@@ -2049,7 +2030,7 @@ pub(crate) fn remove_hooks_path_from_file(
         paths_file,
         new_lines.join("\n") + (if new_lines.is_empty() { "" } else { "\n" }),
     )?;
-    Ok(())
+    Ok(true)
 }
 #[cfg(test)]
 mod tests;

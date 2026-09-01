@@ -125,10 +125,47 @@ impl ChatStateActor {
         });
     }
 
-    /// Repair dangling tool calls after a harness-initiated halt.
+    /// Repair dangling tool calls after a harness-initiated halt: the
+    /// shell's cancel teardown calls this eagerly so the on-disk tail is
+    /// clean even if the session ends there; the next push (see
+    /// [`Self::push_user_message_with_repair_reason`]) repairs the same way
+    /// lazily as a backstop.
     pub(super) fn repair_dangling_after_harness_halt(&mut self, class: &'static str) {
+        self.pop_stranded_continue_reminder();
         self.ensure_conversation_integrity_with_reason(DanglingToolCallReason::HarnessHalted {
             class,
+        });
+    }
+
+    /// Drop a trailing continue reminder whose continuation will never
+    /// sample. Only called where the turn is known dead (harness halt, or a
+    /// new real user prompt arriving) — a live reminder awaiting its
+    /// continuation must survive the per-build integrity repair.
+    /// `IntegrityRepair` leaves token totals untouched, so the reminder's
+    /// push-time estimate lingers until the next provider usage reseeds it —
+    /// a small, safe-direction overcount.
+    pub(super) fn pop_stranded_continue_reminder(&mut self) {
+        if !matches!(
+            self.state.conversation.last(),
+            Some(xai_grok_sampling_types::ConversationItem::User(u))
+                if u.synthetic_reason
+                    == Some(xai_grok_sampling_types::SyntheticReason::LengthContinue)
+        ) {
+            return;
+        }
+        self.rewrite_history(HistoryRewrite::IntegrityRepair, |conversation| {
+            let mut stranded = 0;
+            while matches!(
+                conversation.last(),
+                Some(xai_grok_sampling_types::ConversationItem::User(u))
+                    if u.synthetic_reason
+                        == Some(xai_grok_sampling_types::SyntheticReason::LengthContinue)
+            ) {
+                conversation.pop();
+                stranded += 1;
+            }
+            tracing::info!(stranded, "Dropped stranded length-continue reminder");
+            stranded
         });
     }
 
@@ -268,6 +305,34 @@ impl ChatStateActor {
         item: ConversationItem,
         reason: DanglingToolCallReason,
     ) {
+        // A turn-starting user item (same predicate as the trailing-report
+        // walk) or a mid-turn user input (recovery prompt, stop-hook
+        // feedback, goal directive, directory switch, drained interjection)
+        // landing on a trailing continue reminder means the continuation is
+        // dead — the stranded reminder must not sit before the new
+        // instruction, or be buried by it. A live reminder is never trailing
+        // at these pushes: its continuation is still in flight (interjection
+        // drains are deferred while one is).
+        {
+            use xai_grok_sampling_types::SyntheticReason as R;
+            if matches!(
+                &item,
+                ConversationItem::User(u)
+                    if u.synthetic_reason.as_ref().is_none_or(|r| r.starts_prompt_turn())
+                        || matches!(
+                            u.synthetic_reason,
+                            Some(
+                                R::AutoRecovery
+                                    | R::StopHookFeedback
+                                    | R::GoalSummary
+                                    | R::WorkingDirectorySwitch
+                                    | R::Interjection
+                            )
+                        )
+            ) {
+                self.pop_stranded_continue_reminder();
+            }
+        }
         self.ensure_conversation_integrity_with_reason(reason);
         let estimated_tokens = super::state::estimate_item_tokens(&item);
         self.state.estimated_tokens_since_model += estimated_tokens;
@@ -513,14 +578,32 @@ impl ChatStateActor {
         });
     }
 
-    /// Replace the entire conversation, persist, re-estimate `total_tokens`,
-    /// and emit reset + token-update events.
-    ///
-    /// Compaction replaces carry the provider-side overhead forward as a
-    /// *ratio* (`base_estimate × provider_total ÷ estimate_at_last_response`,
-    /// capped at the pre-compaction total; `base_estimate` when that estimate is
-    /// 0) so the reseed neither springs back nor over-counts (see
+    /// Reseed for `total_tokens` after a conversation rewrite (compaction,
+    /// rewind, mode switch, goal-directive prune): the raw `base_estimate`
+    /// scaled by the provider-confirmed ratio (`total_tokens ÷
+    /// estimate_at_last_response`), capped at the pre-rewrite total (see
     /// `COMPACTION.md`).
+    pub(super) fn reseed_total_tokens(&self, base_estimate: u64) -> u64 {
+        let pre_replace_total = self.state.total_tokens;
+        let mut estimated_tokens =
+            if pre_replace_total > 0 && self.state.estimate_at_last_response > 0 {
+                let ratio = pre_replace_total as f64 / self.state.estimate_at_last_response as f64;
+                (base_estimate as f64 * ratio).round() as u64
+            } else {
+                base_estimate
+            };
+        // Over-counting fires premature compaction; an under-count self-heals
+        // on the next model response.
+        if pre_replace_total > 0 {
+            estimated_tokens = estimated_tokens.min(pre_replace_total);
+        }
+        estimated_tokens
+    }
+
+    /// Replace the entire conversation, persist, re-estimate `total_tokens`
+    /// via [`Self::reseed_total_tokens`], and emit reset + token-update events.
+    /// `is_compaction` only marks the turn capture; the reseed math is the
+    /// same for every rewrite.
     pub(super) fn replace_conversation(
         &mut self,
         items: Vec<ConversationItem>,
@@ -530,28 +613,16 @@ impl ChatStateActor {
         if is_compaction && let Some(cap) = &mut self.state.turn_capture {
             cap.compaction_occurred = true;
         }
-        let pre_replace_total = self.state.total_tokens;
         // `harness_trace_buffer` / `harness_trace_turns` intentionally untouched:
         // the planner/verifier subagents ran, so their sealed trace turns survive
         // a conversation replace (same intent as the `TruncateToPromptIndex` arm).
         self.persistence.replace_history(&items);
         let base_estimate = super::state::estimate_conversation_tokens(&items);
-        let mut estimated_tokens =
-            if is_compaction && pre_replace_total > 0 && self.state.estimate_at_last_response > 0 {
-                let ratio = pre_replace_total as f64 / self.state.estimate_at_last_response as f64;
-                (base_estimate as f64 * ratio).round() as u64
-            } else {
-                base_estimate
-            };
-        // Compaction must never appear to increase usage.
-        if is_compaction && pre_replace_total > 0 {
-            estimated_tokens = estimated_tokens.min(pre_replace_total);
-        }
+        let estimated_tokens = self.reseed_total_tokens(base_estimate);
         self.state.conversation = items;
         self.state.estimated_tokens_since_model = 0;
         self.state.total_tokens = estimated_tokens;
-        self.state.estimate_at_last_response =
-            super::state::estimate_conversation_tokens(&self.state.conversation);
+        self.state.estimate_at_last_response = base_estimate;
         self.rebase_turn_capture_offset();
         self.send_event(ChatStateEvent::ConversationReset {
             new_len: self.state.conversation.len(),

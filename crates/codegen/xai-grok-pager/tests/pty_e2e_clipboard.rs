@@ -1,7 +1,6 @@
 //! Clipboard, paste, primary-selection, and inline-media PTY coverage.
 //!
-//! This family is isolated from ordinary PTY scheduling and serialized by
-//! Bazel because its platform cases touch host-global clipboard state.
+//! This family is isolated from ordinary PTY scheduling and serialized by Bazel because its platform cases touch host-global clipboard state.
 
 // Shared support intentionally serves all PTY family crates.
 #[allow(dead_code, unused_imports)]

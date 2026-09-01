@@ -1,12 +1,9 @@
-//! Memory system tracing target and optional file-based logging layer.
-//!
 //! Provides a dedicated tracing target (`xai_memory`) with an optional
-//! file logger that writes to `~/.thanh/logs/memory.log`.
+//! file logger that writes to `~/.grok/logs/memory.log`.
 //!
 //! ## When to use
 //!
-//! Use `tracing::info!(target: memory_log::TARGET, ...)` at memory system
-//! lifecycle points — config resolution, storage init, flush, search, etc.
+//! Use `tracing::info!(target: memory_log::TARGET, ...)` at memory system points such as config resolution, storage init, flush, and search.
 //! These events are always emitted (zero cost when the layer is absent).
 //!
 //! ## Enabling (debug builds)
@@ -14,7 +11,7 @@
 //! ```bash
 //! # build with memory logging enabled, then:
 //! GROK_MEMORY_LOG=0 grok                # disable even when enabled
-//! tail -f ~/.thanh/logs/memory.log      # watch in another terminal
+//! tail -f ~/.grok/logs/memory.log      # watch in another terminal
 //! ```
 
 /// Tracing target for all memory system operations.
@@ -63,9 +60,7 @@ mod inner {
         }
     }
 
-    /// Build the memory log layer.
-    ///
-    /// Writes to `~/.thanh/logs/memory.log`. Filters to `xai_memory=trace`.
+    /// Writes to `~/.grok/logs/memory.log`. Filters to `xai_memory=trace`.
     /// Set `GROK_MEMORY_LOG=0` to disable, `GROK_MEMORY_LOG=/path` to redirect.
     pub fn layer<S>() -> Option<impl Layer<S>>
     where

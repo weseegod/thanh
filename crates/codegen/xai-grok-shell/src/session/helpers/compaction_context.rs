@@ -1,13 +1,10 @@
-//! Rendering helpers for [`CompactionStateContext`] that depend on
-//! shell-specific types (`xai_grok_tools::MemoryBackend`, memory context).
+//! Rendering helpers for [`CompactionStateContext`] that depend on shell-specific types (`xai_grok_tools::MemoryBackend`, memory context).
 //!
-//! The core [`CompactionStateContext`] struct and its builder live in
-//! `xai_chat_state::compaction_utils`. This module adds system-reminder
-//! rendering that requires dependencies not available in `xai-chat-state`.
+//! The core [`CompactionStateContext`] struct and its builder live in `xai_chat_state::compaction_utils`.
+//! This module adds system-reminder rendering that requires dependencies not available in `xai-chat-state`.
 //!
-//! The three **common** active-agent sections (background tasks, TODO list,
-//! running subagents) are formatted by
-//! [`xai_grok_compaction::reminder`] so grok-chat and grok-build stay in lockstep.
+//! The three **common** active-agent sections (background tasks, TODO list, running subagents) are formatted by [`xai_grok_compaction::reminder`].
+//! That keeps grok-chat and grok-build in lockstep.
 //! Harness-only sections (edited files, AGENTS.md, skills, MCP, memory) stay here.
 
 use std::path::PathBuf;
@@ -21,12 +18,10 @@ use xai_grok_compaction::reminder::{
     self, ActiveAgentReminderState, BackgroundTask, RunningSubagent, TodoItem, TodoStatus,
 };
 
-/// Resolved model-facing tool names for the MCP usage hint in compaction
-/// reminders.
+/// Resolved model-facing tool names for the MCP usage hint in compaction reminders.
 ///
-/// Resolved at runtime via `TemplateRenderer` from `ToolKind::SearchTool`
-/// and `ToolKind::UseTool`. Never hard-code tool names -- they can be
-/// renamed by the client.
+/// Resolved at runtime via `TemplateRenderer` from `ToolKind::SearchTool` and `ToolKind::UseTool`.
+/// Never hard-code tool names; they can be renamed by the client.
 pub struct McpToolNames {
     /// Model-facing name of the search/discover tool (e.g. "search_tool").
     pub search: String,
@@ -36,9 +31,8 @@ pub struct McpToolNames {
 
 /// Resolved model-facing tool names for the subagent reminder section.
 ///
-/// Both names are resolved at runtime via `TemplateRenderer` from
-/// `ToolKind::BackgroundTaskAction` and `ToolKind::KillTaskAction`.
-/// Never hard-code tool names — they can be renamed by the client.
+/// Both names are resolved at runtime via `TemplateRenderer` from `ToolKind::BackgroundTaskAction` and `ToolKind::KillTaskAction`.
+/// Never hard-code tool names; they can be renamed by the client.
 pub struct SubagentToolNames {
     /// Model-facing name of the poll/status tool (e.g. "get_task_output").
     pub poll: String,
@@ -48,8 +42,7 @@ pub struct SubagentToolNames {
 
 /// Format state info as system reminder, without memory search.
 ///
-/// Use this from sync contexts (e.g., `build_compacted_history`) where
-/// memory re-injection is handled separately by the session actor.
+/// Use this from sync contexts (e.g., `build_compacted_history`) where memory re-injection is handled separately by the session actor.
 pub fn to_system_reminder_sync(
     ctx: &CompactionStateContext,
     discovered_agents_md: &[PathBuf],
@@ -71,8 +64,7 @@ pub fn to_system_reminder_sync(
 
 /// Format state info as system reminder for injection into chat.
 ///
-/// When a `memory_backend` is provided, searches memory for relevant
-/// context from past sessions (post-compaction recovery).
+/// When a `memory_backend` is provided, searches memory for relevant context from past sessions (post-compaction recovery).
 pub async fn to_system_reminder(
     ctx: &CompactionStateContext,
     discovered_agents_md: &[PathBuf],
@@ -149,10 +141,9 @@ fn to_system_reminder_inner(
         ));
     }
 
-    // Available skills (startup + dynamically discovered, from SkillManager).
-    // Reuse the standard listing renderer so the post-compaction listing matches
-    // the startup `<system-reminder>` (no hard-coded tool name, includes
-    // `Use when:` triggers and `Absolute path:`).
+    // Available skills (startup and dynamically discovered, from SkillManager)
+    // Reuse the standard listing renderer so the post-compaction listing matches the startup `<system-reminder>`
+    // The shared renderer has no hard-coded tool name and includes `Use when:` triggers and `Absolute path:`
     if let Some(listing) =
         xai_grok_tools::types::skill_discovery_tracker::format_compaction_skill_listing(skills)
     {
@@ -163,8 +154,8 @@ fn to_system_reminder_inner(
         sections.push(format!("## Available Workflows\n{listing}"));
     }
 
-    // Common sections (BG → TODO → subagents) via shared formatter. Borrow
-    // long fields from `ctx` rather than cloning them into an owned DTO.
+    // Common sections (background tasks, then TODO list, then subagents) via the shared formatter
+    // Borrow long fields from `ctx` rather than cloning them into an owned DTO
     let commands: Vec<_> = ctx
         .running_tasks
         .iter()
@@ -324,10 +315,8 @@ mod tests {
         assert_eq!(text, expected, "got:\n{text}");
     }
 
-    /// Regression: task IDs in the post-compaction reminder must be rendered
-    /// verbatim. A fabricated `task-` prefix produces an ID that does not
-    /// exist in the task registry, so the model's follow-up
-    /// `get_task_output(task_id="task-<uuid>")` calls fail.
+    /// A fabricated `task-` prefix produces an ID that does not exist in the task registry.
+    /// The model's follow-up `get_task_output(task_id="task-<uuid>")` calls then fail.
     #[test]
     fn running_task_ids_render_verbatim() {
         let ctx = CompactionStateContext {
@@ -394,8 +383,7 @@ mod tests {
         }
     }
 
-    /// Active todos are re-surfaced post-compaction: pending/in_progress items
-    /// render verbatim with id + status; completed/cancelled collapse to counts.
+    /// Active todos reappear post-compaction: pending/in_progress items render verbatim with id and status; completed/cancelled collapse to counts.
     #[test]
     fn system_reminder_includes_active_todos() {
         let ctx = ctx_with_todos(vec![
@@ -427,7 +415,6 @@ mod tests {
         );
     }
 
-    /// The TODO List section is rendered directly below Running Background Tasks.
     #[test]
     fn system_reminder_places_todos_below_background_tasks() {
         let mut ctx = ctx_with_todos(vec![todo(
@@ -488,7 +475,6 @@ mod tests {
         assert!(text.contains("review-pr"), "{text}");
     }
 
-    /// No actionable items (all completed/cancelled) → no TODO section.
     #[test]
     fn system_reminder_omits_todos_when_none_active() {
         let ctx = ctx_with_todos(vec![

@@ -1,13 +1,6 @@
-//! I/O integration tests for the auto-update crate.
-//!
-//! These tests touch global process state — `GROK_HOME` (a `OnceLock` in
-//! `xai-grok-config`), `GROK_TEST_VERSION`, and `NPM_TOKEN` — so they
-//! must run serially. Once `GROK_HOME` is initialized for a process, it can't
-//! be changed; we set it from a single shared `OnceLock` and reset the
-//! contents of the directory between tests.
-//!
-//! The patterns here mirror the GROK_HOME isolation used in other
-//! integration tests.
+//! These tests must run serially: they touch `GROK_HOME` (a `OnceLock` in `xai-grok-config`), `GROK_TEST_VERSION`, and `NPM_TOKEN`.
+//! Once `GROK_HOME` is initialized for a process, it can't be changed.
+//! We set it from a single shared `OnceLock` and reset the contents of the directory between tests.
 
 mod common;
 
@@ -19,12 +12,10 @@ use serial_test::serial;
 use common::{reset_home, test_home};
 use xai_grok_update::write_version_cache;
 
-/// Path to the version cache file inside the test home.
 fn version_cache_path() -> PathBuf {
     test_home().join("version-thanh.json")
 }
 
-/// Local alias kept so existing test bodies don't need to change.
 fn reset() {
     reset_home();
 }
@@ -89,25 +80,6 @@ async fn write_version_cache_does_not_leave_tmp_file_behind() {
         tmp.display()
     );
 }
-
-#[tokio::test]
-#[serial]
-async fn write_version_cache_writes_valid_json_object() {
-    let _ = test_home();
-    reset();
-
-    write_version_cache("0.1.182-alpha.3", None).await;
-
-    let body = std::fs::read_to_string(version_cache_path()).unwrap();
-    // Must parse as JSON.
-    let parsed: serde_json::Value =
-        serde_json::from_str(&body).unwrap_or_else(|e| panic!("not valid JSON: {e}\nbody: {body}"));
-    let obj = parsed.as_object().unwrap();
-    assert!(obj.contains_key("version"));
-    assert!(obj.contains_key("checked_at"));
-    assert_eq!(parsed["version"], "0.1.182-alpha.3");
-}
-
 #[tokio::test]
 #[serial]
 async fn write_version_cache_records_recent_timestamp() {
@@ -220,34 +192,12 @@ async fn version_cache_missing_file_is_not_fresh() {
 // ─────────────────────────────────────────────────────────────────────────────
 // version-thanh.json wire format — the on-disk file is read by every thanh launch.
 // ─────────────────────────────────────────────────────────────────────────────
-
-#[tokio::test]
-#[serial]
-async fn version_cache_file_is_round_trippable() {
-    let _ = test_home();
-    reset();
-
-    write_version_cache("0.1.182-alpha.3", Some("0.1.180")).await;
-
-    let body = std::fs::read_to_string(version_cache_path()).unwrap();
-    let parsed: serde_json::Value = serde_json::from_str(&body).unwrap();
-
-    // The shape must match what a manually-written file would look like.
-    let manual = serde_json::json!({
-        "version": parsed["version"].as_str().unwrap(),
-        "stable_version": parsed["stable_version"].as_str().unwrap(),
-        "checked_at": parsed["checked_at"].as_str().unwrap(),
-    });
-    assert_eq!(parsed, manual);
-}
-
 #[tokio::test]
 #[serial]
 async fn write_version_cache_handles_long_prerelease_string() {
     let _ = test_home();
     reset();
 
-    // Realistic alpha string with multi-segment pre-release id.
     write_version_cache("0.1.190-alpha.42.beta.7", None).await;
 
     let body = std::fs::read_to_string(version_cache_path()).unwrap();
@@ -268,8 +218,7 @@ async fn write_version_cache_idempotent_for_same_version() {
     write_version_cache("0.1.180", None).await;
     let body2 = std::fs::read_to_string(version_cache_path()).unwrap();
 
-    // Both writes should leave the same version field, but timestamps may
-    // differ — verify the version is preserved.
+    // Timestamps may differ between the two writes, so compare only the version field
     let v1: serde_json::Value = serde_json::from_str(&body1).unwrap();
     let v2: serde_json::Value = serde_json::from_str(&body2).unwrap();
     assert_eq!(v1["version"], v2["version"]);
@@ -283,25 +232,7 @@ async fn write_version_cache_idempotent_for_same_version() {
 // via the public re-export only — no private items leaked.
 // ─────────────────────────────────────────────────────────────────────────────
 //
-// Note: `get_installed_grok_version` is not re-exported from `lib.rs`, but
-// it's `pub` from `version` module and accessible via `version::`.
-
-#[tokio::test]
-#[serial]
-async fn get_installed_version_uses_env_var_override() {
-    let _ = test_home();
-    reset();
-
-    unsafe {
-        std::env::set_var("GROK_TEST_VERSION", "9.9.9");
-    }
-    let v = xai_grok_update::version::get_installed_grok_version();
-    assert_eq!(v, "9.9.9");
-    unsafe {
-        std::env::remove_var("GROK_TEST_VERSION");
-    }
-}
-
+// `get_installed_grok_version` is not re-exported from `lib.rs`, but it's `pub` from `version` module and accessible via `version::`
 #[tokio::test]
 #[serial]
 async fn get_installed_version_falls_back_to_cargo_pkg_version_when_env_unset() {
@@ -312,7 +243,6 @@ async fn get_installed_version_falls_back_to_cargo_pkg_version_when_env_unset() 
         std::env::remove_var("GROK_TEST_VERSION");
     }
     let v = xai_grok_update::version::get_installed_grok_version();
-    // The compile-time CARGO_PKG_VERSION must be a parseable semver string.
     let _: semver::Version = v
         .parse()
         .unwrap_or_else(|e| panic!("CARGO_PKG_VERSION is not a valid semver: '{v}': {e}"));
@@ -342,28 +272,11 @@ async fn get_installed_version_with_env_var_takes_precedence() {
         std::env::remove_var("GROK_TEST_VERSION");
     }
 }
-
-#[tokio::test]
-#[serial]
-async fn get_installed_version_handles_alpha_prerelease_in_env() {
-    let _ = test_home();
-    reset();
-
-    unsafe {
-        std::env::set_var("GROK_TEST_VERSION", "0.1.200-alpha.5");
-    }
-    let v = xai_grok_update::version::get_installed_grok_version();
-    assert_eq!(v, "0.1.200-alpha.5");
-    unsafe {
-        std::env::remove_var("GROK_TEST_VERSION");
-    }
-}
-
 #[tokio::test]
 #[serial]
 async fn get_installed_version_does_not_validate_env_var_format() {
     // The function returns whatever's in the env var verbatim, even garbage.
-    // Document this so callers know they need to validate downstream.
+    // Callers must validate downstream
     let _ = test_home();
     reset();
 

@@ -58,8 +58,7 @@ fn make_config(channel: &str) -> UpdateConfig {
     }
 }
 
-/// Mount release-feed endpoints for a given version. Returns the `MockServer`.
-async fn mount_release_feed(version: &str, platform: &str) -> MockServer {
+async fn mount_gcs(version: &str, platform: &str) -> MockServer {
     let server = MockServer::start().await;
 
     // Channel pointer: stable returns this version.
@@ -270,7 +269,7 @@ async fn install_internal_resolves_version_via_channel_pointer_when_no_target() 
     let server = mount_release_feed("0.1.181", &platform).await;
     let cfg = make_config("stable");
 
-    // No pinned version → must fetch /stable pointer to resolve.
+    // No pinned version, so it must fetch the /stable pointer to resolve
     install_internal_from_base(None, &cfg, &server.uri())
         .await
         .unwrap();
@@ -292,7 +291,7 @@ async fn install_internal_alpha_channel_resolves_max_of_alpha_and_stable() {
     let platform = host_platform();
     let server = MockServer::start().await;
 
-    // Stable points to 0.1.181, alpha points to 0.1.180-alpha.5 — stable wins.
+    // Stable points to 0.1.181, alpha points to 0.1.180-alpha.5; stable wins
     Mock::given(method("GET"))
         .and(path("/stable"))
         .respond_with(ResponseTemplate::new(200).set_body_string("0.1.181"))
@@ -339,7 +338,7 @@ async fn install_internal_fails_on_binary_404() {
         .respond_with(ResponseTemplate::new(200).set_body_string("0.1.181"))
         .mount(&server)
         .await;
-    // Main binary returns 404 — must propagate as error.
+    // The main binary returns 404, which must propagate as an error
     Mock::given(method("GET"))
         .and(path(format!("/thanh-0.1.181-{platform}")))
         .respond_with(ResponseTemplate::new(404))
@@ -382,12 +381,11 @@ async fn install_internal_cleans_up_old_versions_keeping_n_minus_one() {
     reset_home();
     let platform = host_platform();
 
-    // Install v1, v2, v3 sequentially. After v3, only v3 (current) and v2
-    // (N-1) should remain on disk; v1 should be deleted.
+    // Install v1, v2, v3 sequentially
+    // After v3, only v3 (current) and v2 (N-1) should remain on disk; v1 should be deleted
     for v in ["0.1.179", "0.1.180", "0.1.181"] {
-        // Age earlier installs: cleanup never deletes freshly-written
-        // binaries (concurrent-racer protection), so retention assertions
-        // need the previous installs to look like old leftovers.
+        // Age earlier installs: cleanup never deletes freshly-written binaries (a fresh file may be a concurrent racer's just-renamed download)
+        // The retention assertions need the previous installs to look like old leftovers
         common::backdate_downloads();
         let server = mount_release_feed(v, &platform).await;
         let cfg = make_config("stable");
@@ -426,8 +424,7 @@ async fn install_internal_cleans_up_old_versions_keeping_n_minus_one() {
 #[tokio::test]
 #[serial]
 async fn install_internal_idempotent_for_same_version() {
-    // Re-installing the same version should not error and should leave the
-    // binary at the same path with the same content.
+    // Re-installing the same version should not error and should leave the binary at the same path with the same content
     let _ = test_home();
     reset_home();
     let platform = host_platform();
@@ -464,7 +461,7 @@ async fn install_internal_idempotent_for_same_version() {
 async fn install_internal_creates_grok_home_subdirs_if_missing() {
     let _ = test_home();
     reset_home();
-    // Explicitly delete bin/ and downloads/ so install must create them.
+    // Delete bin/ and downloads/ so the install must create them
     let _ = std::fs::remove_dir_all(test_home().join("bin"));
     let _ = std::fs::remove_dir_all(test_home().join("downloads"));
 
@@ -481,16 +478,13 @@ async fn install_internal_creates_grok_home_subdirs_if_missing() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Multi-base URL fallback: install_internal_from_bases tries each base in
-// preference order, falling through to the next on failure.
+// Multi-base URL fallback: install_internal_from_bases tries each base in preference order, falling through to the next on failure
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[tokio::test]
 #[serial]
 async fn install_internal_from_bases_falls_back_to_secondary_when_primary_fails() {
-    // Primary server returns 500 on every endpoint (feed outage simulation);
-    // fallback server serves the install successfully. Result: install
-    // succeeds via fallback.
+    // Primary server returns 500 on every endpoint, simulating a CDN outage; the fallback serves the install successfully
     let _ = test_home();
     reset_home();
     let platform = host_platform();
@@ -524,9 +518,8 @@ async fn install_internal_from_bases_falls_back_to_secondary_when_primary_fails(
 #[tokio::test]
 #[serial]
 async fn install_internal_from_bases_does_not_fallback_on_smoke_failure() {
-    // A --version failure is a property of the artifact, not the CDN. The
-    // fallback base must not be contacted (a dead fallback would fail
-    // differently if we retried).
+    // A --version failure is a property of the artifact, not the CDN
+    // The fallback base must not be contacted (a dead fallback would fail differently if we retried)
     let _ = test_home();
     reset_home();
     let platform = host_platform();
@@ -572,10 +565,8 @@ async fn install_internal_from_bases_does_not_fallback_on_smoke_failure() {
 #[tokio::test]
 #[serial]
 async fn install_internal_from_bases_uses_primary_when_it_works() {
-    // Both bases work; the install must use the primary (first one) and
-    // never touch the fallback. Verified by tearing down the fallback
-    // server immediately after configuration — if the install reached for
-    // it, the request would fail.
+    // Both bases work; the install must use the primary (first one) and never touch the fallback
+    // Verified by tearing down the fallback server immediately after configuration; if the install reached for it, the request would fail
     let _ = test_home();
     reset_home();
     let platform = host_platform();
@@ -602,8 +593,7 @@ async fn install_internal_from_bases_uses_primary_when_it_works() {
 #[tokio::test]
 #[serial]
 async fn install_internal_from_bases_propagates_last_error_when_all_fail() {
-    // Every base returns 500 — the install must fail, surfacing the final
-    // base's error rather than silently succeeding.
+    // Every base returns 500: the install must fail, surfacing the final base's error
     let _ = test_home();
     reset_home();
 

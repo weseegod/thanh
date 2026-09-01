@@ -28,8 +28,8 @@ fn wrap_clean_exit_stays_byte_transparent() {
         "clean child exit must propagate\nraw:\n{raw:?}"
     );
 
-    // Exactly the child's own disables — one occurrence each. A second copy
-    // means wrap injected resets on a clean exit.
+    // Exactly the child's own disables, one occurrence each
+    // A second copy means wrap injected resets on a clean exit
     for needle in [
         "\x1b[?1003l",
         "\x1b[?1006l",

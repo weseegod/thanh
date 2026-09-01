@@ -1,7 +1,4 @@
-//! MCP integration for the workspace server.
-//!
-//! Bridges [`McpClient`] to the server's [`McpTransport`] trait and wraps
-//! tool handlers with qualified `server__tool` names.
+//! Bridges [`McpClient`] to the server's [`McpTransport`] trait and wraps tool handlers with qualified `server__tool` names.
 
 use std::sync::Arc;
 
@@ -188,26 +185,21 @@ impl ToolServerHandler for QualifiedMcpToolHandler {
 pub struct McpStartResult {
     /// Server names that started successfully.
     pub started: Vec<String>,
-    /// Servers that failed to start.
     pub failed: Vec<McpStartFailure>,
 }
 
-/// A single MCP server startup failure.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct McpStartFailure {
-    /// Server name.
     pub name: String,
     /// Human-readable error description.
     pub error: String,
 }
 
-/// Extract a server name from an [`McpError`](xai_grok_mcp::servers::McpError),
-/// falling back to `"unknown"`.
+/// Extract a server name from an [`McpError`](xai_grok_mcp::servers::McpError), falling back to `"unknown"`.
 pub(crate) fn server_name_from_mcp_error(e: &xai_grok_mcp::servers::McpError) -> &str {
     e.server_name().unwrap_or("unknown")
 }
 
-/// Bridge config factory for MCP bridge connections.
 pub(crate) fn make_bridge_config(
     session_id: xai_tool_protocol::SessionId,
     server_name: &str,

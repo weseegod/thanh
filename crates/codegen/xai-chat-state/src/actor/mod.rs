@@ -120,6 +120,11 @@ impl ChatStateActor {
             ChatStateCommand::PushUserMessage { item } => {
                 self.push_user_message(item);
             }
+            ChatStateCommand::PushUserMessagesBatch { items } => {
+                for item in items {
+                    self.push_user_message(item);
+                }
+            }
             ChatStateCommand::PushUserMessageAndAck { item, reply } => {
                 self.push_user_message(item);
                 let _ = reply.send(());
@@ -131,6 +136,10 @@ impl ChatStateActor {
             } => {
                 let generation = cwd_generation.get();
                 let candidate = ConversationItem::working_directory_switch(content, generation);
+                // Pop a crash-stranded reminder BEFORE the strict append: the
+                // pop rewrites history from the in-memory image, which must
+                // not yet contain the acked append, or the rewrite erases it.
+                self.pop_stranded_continue_reminder();
                 let persist_rx = self
                     .persistence
                     .persist_working_directory_switch_and_ack(&candidate);
@@ -303,6 +312,9 @@ impl ChatStateActor {
             ChatStateCommand::RepairDanglingAfterHarnessHalt { class } => {
                 self.repair_dangling_after_harness_halt(class);
             }
+            ChatStateCommand::PopStrandedContinueReminder => {
+                self.pop_stranded_continue_reminder();
+            }
 
             // ═══ Queries ═══
             //
@@ -431,6 +443,9 @@ impl ChatStateActor {
             }
             ChatStateCommand::GetLastAssistantText { reply } => {
                 let _ = reply.send(self.get_last_assistant_text());
+            }
+            ChatStateCommand::GetTrailingAssistantReport { reply } => {
+                let _ = reply.send(self.get_trailing_assistant_report());
             }
             ChatStateCommand::GetLastAssistantTextInTurn { reply } => {
                 let _ = reply.send(self.get_last_assistant_text_in_turn());

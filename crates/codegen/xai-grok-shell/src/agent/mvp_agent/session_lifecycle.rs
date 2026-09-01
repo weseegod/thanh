@@ -1,6 +1,5 @@
 //! Session lifecycle, roster deltas, and the idle-session supervisor for [`MvpAgent`].
-//! Co-located `#[path]`-style child of `mvp_agent` (`use super::*`) so the `impl`
-//! block keeps access to `MvpAgent`'s private fields.
+//! Lives inside `mvp_agent` (`use super::*`) so the `impl` block keeps access to `MvpAgent`'s private fields.
 #![cfg_attr(
     not(test),
     deny(
@@ -19,19 +18,18 @@ pub(super) const CLOSE_INTAKE_WAIT: std::time::Duration = std::time::Duration::f
 const CLOSE_ATTACH_SETTLE_WAIT: std::time::Duration = std::time::Duration::from_secs(5);
 /// Cap on the sum of every close wait.
 pub(super) const CLOSE_TOTAL_BUDGET: std::time::Duration = std::time::Duration::from_secs(8);
-/// Bound on delete's wait for the subagent coordinator to drain a session's
-/// children. Separate from [`DRAIN_OLD_THREAD_WAIT`] (which bounds waiting out
-/// a flushing actor thread) so the two budgets can move independently.
+/// Bound on delete's wait for the subagent coordinator to drain a session's children.
+/// Separate from [`DRAIN_OLD_THREAD_WAIT`] (which bounds waiting out a flushing actor thread) so the two budgets can move independently.
 const DRAIN_SUBAGENTS_WAIT: std::time::Duration = std::time::Duration::from_secs(5);
-/// Cap on the sum of every delete wait (subagent drain + old-thread drain),
-/// mirroring [`CLOSE_TOTAL_BUDGET`] so the delete toast cannot outlast it.
+/// Cap on the sum of every delete wait (subagent drain and old-thread drain).
+/// Mirrors [`CLOSE_TOTAL_BUDGET`] so the delete toast cannot outlast it.
 const DELETE_TOTAL_BUDGET: std::time::Duration = std::time::Duration::from_secs(8);
 /// `cap`, shrunk to what remains under `deadline`.
 fn stage_budget(deadline: tokio::time::Instant, cap: std::time::Duration) -> std::time::Duration {
     cap.min(deadline.saturating_duration_since(tokio::time::Instant::now()))
 }
-/// What a close did. `Superseded`: a live session replaced the target and
-/// survived.
+/// What a close did.
+/// `Superseded`: a live session replaced the target and survived.
 #[must_use]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum CloseOutcome {
@@ -58,8 +56,8 @@ impl MvpAgent {
                 .send(SessionCommand::Shutdown(ShutdownKind::Graceful));
         }
     }
-    /// ACP `session/close` and its pre-ACP spelling. Orders behind prompt
-    /// intake; every wait spends from [`CLOSE_TOTAL_BUDGET`].
+    /// ACP `session/close` and its pre-ACP spelling.
+    /// Close waits its turn behind prompt intake; every wait spends from [`CLOSE_TOTAL_BUDGET`].
     pub(crate) async fn close_active_session(&self, id: &acp::SessionId) -> CloseOutcome {
         let deadline = tokio::time::Instant::now() + CLOSE_TOTAL_BUDGET;
         self.wait_for_load_to_settle(id, stage_budget(deadline, CLOSE_ATTACH_SETTLE_WAIT))
@@ -89,8 +87,8 @@ impl MvpAgent {
         self.finalize_session_replica(id);
         CloseOutcome::Closed
     }
-    /// Cancel the running turn and shut the actor down; `false` when not
-    /// resident. Close finalizes the replica afterward, delete must not.
+    /// Cancel the running turn and shut the actor down; `false` when not resident.
+    /// Close finalizes the replica afterward, delete must not.
     fn hard_stop_resident(&self, id: &acp::SessionId, trigger: CancelTrigger) -> bool {
         let Some(handle) = self.resident_handle(id) else {
             return false;
@@ -108,11 +106,9 @@ impl MvpAgent {
     }
     /// Hard-stop before wiping history so delete cannot race live writers.
     ///
-    /// Order matches [`Self::close_active_session`]: drop residency *before*
-    /// any await (the supervisor treats a finished still-resident actor as a
-    /// crash; awaiting subagent drain while resident races that sweep), and
-    /// every wait spends from a shared [`DELETE_TOTAL_BUDGET`] so the two
-    /// drains cannot stack into a toast twice as long as close's.
+    /// Order matches [`Self::close_active_session`]: drop residency before any await.
+    /// The supervisor treats a finished still-resident actor as a crash, so awaiting the subagent drain while resident races that sweep.
+    /// Every wait spends from a shared [`DELETE_TOTAL_BUDGET`] so the two drains cannot stack into a toast twice as long as close's.
     pub(crate) async fn teardown_live_session_before_delete(&self, id: &acp::SessionId) {
         let deadline = tokio::time::Instant::now() + DELETE_TOTAL_BUDGET;
         let resident = self.hard_stop_resident(id, CancelTrigger::SessionDelete);
@@ -129,8 +125,8 @@ impl MvpAgent {
                 .await;
         }
     }
-    /// Move the replica `active` -> `completed`. A hosting signal, not a
-    /// conversation ending: only an explicit close sends it.
+    /// Move the replica from `active` to `completed`.
+    /// A hosting signal, not a conversation ending: only an explicit close sends it.
     pub(super) fn finalize_session_replica(&self, id: &acp::SessionId) {
         #[cfg(test)]
         self.finalize_spy.borrow_mut().push(id.0.to_string());
@@ -143,8 +139,8 @@ impl MvpAgent {
             });
         }
     }
-    /// Clone of the hosted handle, if any. Callers must not hold a registry
-    /// borrow across an await: clone the handle out first.
+    /// Clone of the hosted handle, if any.
+    /// Callers must not hold a registry borrow across an await: clone the handle out first.
     pub(crate) fn resident_handle(&self, id: &acp::SessionId) -> Option<SessionHandle> {
         self.session_registry.resident_handle(id)
     }
@@ -183,9 +179,8 @@ impl MvpAgent {
     pub(crate) fn for_each_resident(&self, f: impl FnMut(&acp::SessionId, &SessionHandle)) {
         self.session_registry.for_each_resident(f)
     }
-    /// The funnel for a handle leaving residency: SIGKILLs the child-process
-    /// tree before the actor drains `Shutdown`, even on idle-unload, so a
-    /// wedged session's tree is still reclaimed.
+    /// Every handle leaving residency passes through here: it SIGKILLs the child-process tree before the actor drains `Shutdown`.
+    /// That runs even on idle-unload, so a wedged session's tree is still reclaimed.
     pub(super) fn take_session(&self, id: &acp::SessionId) -> Option<SessionHandle> {
         let handle = self.session_registry.take_resident(id);
         if let Some(handle) = &handle
@@ -213,8 +208,8 @@ impl MvpAgent {
         }
         self.log_resource_usage(xai_grok_telemetry::events::ResourceReportTrigger::SessionClose);
     }
-    /// Per-session prompt-intake lock: prompts land in submission order and a
-    /// cancel cannot overtake the prompt it targets. Keep preambles lean.
+    /// Per-session prompt-intake lock: prompts land in submission order and a cancel cannot overtake the prompt it targets.
+    /// Keep the work done while holding it short.
     pub(super) fn dispatch_lock(&self, id: &acp::SessionId) -> std::rc::Rc<tokio::sync::Mutex<()>> {
         self.session_registry.dispatch_lock(id)
     }
@@ -227,8 +222,7 @@ impl MvpAgent {
     pub(super) fn session_live_state_for(&self, id: &acp::SessionId) -> Option<SessionLiveState> {
         self.session_registry.live(id)
     }
-    /// Broadcast the removal delta; the spy records it because the live-state
-    /// entry is dropped with the session.
+    /// Broadcast the removal delta; the spy records it because the live-state entry is dropped with the session.
     pub(super) fn record_roster_delta(&self, id: &acp::SessionId, final_state: SessionLiveState) {
         #[cfg(test)]
         self.roster_delta_spy
@@ -247,8 +241,7 @@ impl MvpAgent {
             self.emit_roster_changed(vec![entry], Vec::new());
         }
     }
-    /// Upsert with a caller-supplied activity: at turn-start the actor has not
-    /// published `current_prompt_id` yet, so a natural read would say Idle.
+    /// Upsert with a caller-supplied activity: at turn-start the actor has not published `current_prompt_id` yet, so a natural read would say Idle.
     pub(super) fn push_roster_activity_delta(
         &self,
         id: &acp::SessionId,
@@ -259,8 +252,7 @@ impl MvpAgent {
             self.emit_roster_changed(vec![entry], Vec::new());
         }
     }
-    /// Roster-wide notification (no `sessionId`): the leader broadcasts it to
-    /// every client instead of routing by session.
+    /// Roster-wide notification (no `sessionId`): the leader broadcasts it to every client instead of routing by session.
     pub(super) fn emit_roster_changed(
         &self,
         upserted: Vec<crate::agent::roster::RosterEntry>,
@@ -278,8 +270,8 @@ impl MvpAgent {
                 ));
         }
     }
-    /// Dashboard activity. Precedence: NeedsInput (even mid-turn), then
-    /// Working, then the coarse `SessionLiveState`.
+    /// Dashboard activity.
+    /// Precedence: NeedsInput (even mid-turn), then Working, then the coarse `SessionLiveState`.
     pub(super) fn resident_activity(
         &self,
         id: &acp::SessionId,
@@ -362,8 +354,7 @@ impl MvpAgent {
             .filter_map(|id| self.resident_roster_entry(id))
             .collect()
     }
-    /// Full roster: resident actors plus recent on-disk sessions; resident
-    /// wins an id collision.
+    /// Full roster: resident actors plus recent on-disk sessions; resident wins an id collision.
     pub(crate) async fn build_roster(&self) -> Vec<crate::agent::roster::RosterEntry> {
         let resident = self.resident_roster_entries();
         let summaries = crate::session::persistence::list_recent_summaries(200)
@@ -395,15 +386,13 @@ impl MvpAgent {
         self.record_roster_delta(id, final_state);
         self.remove_session(id);
     }
-    /// Reap a resident actor that exited unexpectedly; the conversation stays
-    /// resumable on disk.
+    /// Reap a resident actor that exited unexpectedly; the conversation stays resumable on disk.
     pub(super) fn reap_dead_session(&self, id: &acp::SessionId) {
         self.remove_session_terminal(id, SessionLiveState::DeadFailed);
     }
-    /// Reap finished actor threads. Resident and finished is a crash
-    /// (`DeadFailed`); non-resident and finished is the expected clean exit,
-    /// dropped without demotion. `is_finished()` alone cannot tell them apart,
-    /// which is why residency decides.
+    /// Reap finished actor threads.
+    /// Resident and finished is a crash (`DeadFailed`); non-resident and finished is the expected clean exit, dropped without demotion.
+    /// `is_finished()` alone cannot tell them apart, which is why residency decides.
     pub(super) fn sweep_dead_sessions(&self) {
         let dead = self.session_registry.finished_threads();
         for id in dead {
@@ -427,10 +416,9 @@ impl MvpAgent {
             }
         }
     }
-    /// Idempotent join-handle supervisor: polls `is_finished()` each tick
-    /// (JoinHandle is not awaitable) and sweeps under `catch_unwind` so one
-    /// bad sweep cannot end supervision. The `LocalRef` to `self` is sound
-    /// because the agent owns and outlives the `LocalSet`.
+    /// Idempotent join-handle supervisor: polls `is_finished()` each tick, since JoinHandle is not awaitable.
+    /// Sweeps under `catch_unwind` so one bad sweep cannot end supervision.
+    /// The `LocalRef` to `self` is sound because the agent owns and outlives the `LocalSet`.
     pub(super) fn ensure_session_supervisor(&self) {
         if self.supervisor_started.replace(true) {
             return;
@@ -451,11 +439,10 @@ impl MvpAgent {
             }
         });
     }
-    /// Any work in flight? Sync running-turn and parked-plan-approval checks,
-    /// then an async queue probe; conservative (busy) on poison or timeout.
+    /// Any work in flight? Checks the running turn and a parked plan approval synchronously, then probes the queue asynchronously.
+    /// On a poisoned lock or a timeout it conservatively reports busy.
     ///
-    /// TODO: once the session actor can report its own aggregate activity,
-    /// including background work, move this gate inside the actor.
+    /// TODO: once the session actor can report its own aggregate activity, including background work, move this gate inside the actor.
     pub(super) async fn session_has_live_work(&self, id: &acp::SessionId) -> bool {
         let Some(handle) = self.resident_handle(id) else {
             return false;
@@ -514,14 +501,13 @@ impl MvpAgent {
         }
     }
 }
-/// Field names are the wire contract of `x.ai/debug/agent`'s `registries`
-/// object; each maps to the same-named registry.
+/// Field names are the wire contract of `x.ai/debug/agent`'s `registries` object; each maps to the same-named registry.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub(crate) struct RegistrySnapshot {
     pub sessions: usize,
     pub loading_sessions: usize,
-    /// Ids the session registry still tracks. Non-zero when every count below
-    /// is zero means an entry survived with a field none of them name.
+    /// Ids the session registry still tracks.
+    /// Non-zero when every count below is zero means an entry survived with a field none of them name.
     pub session_registry_entries: usize,
     pub session_threads: usize,
     pub resident_resources: usize,

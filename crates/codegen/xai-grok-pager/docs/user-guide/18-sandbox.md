@@ -47,7 +47,7 @@ To block specific files (e.g. `.env` or credential paths) on top of a profile, d
 
 ### Direct global hook write protection
 
-Under `workspace`, `read-only`, and `strict` (and custom profiles that extend those bases), the Grok state directory remains writable for session/runtime files, but the kernel **write-denies** the Grok-owned direct disk paths used as user-global hook sources (they stay readable):
+Under `workspace`, `read-only`, and `strict` (and custom profiles that extend those bases), the kernel **write-denies** the Grok-owned direct disk paths used as user-global hook sources (they stay readable when granted). Built-in `strict` can read `~/.grok` (hooks stay readable); writes are CWD + `~/.grok/sessions` + temp, not the whole tree. Write-deny still applies where the profile grants write:
 
 - `~/.thanh/hooks/` (hook directory)
 - `~/.thanh/hooks-paths` (registry file; not loaded as hook JSON — only its absolute targets are)

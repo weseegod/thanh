@@ -68,10 +68,10 @@ impl ChatStateActor {
         self.state.conversation.truncate(truncate_at);
         self.state.prompt_texts.truncate(target_prompt_index);
         self.state.prompt_index = target_prompt_index;
-        self.state.total_tokens =
-            super::state::estimate_conversation_tokens(&self.state.conversation);
+        let base_estimate = super::state::estimate_conversation_tokens(&self.state.conversation);
+        self.state.total_tokens = self.reseed_total_tokens(base_estimate);
         self.state.estimated_tokens_since_model = 0;
-        self.state.estimate_at_last_response = self.state.total_tokens;
+        self.state.estimate_at_last_response = base_estimate;
 
         self.persistence.replace_history(&self.state.conversation);
 
@@ -149,6 +149,71 @@ impl ChatStateActor {
             }
             None
         })
+    }
+
+    /// Reassemble a Length-salvaged report: the turn's last assistant text
+    /// (same seek as [`Self::get_last_assistant_text_in_turn`], walking past
+    /// mid-turn synthetics and tool items), then earlier segments joined
+    /// backwards across `Reasoning` and `LengthContinue` user items only.
+    /// Joined forward with no separator — Length cuts mid-token and
+    /// continuations carry their own whitespace.
+    pub(super) fn get_trailing_assistant_report(&self) -> Option<String> {
+        let mut items = self.state.conversation.iter().rev();
+        let mut segments: Vec<&str> = Vec::new();
+        // Seek the last assistant text of this turn, old-query semantics.
+        // A tool-call-carrying item is still a joinable segment: a
+        // continuation may finish the cut sentence and then call a tool.
+        for item in items.by_ref() {
+            match item {
+                xai_grok_sampling_types::ConversationItem::Assistant(a)
+                    if !a.content.trim().is_empty() =>
+                {
+                    segments.push(a.content.as_ref());
+                    break;
+                }
+                xai_grok_sampling_types::ConversationItem::User(u)
+                    if u.prompt_index.is_some()
+                        || u.synthetic_reason
+                            .as_ref()
+                            .is_none_or(|r| r.starts_prompt_turn()) =>
+                {
+                    return None;
+                }
+                _ => {}
+            }
+        }
+        // Join earlier salvage segments. The reminder is injected only on
+        // the first continue, so later segments sit adjacent (with at most
+        // `Reasoning` siblings between) — bare-`Reasoning` adjacency must
+        // join or a multi-continue report loses every middle segment.
+        for item in items {
+            match item {
+                xai_grok_sampling_types::ConversationItem::Assistant(a) => {
+                    // An earlier tool-call step is a real boundary.
+                    if !a.tool_calls.is_empty() {
+                        break;
+                    }
+                    if !a.content.trim().is_empty() {
+                        segments.push(a.content.as_ref());
+                    }
+                }
+                // Committed between salvage segments on reasoning models;
+                // not report content, not a boundary.
+                xai_grok_sampling_types::ConversationItem::Reasoning(_) => {}
+                // Join only across the salvage reminder; any other reminder
+                // separates distinct answers.
+                xai_grok_sampling_types::ConversationItem::User(u)
+                    if u.synthetic_reason
+                        == Some(xai_grok_sampling_types::SyntheticReason::LengthContinue) => {}
+                // Boundary — deliberately including `BackendToolCall`: a
+                // hosted-tool step between segments is a real step boundary.
+                _ => break,
+            }
+        }
+        if segments.is_empty() {
+            return None;
+        }
+        Some(segments.iter().rev().copied().collect())
     }
 
     /// Return the current turn's last assistant message with non-empty text, or

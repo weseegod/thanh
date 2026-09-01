@@ -210,7 +210,6 @@ pub async fn handle(
             let mut req =
                 serde_json::from_str::<CreateWorktreeFromWorktreeRequest>(args.params.get())?;
             let request_worktree_type = req.worktree_type;
-            // Apply default if not explicitly set in request
             if req.worktree_type.is_none() {
                 req.worktree_type = Some(worktree_type_default.into());
             }
@@ -221,7 +220,6 @@ pub async fn handle(
                 worktree_type_default,
                 req.worktree_type.unwrap_or(worktree_type_default.into()),
             );
-            // Dispatch prepare through workspace
             let result = ops
                 .dispatch(
                     &xai_grok_workspace::workspace_ops::PrepareWorktreeFromWorktreeReq {
@@ -244,8 +242,7 @@ pub async fn handle(
                 })?;
 
             if result.spawn_task {
-                // Pin the resolved path so the async task reuses it instead of
-                // generating a new UUID via auto_label().
+                // Pin the resolved path so the async task reuses it instead of generating a new UUID via auto_label()
                 req.resolved_dest_path = extract_creating_path(&Ok(response.clone()));
                 let notifier = GatewayWorktreeNotifier {
                     gateway: agent.gateway.clone(),
@@ -257,7 +254,7 @@ pub async fn handle(
 
             to_response(Ok(response))
         }
-        // Synchronous variant - waits for worktree creation to complete
+        // Synchronous variant: waits for worktree creation to complete
         "x.ai/git/worktree/create_from_worktree_sync" => {
             let mut req =
                 serde_json::from_str::<CreateWorktreeFromWorktreeRequest>(args.params.get())?;
@@ -291,7 +288,6 @@ pub async fn handle(
             }
 
             let request_worktree_type = req.worktree_type;
-            // Apply default if not explicitly set in request
             if req.worktree_type.is_none() {
                 req.worktree_type = Some(worktree_type_default.into());
             }
@@ -322,6 +318,9 @@ pub async fn handle(
                 worktree_type_default,
                 req.worktree_type.unwrap_or(worktree_type_default.into()),
             );
+            let mut grove_worktree = None;
+            apply_grove_worktree_flag(agent, &mut grove_worktree);
+            let grove_worktree = grove_worktree.unwrap_or(false);
             let registry_client = agent.session_registry_client();
             let agent_id = xai_grok_telemetry::id::agent_id();
 
@@ -334,6 +333,7 @@ pub async fn handle(
                     registry_client.as_ref(),
                     Some(agent.auth_manager.clone()),
                     &agent_id,
+                    grove_worktree,
                 )
                 .await,
             )
@@ -505,7 +505,7 @@ fn apply_grove_worktree_flag(agent: &MvpAgent, slot: &mut Option<bool>) {
     apply_grove_worktree_gate(slot, &root, cfg.remote_settings.as_ref());
 }
 
-/// Always run the grove gate, even when `slot` is already `Some`. Kill switch last.
+/// Always run the grove gate, even when `slot` is already `Some`; the kill switch applies last.
 pub(crate) fn apply_grove_worktree_gate(
     slot: &mut Option<bool>,
     root: &toml::Value,
@@ -665,8 +665,7 @@ mod tests {
 
     #[test]
     fn db_rebuild_response_carries_report_not_null() {
-        // Regression: forwarding `()` instead of the report yields `result: null`,
-        // which the CLI rejects with "ACP response missing result field".
+        // Regression: forwarding `()` instead of the report yields `result: null`, which the CLI rejects with "ACP response missing result field"
         let report = serde_json::json!({
             "discovered": 5,
             "registered": 3,

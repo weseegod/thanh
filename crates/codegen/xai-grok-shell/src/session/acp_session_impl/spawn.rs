@@ -1,21 +1,18 @@
-//! Session bring-up concern for `acp_session`: `spawn_session_actor`, the
-//! per-session OS thread (`SessionThread` / `spawn_session_on_thread`), and
+//! Session bring-up for `acp_session`: `spawn_session_actor` and the per-session OS thread (`SessionThread` / `spawn_session_on_thread`).
+//! Also holds the MCP auto-restart wiring (`SessionRestartActions`).
 //!
-//! Chat+local `own` supervisor (`gateway_bridge::local_workspace_supervisor`) is
-//! started in `session/new` *before* handshake stamp and stored on `MvpAgent`
-//! (not `SessionActor`). Crash-restart issues
-//! `BridgeCommand::UpdateComputerSessions` through the bridge slot seeded here.
-//! the MCP auto-restart wiring (`SessionRestartActions`).
+//! The chat+local `own` supervisor (`gateway_bridge::local_workspace_supervisor`) is started in `session/new`, before the handshake stamp.
+//! It lives on `MvpAgent`, not `SessionActor`.
+//! Crash-restart issues `BridgeCommand::UpdateComputerSessions` through the bridge slot seeded here.
 #![allow(clippy::items_after_test_module)]
 use super::*;
 use crate::remote::DEFAULT_CONTEXT_WINDOW;
 use xai_grok_telemetry::region;
 use xai_grok_telemetry::region::Parent as SpanParent;
 use xai_grok_telemetry::subagent_spawn::phase_region_under;
-/// Partition CLI `--allow` rules under the pin: blanket catch-all allows
-/// (`Allow(Any)` `*` / `**`, plus bare/match-all Bash/MCP/WebFetch grants — see
-/// `resolution::is_catchall_allow`) substitute for the blocked `--yolo`, so drop them when
-/// `policy_block` is set; keep everything else (and everything without a pin).
+/// Partition CLI `--allow` rules under the pin: a catch-all allow substitutes for the blocked `--yolo`, so drop it when `policy_block` is set.
+/// Catch-all means `Allow(Any)` `*` / `**` plus a bare or match-all Bash/MCP/WebFetch grant (`resolution::is_catchall_allow`).
+/// Every other rule is kept, and with no pin nothing is dropped.
 /// Pure (no I/O) so the wiring is unit-testable; the caller surfaces `dropped`.
 fn drop_cli_catchall_allows(
     rules: Vec<xai_grok_workspace::permission::types::PermissionRule>,
@@ -40,9 +37,8 @@ fn drop_cli_catchall_allows(
 }
 /// Build the per-session current-thread tokio runtime.
 ///
-/// Construction acquires fds (epoll/kqueue, waker) and fails with
-/// `EMFILE`/`EAGAIN` under resource pressure. Cap only — pre-warm is
-/// process-lifetime (`xai_tty_utils::runtime`).
+/// Construction acquires fds (epoll/kqueue, waker) and fails with `EMFILE`/`EAGAIN` under resource pressure.
+/// This only caps the blocking pool; pre-warming is reserved for process-lifetime runtimes (`xai_tty_utils::runtime`).
 pub(crate) fn build_session_runtime() -> std::io::Result<tokio::runtime::Runtime> {
     let mut builder = tokio::runtime::Builder::new_current_thread();
     xai_tty_utils::runtime::apply_blocking_pool(builder.enable_all()).build()
@@ -67,14 +63,10 @@ fn configured_memory_retrieval_mode(
 }
 /// Choose the sampler's own 429 retry threshold for a session's inference path.
 ///
-/// Invariant (one layer per role, never stacked, never zero):
-/// subagents pace 429s themselves via the turn-level pacer, so while that pacer
-/// is active (`pacer_max_attempts > 0`) the sampler's own 429 retry is disabled
-/// ([`xai_grok_sampler::RATE_LIMIT_RETRY_DISABLED`]). If the pacer is disabled
-/// (`pacer_max_attempts == 0`) the subagent falls back to the sampler's own 429
-/// retry ([`xai_grok_sampler::RATE_LIMIT_RETRY_THRESHOLD`]) so disabling the
-/// pacer is a true rollback rather than zero 429 handling. Main sessions always
-/// keep the sampler retry.
+/// One 429 layer per role, never stacked, never zero.
+/// A subagent with an active pacer (`pacer_max_attempts > 0`) paces 429s itself, so the sampler retry is disabled.
+/// With the pacer off, the subagent falls back to the sampler retry, so disabling the pacer is a true rollback rather than zero 429 handling.
+/// Main sessions always keep the sampler retry.
 fn subagent_sampler_rate_limit_threshold(is_subagent: bool, pacer_max_attempts: u32) -> u32 {
     if is_subagent && pacer_max_attempts > 0 {
         xai_grok_sampler::RATE_LIMIT_RETRY_DISABLED
@@ -101,8 +93,7 @@ mod cli_catchall_drop_tests {
             xai_grok_telemetry::events::MemoryRetrievalMode::Disabled
         );
     }
-    /// Under the pin, CLI catch-all `--allow` rules (`*`, `**`) are dropped while
-    /// a scoped rule (`Bash(touch *)`) survives.
+    /// Under the pin, CLI catch-all `--allow` rules (`*`, `**`) are dropped while a scoped rule (`Bash(touch *)`) survives.
     #[test]
     fn pin_drops_cli_catchalls_keeps_scoped() {
         let rules = vec![allow("*"), allow("Bash(touch *)"), allow("**")];
@@ -119,9 +110,8 @@ mod cli_catchall_drop_tests {
         assert_eq!(kept.len(), 3);
         assert!(dropped.is_empty());
     }
-    /// FIX 2: a bare `--allow Bash` and a `?*` Bash pattern are `--yolo`
-    /// substitutes on the freeform-execution dimension, so the pin drops them
-    /// while a scoped `Bash(git *)` survives.
+    /// A bare `--allow Bash` and a `?*` Bash pattern allow arbitrary bash, the same grant as `--yolo`.
+    /// The pin drops them while a scoped `Bash(git *)` survives.
     #[test]
     fn pin_drops_cli_bare_and_prefix_bash_keeps_scoped() {
         let rules = vec![
@@ -175,8 +165,7 @@ mod subagent_rate_limit_threshold_tests {
 }
 /// Spawns a session actor and returns the session handle plus a receiver for permission events.
 ///
-/// The permission events receiver should be used to collect telemetry about permission
-/// decisions (YOLO mode, user accept/reject, etc.) for upload to GCS.
+/// The permission events receiver should be used to collect telemetry about permission decisions (YOLO mode, user accept/reject) for upload to GCS.
 #[allow(clippy::too_many_arguments)]
 #[tracing::instrument(
     name = "session.spawn",
@@ -596,6 +585,7 @@ pub(crate) async fn spawn_session_actor(
     chat_state_handle.update_credentials(credentials);
     let state = TokioMutex::new(State {
         running_task: None,
+        finalization_gate: Default::default(),
         pending_inputs: VecDeque::new(),
         edit_holds: HashMap::new(),
         pending_notifications: Vec::new(),
@@ -1118,11 +1108,17 @@ pub(crate) async fn spawn_session_actor(
     let resolved_read =
         xai_grok_tools::reminders::task_completion::resolve_read_tool_name(agent.tool_bridge())
             .await;
+    let resolved_scheduler_delete =
+        xai_grok_tools::reminders::task_completion::resolve_scheduler_delete_tool_name(
+            agent.tool_bridge(),
+        )
+        .await;
     let _ = task_output_tool_name.set(resolved_task_output.clone());
     let _ = read_tool_name.set(resolved_read);
     tool_context.task_output_tool_name = resolved_task_output.unwrap_or_else(|| {
         xai_grok_tools::reminders::task_completion::DEFAULT_TASK_OUTPUT_TOOL.to_string()
     });
+    tool_context.scheduler_delete_tool_name = resolved_scheduler_delete;
     let scheduler_handle_for_handle = {
         let toolset = agent.tool_bridge().toolset();
         let res = toolset.resources.lock().await;
@@ -1658,9 +1654,57 @@ pub(crate) async fn spawn_session_actor(
             0,
         );
     }
+    let vcs_kind = {
+        let root = std::path::Path::new(&session_info.cwd);
+        match xai_grok_workspace::session::git::discover_git_root(root) {
+            xai_grok_workspace::session::git::GitDiscoveryResult::Found(git_root) => {
+                xai_grok_workspace::session::git::detect_vcs_kind(&git_root)
+            }
+            _ => xai_grok_workspace::session::git::VcsKind::None,
+        }
+    };
+    use crate::session::repo_status_prefix::{
+        RepoStatusInputs, RepoStatusPlan, RepoStatusPrefetch, discover_vcs_root,
+    };
+    let suppress_status_body =
+        !crate::util::config::resolve_repo_status_in_system_prompt(remote_settings.as_ref())
+            || startup_hints.skip_git_status;
+    let starts_fresh = initial_conversation_len == 0;
+    let repo_status_plan = if matches!(vcs_kind, xai_grok_workspace::session::git::VcsKind::None) {
+        RepoStatusPlan::NoRepo
+    } else {
+        let prefix_cwd = std::path::PathBuf::from(
+            prompt_display_cwd
+                .clone()
+                .unwrap_or_else(|| session_info.cwd.clone()),
+        );
+        if suppress_status_body {
+            RepoStatusPlan::RootOnly {
+                root: discover_vcs_root(&prefix_cwd),
+                vcs_kind,
+            }
+        } else {
+            let inputs = RepoStatusInputs::new(prefix_cwd, vcs_kind);
+            let prefetch = starts_fresh
+                .then(|| RepoStatusPrefetch::spawn(inputs.clone()))
+                .flatten();
+            RepoStatusPlan::Gather {
+                inputs,
+                prefetch: std::cell::RefCell::new(prefetch),
+            }
+        }
+    };
     let session = Arc::new_cyclic(|weak: &std::sync::Weak<SessionActor>| SessionActor {
         status_wake: Default::default(),
         session_info: session_info.clone(),
+        transient_retry_enabled: !startup_hints.is_subagent
+            && crate::util::config::resolve_turn_transient_retry(
+                remote_settings
+                    .as_ref()
+                    .and_then(|r| r.turn_transient_retry),
+            ),
+        transient_retries_prompt_total: std::cell::Cell::new(0),
+        transient_episode_start: std::cell::Cell::new(None),
         auth_method_id,
         model_auth_memo: std::cell::RefCell::new(None),
         attribution_callback,
@@ -1842,6 +1886,9 @@ pub(crate) async fn spawn_session_actor(
         laziness_debug_log: laziness_debug_log.map(|p| std::sync::Arc::from(p.as_path())),
         last_live_orphan_reconcile: std::cell::Cell::new(None),
         deferred_prefix: TaskSlot::new(),
+        repo_status_prefetch: crate::session::repo_status_prefix::RepoStatusPrefetchState::new(
+            repo_status_plan,
+        ),
         extension_registry: session_extension_registry(weak.clone()),
         last_announced_local_date: std::cell::Cell::new(chrono::Local::now().date_naive()),
         prefix_carries_fallback_date: std::cell::Cell::new(initial_prefix_carries_fallback_date),
@@ -1853,15 +1900,7 @@ pub(crate) async fn spawn_session_actor(
         turn_end_tx: Default::default(),
         client_hooks: std::cell::RefCell::new(client_hooks),
         hook_resolved_workspace_root: resolved_workspace_root,
-        vcs_kind: {
-            let root = std::path::Path::new(&session_info.cwd);
-            match xai_grok_workspace::session::git::discover_git_root(root) {
-                xai_grok_workspace::session::git::GitDiscoveryResult::Found(git_root) => {
-                    xai_grok_workspace::session::git::detect_vcs_kind(&git_root)
-                }
-                _ => xai_grok_workspace::session::git::VcsKind::None,
-            }
-        },
+        vcs_kind,
         hook_load_errors: std::cell::RefCell::new(_hook_load_errors),
         plugin_registry: std::cell::RefCell::new(plugin_registry.clone()),
         plugin_registry_handle,
@@ -1882,8 +1921,9 @@ pub(crate) async fn spawn_session_actor(
         next_title_refresh_idx: std::cell::Cell::new(initial_title_refresh_idx),
         session_turn_active: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         streaming_turn_capture: parking_lot::Mutex::new(StreamingTurnCapture::default()),
-        turn_stream_drained: parking_lot::Mutex::new(None),
-        pending_image_strip: parking_lot::Mutex::new(None),
+        turn_stream_drained: parking_lot::Mutex::new(std::collections::HashMap::new()),
+        pending_image_strip: parking_lot::Mutex::new(std::collections::HashMap::new()),
+        image_strip_rewrite_barrier: ImageStripRewriteBarrier::new(),
         sampler_handle,
         sampling_gate,
         rebuild_spec: rebuild_spec.clone(),
@@ -2260,8 +2300,8 @@ pub(crate) async fn spawn_session_actor(
         session_done_rx,
     ))
 }
-/// Handle for a session's dedicated thread. Stored separately from `SessionHandle`
-/// (which derives `Clone`) because `JoinHandle` is not `Clone`.
+/// Handle for a session's dedicated thread.
+/// Stored separately from `SessionHandle` (which derives `Clone`) because `JoinHandle` is not `Clone`.
 pub struct SessionThread {
     join_handle: std::thread::JoinHandle<()>,
 }
@@ -2286,11 +2326,10 @@ struct SessionInitResult {
 }
 /// Spawn a session actor on a dedicated thread with its own tokio runtime and `LocalSet`.
 ///
-/// The entire `spawn_session_actor` body runs on the session thread — the `!Send`
-/// `SessionActor` is constructed there and never crosses a thread boundary. The
-/// `Send` construction parameters are moved into the thread, and the `Send` results
-/// (`SessionHandle`, `permission_events_rx`, `system_prompt`) are sent back to the
-/// caller via a oneshot channel.
+/// The entire `spawn_session_actor` body runs on the session thread.
+/// The `!Send` `SessionActor` is constructed there and never crosses a thread boundary.
+/// The `Send` construction parameters are moved into the thread.
+/// The `Send` results (`SessionHandle`, `permission_events_rx`, `system_prompt`) are sent back to the caller via a oneshot channel.
 #[allow(clippy::too_many_arguments)]
 #[tracing::instrument(level = "debug", skip_all)]
 pub(crate) async fn spawn_session_on_thread(
@@ -2633,17 +2672,12 @@ pub(crate) async fn spawn_session_on_thread(
 }
 /// Production [`crate::session::mcp_restart::RestartActions`] impl.
 ///
-/// Captured by the dispatcher task at session startup when
-/// `mcp.auto_restart=true`. Holds an `Arc<SessionActor>` plus the
-/// dispatcher's `SharedShutdownState` so:
+/// Captured by the dispatcher task at session startup when `mcp.auto_restart=true`.
+/// Holds an `Arc<SessionActor>` plus the dispatcher's `SharedShutdownState` so:
 ///
-/// - `is_stdio_server_configured` resolves against
-///   [`SessionActor::is_stdio_server_configured`] (which reads
-///   `McpState::configs`).
+/// - `is_stdio_server_configured` resolves against [`SessionActor::is_stdio_server_configured`] (which reads `McpState::configs`).
 /// - `is_in_shutting_down` peeks at the dispatcher's set.
-/// - `respawn_stdio` delegates to
-///   [`SessionActor::respawn_stdio`] (re-runs `start_mcp_server`,
-///   handshake, liveness arm, owned_clients swap).
+/// - `respawn_stdio` delegates to [`SessionActor::respawn_stdio`] (re-runs `start_mcp_server`, handshake, liveness arm, owned_clients swap).
 /// - `push_status` forwards directly via the session's gateway.
 pub(crate) struct SessionRestartActions {
     session: Arc<SessionActor>,
@@ -2724,9 +2758,9 @@ fn select_terminal_backend_kind(
         TerminalBackendKind::LocalNonPersistent
     }
 }
-/// Recovers `prefix_carries_fallback_date` on resume, which skips the prefix rebuild. Fail-safe: any
-/// user item with both `<user_info>` and the date marker counts as stamped, so it may over-keep the
-/// reminder but never suppresses a dated session.
+/// Recovers `prefix_carries_fallback_date` on resume, which skips the prefix rebuild.
+/// Fail-safe: any user item with both `<user_info>` and the date marker counts as stamped.
+/// It may over-keep the reminder but never suppresses a dated session.
 fn resumed_prefix_carries_fallback_date(
     template_surfaces_local_date: bool,
     conversation: &[ConversationItem],

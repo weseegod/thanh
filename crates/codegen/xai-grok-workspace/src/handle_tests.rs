@@ -226,10 +226,8 @@ async fn local_harness_preserves_bash_chat_completion_output() {
     let typed = drain_terminal_ok(stream).await;
     assert_bash_cco_terminal(&typed);
 }
-/// No connection ⇒ every export entry point returns `None`, so the
-/// binary leaves the `DonatingLogLayer` inert and spawns no metric reporter.
-/// This is the flag-free "activate only on connection" contract that log
-/// and metric export share with the pre-existing `trace_donation_reporter`.
+/// Without a connection every export entry point returns `None`, so the binary leaves the `DonatingLogLayer` inert and spawns no metric reporter.
+/// This is the flag-free "activate only on connection" contract that log and metric export share with the pre-existing `trace_donation_reporter`.
 #[tokio::test]
 async fn donation_entry_points_are_inert_without_a_hub() {
     let handle = make_handle();
@@ -275,12 +273,9 @@ fn rewind_domain_and_result_labels_are_stable() {
     assert_eq!(rewind_result_label(true), "success");
     assert_eq!(rewind_result_label(false), "failure");
 }
-/// The per-bind handler builder maps the session's finalized toolset 1:1 —
-/// one handler per `tool_definitions()` entry, keyed by client name, with no
-/// extra handlers and no RPC handler (that is appended by the resolver /
-/// `connect_hub`, not here). The resolver-level "no intersection, no silent
-/// drop" guarantee is covered by
-/// [`resolver_advertises_tool_absent_from_connect_catalog`].
+/// The per-bind handler builder maps the session's finalized toolset 1:1: one handler per `tool_definitions()` entry, keyed by client name.
+/// It adds no extra handlers and no RPC handler (the resolver and `connect_hub` append that, not this builder).
+/// The resolver-level "no intersection, no silent drop" guarantee is covered by [`resolver_advertises_tool_absent_from_connect_catalog`].
 #[tokio::test]
 async fn build_session_routed_handlers_covers_finalized_toolset() {
     let handle = make_handle();
@@ -369,13 +364,10 @@ async fn build_session_routed_handlers_skips_invalid_client_name_without_panic()
         "valid tools must still get handlers: {names:?}"
     );
 }
-/// Regression for the deleted catalog intersection. Reproduces the
-/// `session.bind` resolver tail's composition — `build_session_routed_handlers`
-/// for the session toolset, plus the single RPC handler filtered from the
-/// connect-time catalog — and proves a session tool whose client name is
-/// ABSENT from that (grok-build) catalog is still advertised. The old
-/// `catalog ∩ session-names` filter silently dropped exactly such tools
-/// (grok-build renames → 6/11).
+/// Regression for the deleted catalog intersection.
+/// Reproduces the `session.bind` resolver tail: `build_session_routed_handlers` for the session toolset, plus the one RPC handler from the catalog.
+/// It proves a session tool whose client name is ABSENT from that (grok-build) catalog is still advertised.
+/// The old catalog-intersection filter silently dropped exactly such tools (grok-build renames: 6 of 11).
 #[tokio::test]
 async fn resolver_advertises_tool_absent_from_connect_catalog() {
     let handle = make_handle();
@@ -452,12 +444,10 @@ fn session_tool_names(session: &Arc<crate::session::WorkspaceSession>) -> Vec<St
         .map(|d| d.function.name.clone())
         .collect()
 }
-/// The sandbox-resume regression (`workspace_tool_coverage_incomplete`): a
-/// session created by a metadata-less bind resolves the workspace default;
-/// a later rebind that carries the client's explicit toolset must
-/// re-resolve and swap it in — not silently reuse the default — so the
-/// bind response advertises the configured (renamed) tools. A repeat
-/// rebind with the identical config is a no-op reuse.
+/// The sandbox-resume regression (`workspace_tool_coverage_incomplete`): a session created by a metadata-less bind resolves the workspace default.
+/// A later rebind that carries the client's explicit toolset must re-resolve and swap it in rather than silently reuse the default.
+/// The bind response then advertises the configured (renamed) tools.
+/// A repeat rebind with the identical config is a no-op reuse.
 #[tokio::test]
 async fn rebind_with_changed_explicit_toolset_reresolves_and_swaps() {
     let handle = make_handle();
@@ -494,9 +484,8 @@ async fn rebind_with_changed_explicit_toolset_reresolves_and_swaps() {
         .expect("session exists");
     assert_eq!(outcome, RebindOutcome::Reused);
 }
-/// A rebind without an explicit toolset (default resolution, or the
-/// fail-closed placeholders which the caller maps to `None`) must never
-/// downgrade an explicitly-configured session to the default toolset.
+/// A rebind without an explicit toolset must never downgrade an explicitly-configured session to the default toolset.
+/// "Without" covers default resolution and the fail-closed placeholders the caller maps to `None`.
 #[tokio::test]
 async fn rebind_without_explicit_toolset_reuses_existing() {
     let handle = make_handle();
@@ -528,11 +517,10 @@ async fn rebind_without_explicit_toolset_reuses_existing() {
         "a metadata-less rebind must not clobber the configured toolset"
     );
 }
-/// The create arm's fingerprint write is set-if-unset: a concurrent
-/// rebind that already swapped in its toolset (and recorded its
-/// fingerprint under `update_lock`) must not be clobbered by the create
-/// task's deferred write, or a later identical rebind would `Reused`-skip
-/// against a fingerprint that no longer describes the live toolset.
+/// The create arm's fingerprint write is set-if-unset.
+/// A concurrent rebind may already have swapped in its toolset and recorded its fingerprint under `update_lock`.
+/// The create task's deferred write must not clobber that fingerprint.
+/// Otherwise a later identical rebind would `Reused`-skip against a fingerprint that no longer describes the live toolset.
 #[tokio::test]
 async fn create_fingerprint_write_does_not_clobber_concurrent_rebind() {
     let handle = make_handle();
@@ -583,11 +571,9 @@ fn swap_rejected_count(reason: &str, trigger: &str) -> u64 {
         .with_label_values(&[reason, trigger])
         .get()
 }
-/// The lazy-bind / resume-correction regression lock: a
-/// default-resolved session (stored fingerprint `None`) must accept the
-/// owner's explicit-config rebind even mid-turn with a call in flight —
-/// the owner bind is designed to land mid-turn, and deferring it would
-/// serve a toolset that contradicts the config-built prompt.
+/// The lazy-bind and resume-correction regression lock.
+/// A default-resolved session (stored fingerprint `None`) must accept the owner's explicit-config rebind even mid-turn with a call in flight.
+/// The owner bind is designed to land mid-turn; deferring it would serve a toolset that contradicts the config-built prompt.
 #[tokio::test]
 async fn rebind_none_to_explicit_swaps_mid_turn() {
     let handle = make_handle();
@@ -614,9 +600,8 @@ async fn rebind_none_to_explicit_swaps_mid_turn() {
         vec!["renamed_read".to_owned()]
     );
 }
-/// `explicit → different-explicit` under dispatch: the rebind keeps the
-/// existing toolset (`ReresolveDeferredInFlight`, counted); once the
-/// call completes, a later rebind applies the correction.
+/// An explicit-to-different-explicit rebind under dispatch keeps the existing toolset (`ReresolveDeferredInFlight`, counted).
+/// Once the call completes, a later rebind applies the correction.
 #[tokio::test]
 async fn rebind_explicit_to_explicit_with_in_flight_call_defers_then_corrects() {
     use xai_grok_session_events::ToolOutcome;
@@ -664,8 +649,7 @@ async fn rebind_explicit_to_explicit_with_in_flight_call_defers_then_corrects() 
     );
     assert_eq!(session_tool_names(&rebound), vec!["read_b".to_owned()]);
 }
-/// A reconnect's identical `session.bind` heals a stale session: reuse
-/// without the marker, defer in-flight, rebuild + clear once idle.
+/// A reconnect's identical `session.bind` heals a stale session: reuse without the marker, defer in-flight, rebuild and clear once idle.
 #[tokio::test]
 async fn rebind_identical_reapply_repairs_stale_resolve() {
     use xai_grok_session_events::ToolOutcome;
@@ -734,8 +718,7 @@ async fn rebind_identical_reapply_repairs_stale_resolve() {
         "a successful install must clear the stale marker"
     );
 }
-/// The RPC path rejects a mid-turn config change with the retryable
-/// `TurnActive` error (counted); the retry at the turn boundary succeeds.
+/// The RPC path rejects a mid-turn config change with the retryable `TurnActive` error (counted); the retry at the turn boundary succeeds.
 #[tokio::test]
 async fn update_tool_config_rejects_mid_turn_then_succeeds_at_boundary() {
     let rejected_before = swap_rejected_count("turn_active", "update_tool_config");
@@ -772,11 +755,9 @@ async fn update_tool_config_rejects_mid_turn_then_succeeds_at_boundary() {
         vec!["renamed_read".to_owned()]
     );
 }
-/// TOCTOU lock: a turn that starts DURING the re-resolve (after the
-/// entry check passed) must still abort the install — the resolved
-/// toolset is discarded, the fingerprint stays unchanged, and the
-/// rejection is counted under `reason="turn_active_late"`. The retry at
-/// the turn boundary then succeeds.
+/// TOCTOU lock: a turn that starts DURING the re-resolve (after the entry check passed) must still abort the install.
+/// The resolved toolset is discarded, the fingerprint stays unchanged, and the rejection is counted under `reason="turn_active_late"`.
+/// The retry at the turn boundary then succeeds.
 #[tokio::test]
 async fn update_tool_config_rejects_turn_started_during_resolve() {
     let late_rejected_before = swap_rejected_count("turn_active_late", "update_tool_config");
@@ -818,9 +799,7 @@ async fn update_tool_config_rejects_turn_started_during_resolve() {
     let session = handle.session("main").expect("main session exists");
     assert_eq!(session_tool_names(&session), vec!["late_read".to_owned()]);
 }
-/// Re-applying the session's current config mid-turn stays allowed
-/// (matching fingerprint), so hot-reload re-applies keep working
-/// during turns.
+/// Re-applying the session's current config mid-turn stays allowed (matching fingerprint), so hot-reload re-applies keep working during turns.
 #[tokio::test]
 async fn update_tool_config_reapply_of_current_config_allowed_mid_turn() {
     let handle = make_handle();
@@ -930,8 +909,7 @@ fn explicit_cfg(name_override: &str) -> ToolServerConfig {
         behavior_preset: None,
     }
 }
-/// Background-capable toolset (execute + task-output + kill), the shape
-/// the restart-recovery and RPC-survival tests resolve.
+/// The background-capable toolset (execute, task-output, kill) that the restart-recovery and RPC-survival tests resolve.
 pub(crate) fn background_capable_cfg() -> ToolServerConfig {
     ToolServerConfig {
         tools: vec![
@@ -946,8 +924,7 @@ pub(crate) fn background_capable_cfg() -> ToolServerConfig {
         behavior_preset: None,
     }
 }
-/// A minimal bash-kind [`TerminalRunRequest`] for `command`, writing
-/// output under `out_dir`.
+/// A minimal bash-kind [`TerminalRunRequest`] for `command`, writing output under `out_dir`.
 ///
 /// [`TerminalRunRequest`]: xai_grok_tools::computer::types::TerminalRunRequest
 pub(crate) fn terminal_run_request(
@@ -972,9 +949,8 @@ pub(crate) fn terminal_run_request(
         description: None,
     }
 }
-/// Start a `sleep 30` background task on `session`'s owned backend and
-/// return its handle. Shared by the swap-survival, rebind-survival, and
-/// restart tests.
+/// Start a `sleep 30` background task on `session`'s owned backend and return its handle.
+/// Shared by the swap-survival, rebind-survival, and restart tests.
 pub(crate) async fn start_background_sleep(
     session: &Arc<crate::session::WorkspaceSession>,
     out_dir: &std::path::Path,
@@ -986,9 +962,8 @@ pub(crate) async fn start_background_sleep(
         .await
         .expect("start background task")
 }
-/// A rebind that swaps in a different explicit toolset must rebuild the
-/// toolset AROUND the session-owned terminal backend, not a fresh one —
-/// that identity is what keeps background tasks alive across the swap.
+/// A rebind that swaps in a different explicit toolset must rebuild the toolset AROUND the session-owned terminal backend, not a fresh one.
+/// That identity is what keeps background tasks alive across the swap.
 #[tokio::test]
 async fn rebind_swap_preserves_session_terminal_backend() {
     let orphaned_before = orphaned_swap_count();
@@ -1032,11 +1007,9 @@ async fn rebind_swap_preserves_session_terminal_backend() {
         "the orphaned-backend tripwire must stay 0"
     );
 }
-/// A snapshot-driven `re_resolve_all_sessions` rebuild (MCP snapshot
-/// change) must also rebuild around the session-owned backend — with a
-/// LIVE background task riding through the rebuild. This is the
-/// regression lock for snapshot-triggered swaps killing background
-/// tasks by minting a fresh backend per session.
+/// A snapshot-driven `re_resolve_all_sessions` rebuild (MCP snapshot change) must also rebuild around the session-owned backend.
+/// The test keeps a LIVE background task running through the rebuild.
+/// This locks the regression where snapshot-triggered swaps killed background tasks by building a fresh backend per session.
 #[tokio::test]
 async fn re_resolve_all_sessions_preserves_session_terminal_backend() {
     let orphaned_before = orphaned_swap_count();
@@ -1079,12 +1052,9 @@ async fn re_resolve_all_sessions_preserves_session_terminal_backend() {
     );
     new_terminal.kill_task(&bg.task_id).await;
 }
-/// A local-bound session (external toolset installed via
-/// `bind_local_session`: the toolset keeps the shell's backend, the
-/// session-owned backend is an idle decoy) must be SKIPPED by
-/// snapshot-driven rebuilds — rebuilding around the decoy would detach
-/// tools from the shell's live task table — and must not fire the
-/// orphan tripwire (the mismatch is the local-bind contract).
+/// A local-bound session gets an external toolset via `bind_local_session`; that toolset keeps the shell's backend while the session-owned one idles.
+/// Snapshot-driven rebuilds must SKIP it: rebuilding around the idle backend would detach tools from the shell's live task table.
+/// The skip must not fire the orphan tripwire; the mismatch is the local-bind contract.
 #[tokio::test]
 async fn local_bound_session_skips_snapshot_rebuild() {
     let orphaned_before = orphaned_swap_count();
@@ -1198,9 +1168,8 @@ async fn local_bound_session_skips_snapshot_rebuild() {
     );
     assert_eq!(orphaned_swap_count(), orphaned_before);
 }
-/// A background task started before a toolset swap must still be
-/// queryable through the NEW toolset's `Terminal` resource — the
-/// swap ⇒ empty task table + SIGKILL incident class.
+/// A background task started before a toolset swap must still be queryable through the NEW toolset's `Terminal` resource.
+/// This locks the incident where a swap left an empty task table and SIGKILLed running tasks.
 #[tokio::test]
 async fn background_task_survives_toolset_swap() {
     let orphaned_before = orphaned_swap_count();
@@ -1242,10 +1211,9 @@ async fn background_task_survives_toolset_swap() {
     );
     new_terminal.kill_task(&bg.task_id).await;
 }
-/// Test factory whose sessions own a PERSISTENT-shell backend (the
-/// production factory shape). The plain [`TestSessionContextFactory`]
-/// builds a non-persistent backend, which tracks no shell cwd — hence
-/// this wrapper for the shell-state-survival test.
+/// Test factory whose sessions own a PERSISTENT-shell backend (the production factory shape).
+/// The plain [`TestSessionContextFactory`] builds a non-persistent backend, which tracks no shell cwd.
+/// The shell-state-survival test uses this wrapper instead.
 struct PersistentShellFactory {
     inner: TestSessionContextFactory,
 }
@@ -1269,8 +1237,7 @@ impl crate::config::SessionContextFactory for PersistentShellFactory {
         self.inner.registry_builder()
     }
 }
-/// [`make_handle`] shape around a [`PersistentShellFactory`]; no
-/// pre-created session.
+/// [`make_handle`] shape around a [`PersistentShellFactory`]; no pre-created session.
 fn make_persistent_shell_handle() -> WorkspaceHandle {
     let factory = Arc::new(PersistentShellFactory {
         inner: TestSessionContextFactory::new(),
@@ -1308,11 +1275,9 @@ fn make_persistent_shell_handle() -> WorkspaceHandle {
     )
     .expect("handle construction should succeed")
 }
-/// The persistent shell's state (a model-issued `cd`) survives a
-/// `Reresolved` toolset swap, because the shell lives inside the
-/// session-owned backend — the isolation-matrix #3 "persistent-shell
-/// cwd preserved" sub-assert, on the production backend shape
-/// (`with_persistent_shell`). Unix-only, like the persistent shell.
+/// The persistent shell's state (a model-issued `cd`) survives a `Reresolved` swap because the shell lives inside the session-owned backend.
+/// This is the isolation-matrix #3 "persistent-shell cwd preserved" sub-assert, on the production backend shape (`with_persistent_shell`).
+/// Unix-only, like the persistent shell.
 #[cfg(unix)]
 #[tokio::test]
 async fn reresolved_swap_preserves_persistent_shell_cwd() {
@@ -1373,8 +1338,7 @@ async fn reresolved_swap_preserves_persistent_shell_cwd() {
         "the persistent shell's cwd must survive the toolset swap"
     );
 }
-/// Each fork owns its own fresh backend: fork teardown kills only the
-/// fork's tasks, never the parent's.
+/// Each fork owns its own fresh backend: fork teardown kills only the fork's tasks, never the parent's.
 #[tokio::test]
 async fn fork_session_owns_distinct_terminal_backend() {
     let handle = make_handle();
@@ -1400,8 +1364,7 @@ async fn fork_session_owns_distinct_terminal_backend() {
         "the fork's toolset must reference the fork-owned backend"
     );
 }
-/// Poll `backend` with a trivial command until its actor refuses it —
-/// proving an explicit shutdown, since callers still hold live `Arc`s.
+/// Poll `backend` with a trivial command until its actor refuses it, proving an explicit shutdown since callers still hold live `Arc`s.
 /// Shared by the `drop_session` and hub-evict teardown tests.
 pub(crate) async fn assert_backend_stops(
     backend: &Arc<dyn xai_grok_tools::computer::types::TerminalBackend>,
@@ -1420,9 +1383,8 @@ pub(crate) async fn assert_backend_stops(
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
     }
 }
-/// `drop_session` shuts the backend down explicitly: the actor stops even
-/// while other `Arc`s to the backend are still alive (teardown must not
-/// depend on the last toolset `Arc` dropping).
+/// `drop_session` shuts the backend down explicitly: the actor stops even while other `Arc`s to the backend are still alive.
+/// Teardown must not depend on the last toolset `Arc` dropping.
 #[tokio::test]
 async fn drop_session_shuts_down_terminal_backend_explicitly() {
     let handle = make_handle();
@@ -1447,9 +1409,8 @@ async fn assert_hunk_tracker_stops(tracker: &xai_hunk_tracker::HunkTrackerHandle
         tokio::time::sleep(std::time::Duration::from_millis(20)).await;
     }
 }
-/// `drop_session` cancels the workspace-spawned hunk-tracker actor even
-/// while a leaked `HunkTrackerHandle` clone keeps its command channel
-/// open. Rationale on `cancel_hunk_tracker`.
+/// `drop_session` cancels the workspace-spawned hunk-tracker actor even while a leaked `HunkTrackerHandle` clone keeps its command channel open.
+/// Rationale on `cancel_hunk_tracker`.
 #[tokio::test]
 async fn drop_session_cancels_workspace_spawned_hunk_tracker() {
     let handle = make_handle();
@@ -1487,9 +1448,8 @@ async fn drop_session_cancels_forked_session_hunk_tracker() {
     handle.drop_session("child-ht", "child-ht").expect("drop");
     assert_hunk_tracker_stops(&leaked_tracker).await;
 }
-/// The inverse guarantee: a tracker bound via `create_session_with_tracker`
-/// is externally owned, so `drop_session` must NOT cancel it. The agent
-/// shares such trackers with the workspace session.
+/// The inverse guarantee: a tracker bound via `create_session_with_tracker` is externally owned, so `drop_session` must NOT cancel it.
+/// The agent shares such trackers with the workspace session.
 #[tokio::test]
 async fn drop_session_leaves_externally_owned_hunk_tracker_alive() {
     let handle = make_handle();
@@ -1528,11 +1488,9 @@ async fn drop_session_leaves_externally_owned_hunk_tracker_alive() {
     owner_cancel.cancel();
     assert_hunk_tracker_stops(&tracker).await;
 }
-/// Isolation matrix #5: a workspace process restart loses tasks (they are
-/// process state — physics), and what's pinned here is the recovery UX:
-/// the same session id recreates cleanly on the fresh process, the task
-/// table starts empty (loss is visible, not silent), and `get_task_output`
-/// for the lost id returns the informative not-found message.
+/// Isolation matrix #5: a workspace process restart loses tasks (they are process state), and what's pinned here is the recovery UX.
+/// The same session id recreates cleanly on the fresh process and the task table starts empty (loss is visible, not silent).
+/// `get_task_output` for the lost id returns the informative not-found message.
 #[tokio::test]
 async fn restarted_workspace_recreates_session_and_reports_lost_task() {
     let handle_a = make_handle();
@@ -1598,8 +1556,7 @@ async fn restarted_workspace_recreates_session_and_reports_lost_task() {
     session_a.terminal_backend().kill_task(&bg.task_id).await;
 }
 /// The typed helpers feed the registry and the targeted counters advance.
-/// Counters are monotonic, so `after > before` is robust despite the
-/// process-global registry and parallel tests (capture, restore, canary).
+/// Counters are monotonic, so `after > before` is robust despite the process-global registry and parallel tests (capture, restore, canary).
 #[test]
 fn rewind_metric_helpers_record_observable_effects() {
     let capture_labels = [
@@ -1645,8 +1602,7 @@ fn rewind_metric_helpers_record_observable_effects() {
         "canary counter must advance"
     );
 }
-/// The client ext-notification sink is invoked with the emitted method +
-/// params, and is no-op until installed.
+/// The client ext-notification sink is invoked with the emitted method and params, and is no-op until installed.
 #[tokio::test]
 async fn client_ext_sink_receives_emitted_notification() {
     let handle = make_handle();
@@ -1667,9 +1623,8 @@ async fn client_ext_sink_receives_emitted_notification() {
     assert_eq!(got[0].0, "x.ai/search/fuzzy/status");
     assert_eq!(got[0].1, serde_json::json!({"a": 1}));
 }
-/// End-to-end local streaming: open + change a fuzzy search over real files,
-/// run the notification driver, and assert a correctly-shaped
-/// `x.ai/search/fuzzy/status` is delivered through the sink with the match.
+/// End-to-end local streaming: open and change a fuzzy search over real files, then run the notification driver.
+/// A correctly-shaped `x.ai/search/fuzzy/status` must be delivered through the sink with the match.
 #[tokio::test]
 async fn fuzzy_change_streams_status_through_sink() {
     use crate::file_system::TargetClientId;
@@ -1716,10 +1671,9 @@ async fn fuzzy_change_streams_status_through_sink() {
         "expected alpha_widget in matches, got: {last}"
     );
 }
-/// Like [`make_handle`] but with `events_enabled = true` and a known
-/// `workspace_home` (returned `TempDir`) so tests can read the per-session
-/// `events.jsonl`. Bypasses the env flag via the private `build` seam so the
-/// assertion never races a sibling test's process environment.
+/// Like [`make_handle`] but with `events_enabled = true` and a known `workspace_home` (the returned `TempDir`).
+/// Tests can then read the per-session `events.jsonl`.
+/// The flag goes through the private `build` path, not the env var, so the assertion never races a sibling test's process environment.
 pub(crate) fn make_handle_with_events() -> (WorkspaceHandle, tempfile::TempDir) {
     let factory = Arc::new(TestSessionContextFactory::new());
     let cwd = factory.temp.path().to_path_buf();
@@ -1757,9 +1711,8 @@ pub(crate) fn make_handle_with_events() -> (WorkspaceHandle, tempfile::TempDir) 
     .expect("handle construction should succeed");
     (handle, home)
 }
-/// Full wiring: a turn with a tool call, the volatile-config toggles, and a
-/// representative `Mcp*` event all land in the per-session `events.jsonl`
-/// with truthful field content.
+/// Full wiring: a turn with a tool call, the volatile-config toggles, and a representative `Mcp*` event all land in the per-session `events.jsonl`.
+/// Their field content is truthful.
 #[tokio::test]
 async fn events_jsonl_captures_turn_tool_toggle_and_mcp_variants() {
     use xai_grok_session_events::ToolOutcome;
@@ -1950,9 +1903,8 @@ async fn before_turn_yolo_transition_emits_yolo_toggled_event() {
         "turn_started must carry the per-turn yolo state"
     );
 }
-/// Flag-off preservation: `WorkspaceHandle::new` resolves `events_enabled`
-/// from the (unset) env var, so the whole emission path must stay a noop —
-/// no session writers cached, no `sessions/` dir created.
+/// Flag-off preservation: `WorkspaceHandle::new` resolves `events_enabled` from the (unset) env var, so the whole emission path must stay a noop.
+/// It caches no session writers and creates no `sessions/` dir.
 #[tokio::test]
 async fn events_disabled_keeps_noop_and_writes_nothing() {
     use xai_grok_session_events::ToolOutcome;
@@ -2006,9 +1958,8 @@ async fn events_disabled_keeps_noop_and_writes_nothing() {
         "flag-off must not create the sessions dir or any events.jsonl"
     );
 }
-/// `on_session_ended` must evict the session's `events.jsonl` writer from the
-/// shared map (releasing the open file descriptor) without losing any events
-/// already written to disk.
+/// `on_session_ended` must evict the session's `events.jsonl` writer from the shared map (releasing the open file descriptor).
+/// Events already written to disk must survive.
 #[tokio::test]
 async fn session_end_evicts_event_writer_without_data_loss() {
     use xai_tool_protocol::turn_hook::BeforeTurnPayload;
@@ -2048,9 +1999,8 @@ async fn session_end_evicts_event_writer_without_data_loss() {
         "evicting the writer must not lose already-written events"
     );
 }
-/// `on_session_ended` must evict this session's in-flight enqueue handles
-/// (mid-turn deaths would otherwise leak them) without touching other
-/// sessions' entries.
+/// `on_session_ended` must evict this session's in-flight enqueue handles (mid-turn deaths would otherwise leak them).
+/// Other sessions' entries stay untouched.
 #[tokio::test]
 async fn session_end_evicts_inflight_enqueues() {
     let handle = make_handle();
@@ -2087,8 +2037,7 @@ async fn session_end_evicts_inflight_enqueues() {
         "other sessions' in-flight enqueues must be preserved"
     );
 }
-/// `on_session_ended` evicts the session's tool-defs debounce entry (no
-/// per-session leak in a long-lived hub server).
+/// `on_session_ended` evicts the session's tool-defs debounce entry (no per-session leak in a long-lived hub server).
 #[tokio::test]
 async fn session_end_evicts_tool_defs_debounce_entry() {
     let handle = make_handle();
@@ -2110,8 +2059,7 @@ async fn session_end_evicts_tool_defs_debounce_entry() {
         "debounce entry must be evicted on session end (no per-session leak)"
     );
 }
-/// The RPC `drop_session` path evicts the debounce entry like
-/// `on_session_ended` does.
+/// The RPC `drop_session` path evicts the debounce entry like `on_session_ended` does.
 #[tokio::test]
 async fn drop_session_evicts_tool_defs_debounce_entry() {
     let handle = make_handle();
@@ -2139,8 +2087,7 @@ fn is_safe_object_segment_rejects_traversal() {
     assert!(!is_safe_object_segment("../etc"));
     assert!(!is_safe_object_segment("a\0b"));
 }
-/// The single `TurnHookOutcome → TurnOutcomeLabel` mapping used by
-/// `on_after_turn` must be exhaustive and stable.
+/// The single mapping from `TurnHookOutcome` to `TurnOutcomeLabel` used by `on_after_turn` must be exhaustive and stable.
 #[test]
 fn turn_outcome_label_maps_every_variant() {
     use xai_grok_session_events::TurnOutcomeLabel;
@@ -2170,8 +2117,7 @@ pub(crate) fn fork_cfg_with(
     c.parent_session_id = parent.map(|p| p.to_owned());
     c
 }
-/// Resolver pointing at a never-listening port; tests assert only on the
-/// synchronous enqueue bookkeeping, never on upload completion.
+/// Resolver pointing at a never-listening port; tests assert only on the synchronous enqueue bookkeeping, never on upload completion.
 struct UnreachableSource;
 impl xai_file_utils::queue::TraceExportSource for UnreachableSource {
     fn resolve(&self) -> xai_file_utils::TraceExportConfig {
@@ -2191,8 +2137,7 @@ impl xai_file_utils::queue::TraceExportSource for UnreachableSource {
         }
     }
 }
-/// Upload queue whose worker never deletes an enqueued item mid-test
-/// (1h backoff after the first fast failure).
+/// Upload queue whose worker never deletes an enqueued item mid-test (1h backoff after the first fast failure).
 fn spawn_test_queue(home: &std::path::Path) -> Arc<xai_file_utils::queue::UploadQueue> {
     let policy = xai_file_utils::queue::UploadRetryPolicy {
         initial_delay: std::time::Duration::from_secs(3600),
@@ -2204,12 +2149,10 @@ fn spawn_test_queue(home: &std::path::Path) -> Arc<xai_file_utils::queue::Upload
         policy,
     ))
 }
-/// `WorkspaceHandle::new` (the test/default path, not `connect_local_workspace`)
-/// must use an ephemeral temp `workspace_home` — never the real
-/// `$GROK_WORKSPACE_HOME` — must NOT configure an upload queue, and must leave
-/// the legacy inline-upload path inert (no storage config). This pins the
-/// flag-off defaults so uploads never start implicitly
-/// and `new` stays runtime-light (no queue worker spawned).
+/// `WorkspaceHandle::new` (the test/default path, not `connect_local_workspace`) must use an ephemeral temp `workspace_home`.
+/// It must never use the real `$GROK_WORKSPACE_HOME` and must NOT configure an upload queue.
+/// The legacy inline-upload path stays inert (no storage config).
+/// This pins the flag-off defaults so uploads never start implicitly and `new` stays runtime-light (no queue worker spawned).
 #[tokio::test]
 async fn new_defaults_to_ephemeral_home_and_inert_legacy_upload() {
     let handle = make_handle();
@@ -2230,8 +2173,7 @@ async fn new_defaults_to_ephemeral_home_and_inert_legacy_upload() {
         "default construction must not configure an upload queue"
     );
 }
-/// `persist_and_enqueue_tool_state` runs the real save→read→enqueue chain
-/// and the item enters the queue.
+/// `persist_and_enqueue_tool_state` runs the real save, read, enqueue chain and the item enters the queue.
 #[tokio::test]
 async fn persist_and_enqueue_tool_state_enqueues_for_session() {
     let handle = make_handle();
@@ -2254,8 +2196,7 @@ async fn persist_and_enqueue_tool_state_enqueues_for_session() {
         "the session's tool_state must be flushed, read, and enqueued"
     );
 }
-/// Flag OFF ⇒ `spawn_tool_state_upload` enqueues nothing, even with a live
-/// session and a configured upload queue.
+/// With the flag OFF, `spawn_tool_state_upload` enqueues nothing, even with a live session and a configured upload queue.
 #[tokio::test]
 async fn tool_state_upload_is_noop_when_flag_off() {
     use crate::session::tool_config::test_support::TestSessionContextFactory;
@@ -2293,8 +2234,7 @@ async fn tool_state_upload_is_noop_when_flag_off() {
         "flag off ⇒ spawn_tool_state_upload must enqueue nothing"
     );
 }
-/// Opt-out (`data_collection_disabled`) ⇒ no tool_state export even
-/// with the feature flag on, a live session, and a configured queue.
+/// Opt-out (`data_collection_disabled`) means no tool_state export even with the feature flag on, a live session, and a configured queue.
 #[tokio::test]
 async fn tool_state_upload_is_noop_when_data_collection_disabled() {
     use crate::session::tool_config::test_support::TestSessionContextFactory;
@@ -2333,17 +2273,15 @@ async fn tool_state_upload_is_noop_when_data_collection_disabled() {
         "opt-out ⇒ spawn_tool_state_upload must enqueue nothing"
     );
 }
-/// Queue-backed handle with an explicit `identity` and a
-/// `{sandbox_id, mode}` server-metadata blob; the returned `TempDir` must
-/// outlive the handle. The proxy points at a dead local port. Collection
-/// is enabled (not opted out).
+/// Queue-backed handle with an explicit `identity` and a `{sandbox_id, mode}` server-metadata blob; the returned `TempDir` must outlive the handle.
+/// The proxy points at a dead local port.
+/// Collection is enabled (not opted out).
 fn make_queue_backed_handle(
     identity: crate::WorkspaceIdentity,
 ) -> (WorkspaceHandle, tempfile::TempDir) {
     make_queue_backed_handle_with(identity, false)
 }
-/// [`make_queue_backed_handle`] with an explicit opt-out
-/// verdict so gating tests can exercise the suppression path.
+/// [`make_queue_backed_handle`] with an explicit opt-out verdict so gating tests can exercise the suppression path.
 fn make_queue_backed_handle_with(
     identity: crate::WorkspaceIdentity,
     data_collection_disabled: bool,
@@ -2432,14 +2370,7 @@ async fn shared_accessors_expose_identity_and_sandbox_id() {
     );
     assert_eq!(shared.server_id(), None);
 }
-/// `server_metadata_typed` defaults cleanly when no metadata is configured.
-#[tokio::test]
-async fn server_metadata_typed_defaults_without_metadata() {
-    let handle = make_handle();
-    assert_eq!(handle.shared().server_metadata_typed().sandbox_id, None);
-}
-/// With a queue present, the environment artifact is enqueued
-/// (`enqueued` is bumped synchronously, so the assertion is race-free).
+/// With a queue present, the environment artifact is enqueued (`enqueued` is bumped synchronously, so the assertion is race-free).
 #[tokio::test]
 async fn environment_artifact_enqueued_when_queue_present() {
     let identity = crate::WorkspaceIdentity::new("user-7", Some("User".to_string()), None);
@@ -2471,9 +2402,8 @@ async fn environment_artifact_noop_without_queue() {
         .await;
     assert!(outcome.is_none(), "no queue ⇒ no enqueue");
 }
-/// End-to-end with a real queue: emission is unconditional (no env flag),
-/// so a bound session enqueues exactly one environment artifact and
-/// registers a producer task.
+/// End-to-end with a real queue: emission is unconditional (no env flag).
+/// A bound session enqueues exactly one environment artifact and registers a producer task.
 #[tokio::test]
 async fn maybe_emit_environment_enqueues_with_queue() {
     let identity = crate::WorkspaceIdentity::new("user-7", None, None);
@@ -2497,9 +2427,8 @@ async fn maybe_emit_environment_enqueues_with_queue() {
         "emission must enqueue the environment artifact"
     );
 }
-/// Opt-out suppresses emission: no producer is
-/// spawned and nothing reaches the queue. This is the real suppression
-/// condition that survived the removal of the env-flag gate.
+/// Opt-out suppresses emission: no producer is spawned and nothing reaches the queue.
+/// It is the only remaining suppression condition; the env-flag gate is gone.
 #[tokio::test]
 async fn maybe_emit_environment_suppressed_under_zdr() {
     let identity = crate::WorkspaceIdentity::new("user-7", None, None);
@@ -2796,9 +2725,8 @@ async fn fork_session_capability_widening_rejected() {
         "got {err:?}"
     );
 }
-/// A fork that races a terminal drain must be rejected by the same
-/// shutdown gate as `create_session`, so it can't repopulate the session
-/// map while the shared upload queue is being flushed/closed.
+/// A fork that races a terminal drain must be rejected by the same shutdown gate as `create_session`.
+/// Otherwise it could repopulate the session map while the shared upload queue is being flushed/closed.
 #[tokio::test]
 async fn fork_session_rejected_while_draining() {
     let handle = make_handle();
@@ -3025,15 +2953,6 @@ async fn on_mcp_snapshot_changed_emits_per_session_events_and_rebuilds() {
             .into_iter()
             .collect::<std::collections::BTreeSet<String>>()
     );
-}
-#[tokio::test]
-async fn shared_accessors_round_trip() {
-    let handle = make_handle();
-    assert!(handle.shared().root_cwd().to_str().is_some());
-    assert!(!handle.shared().respect_gitignore());
-    assert!(handle.shared().memory_config().is_none());
-    assert!(handle.shared().mcp_tools_snapshot().is_empty());
-    assert!(!handle.shared().default_tool_config().tools.is_empty());
 }
 #[tokio::test]
 async fn hook_registry_empty_when_no_sources() {
@@ -3270,12 +3189,6 @@ async fn hook_registry_empty_directory_yields_empty_registry() {
     let handle = WorkspaceHandle::new(config).expect("ok");
     assert!(handle.hook_registry().is_empty());
     assert!(handle.hook_load_errors().is_empty());
-}
-#[tokio::test]
-async fn hub_tools_snapshot_starts_empty() {
-    let handle = make_handle();
-    assert!(handle.shared().hub_tools_snapshot().is_empty());
-    assert!(handle.shared().hub_server().is_none());
 }
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn on_hub_tools_changed_emits_per_session_events() {
@@ -3725,7 +3638,7 @@ async fn resolve_service_path_rejects_symlink_escape() {
         "error should mention symlink escape: {msg}"
     );
 }
-/// A *dangling* leaf symlink (target missing, outside root) must be rejected:
+/// A *dangling* leaf symlink (target missing, outside root) must be rejected.
 /// `canonicalize` fails NotFound, so the leaf is resolved via `read_link`.
 #[tokio::test]
 #[cfg(unix)]
@@ -3745,8 +3658,7 @@ async fn resolve_service_path_rejects_dangling_symlink_escape() {
         "error should mention symlink escape: {err}"
     );
 }
-/// A multi-hop chain of dangling in-root links ending outside the root must
-/// be followed and rejected (not fall through the ancestor walk).
+/// A multi-hop chain of dangling in-root links ending outside the root must be followed and rejected (not fall through the ancestor walk).
 #[tokio::test]
 #[cfg(unix)]
 async fn resolve_service_path_rejects_dangling_symlink_chain() {
@@ -3994,8 +3906,7 @@ async fn fork_session_inherits_viewer_ctx_from_parent() {
         "child must inherit the parent's stream_tool_progress flag"
     );
 }
-/// Build the resolver exactly the way `connect_hub` does: session catalog
-/// handlers + the workspace RPC handler.
+/// Build the resolver exactly the way `connect_hub` does: session catalog handlers and the workspace RPC handler.
 fn bind_resolver_fixture(handle: &WorkspaceHandle) -> xai_computer_hub_sdk::SessionHandlerResolver {
     let catalog_toolset = handle.session("main").expect("main session").toolset();
     let mut catalog = build_session_routed_handlers(&catalog_toolset, handle);
@@ -4012,8 +3923,8 @@ fn handler_names(resolved: &xai_computer_hub_sdk::ResolvedSessionHandlers) -> Ve
         .map(|h| h.tool_id().as_str().to_owned())
         .collect()
 }
-/// Strict mode, preset-only bind: the full resolver path fails closed —
-/// RPC-only advertise + a `missing_tool_config` reason in the bind report.
+/// Strict mode, preset-only bind: the full resolver path fails closed.
+/// That means an RPC-only advertise and a `missing_tool_config` reason in the bind report.
 #[tokio::test]
 async fn strict_bind_without_explicit_toolset_fails_closed_end_to_end() {
     let handle = make_strict_handle();
@@ -4064,8 +3975,7 @@ async fn strict_rpc_only_bind_fails_closed_with_resolve_error_end_to_end() {
     let reason = resolved.resolve_error.expect("resolve_error must be set");
     assert!(reason.starts_with("missing_tool_config:"), "{reason}");
 }
-/// Strict mode, explicit `tools`: resolves and advertises the configured
-/// tool with no resolve_error.
+/// Strict mode, explicit `tools`: resolves and advertises the configured tool with no resolve_error.
 #[tokio::test]
 async fn strict_bind_with_explicit_toolset_serves_it_end_to_end() {
     let handle = make_strict_handle();
@@ -4086,8 +3996,7 @@ async fn strict_bind_with_explicit_toolset_serves_it_end_to_end() {
     assert_eq!(resolved.resolve_error, None);
     assert!(resolved.unserved_tool_ids.is_empty());
 }
-/// Lax mode (CLI/local embedders), metadata-less bind: falls back to the
-/// default catalog with no resolve_error.
+/// Lax mode (CLI/local embedders), metadata-less bind: falls back to the default catalog with no resolve_error.
 #[tokio::test]
 async fn lax_bind_without_metadata_uses_default_catalog_end_to_end() {
     let handle = make_handle();
@@ -4105,9 +4014,8 @@ async fn lax_bind_without_metadata_uses_default_catalog_end_to_end() {
     );
     assert_eq!(resolved.resolve_error, None);
 }
-/// A rebind whose explicit config is REJECTED (invalid entry) keeps the
-/// fail-closed reason even though the healthy session's previous toolset
-/// is reused — the client must learn its new config did not take effect.
+/// A rebind whose explicit config is REJECTED (invalid entry) keeps the fail-closed reason.
+/// The healthy session's previous toolset is still reused, but the client must learn its new config did not take effect.
 #[tokio::test]
 async fn rejected_rebind_config_keeps_resolve_error_end_to_end() {
     let handle = make_strict_handle();
@@ -4139,8 +4047,7 @@ async fn rejected_rebind_config_keeps_resolve_error_end_to_end() {
         .expect("rejected config must keep the fail-closed reason");
     assert!(reason.starts_with("invalid_tool_config:"), "{reason}");
 }
-/// An explicit EMPTY toolset (RPC-only clients, e.g. deploy binds) must
-/// reuse an existing session unchanged — never swap its tools away.
+/// An explicit EMPTY toolset (RPC-only clients, e.g. deploy binds) must reuse an existing session unchanged, never swap its tools away.
 #[tokio::test]
 async fn explicit_empty_toolset_rebind_never_swaps_session_tools() {
     let handle = make_strict_handle();
@@ -4169,9 +4076,8 @@ async fn explicit_empty_toolset_rebind_never_swaps_session_tools() {
     );
     assert_eq!(rpc_bind.resolve_error, None);
 }
-/// Rebind heal end-to-end: a strict fail-closed bind leaves the session
-/// empty; a corrected rebind with explicit tools rebuilds and advertises
-/// them with the report cleared.
+/// Rebind heal end-to-end: a strict fail-closed bind leaves the session empty.
+/// A corrected rebind with explicit tools rebuilds and advertises them with the report cleared.
 #[tokio::test]
 async fn strict_rebind_with_corrected_toolset_heals_end_to_end() {
     let handle = make_strict_handle();
@@ -4202,8 +4108,7 @@ async fn strict_rebind_with_corrected_toolset_heals_end_to_end() {
         "healed rebind must not carry the stale fail-closed reason"
     );
 }
-/// Owner bind: capability `all` + explicit toolset (strict servers fail
-/// closed otherwise).
+/// Owner bind: capability `all` and an explicit toolset (strict servers fail closed otherwise).
 fn owner_full_bind_metadata() -> serde_json::Value {
     serde_json::json!({
         "metadata": {
@@ -4227,8 +4132,7 @@ fn assert_advertises_owner_tools(names: &[String], context: &str) {
         );
     }
 }
-/// Consumer-shaped rebinds against a live owner session must `Reuse` it
-/// unchanged — never shrink its toolset or narrow its frozen capability.
+/// Consumer-shaped rebinds against a live owner session must `Reuse` it unchanged, never shrink its toolset or narrow its frozen capability.
 #[tokio::test]
 async fn owner_toolset_survives_concurrent_consumer_shaped_rebinds() {
     let handle = make_strict_handle();
@@ -4283,8 +4187,8 @@ async fn owner_toolset_survives_concurrent_consumer_shaped_rebinds() {
         "post-storm session toolset",
     );
 }
-/// On a fresh workspace-server the FIRST bind freezes `capability_mode`: consumer-shaped
-/// first binds strand the session narrow (why consumers never bind); owner-first is whole.
+/// On a fresh workspace-server the FIRST bind freezes `capability_mode`.
+/// A consumer-shaped first bind strands the session narrow (this is why consumers never bind); an owner-first bind keeps the full capability.
 #[tokio::test]
 async fn restored_server_first_bind_ordering_decides_capability_and_toolset() {
     let handle = make_strict_handle();
@@ -4361,19 +4265,15 @@ async fn restored_server_first_bind_ordering_decides_capability_and_toolset() {
         "owner-first ordering yields the full capability the agent declared"
     );
 }
-/// Isolation matrix #1–#3 through the REAL `session.bind` resolver (the
-/// closure `connect_hub` installs — the exact path both a soft rebind and
-/// an SDK dead-loop FULL rebind re-run): with a live background task,
-/// an identical rebind (`Reused`) and a changed-explicit-toolset rebind
-/// (`Reresolved`, driven with no in-flight tool calls) both keep the
-/// session-owned backend (`Arc::ptr_eq`) and the running task, while the
-/// changed rebind swaps the advertised handler set.
+/// Isolation matrix #1 to #3 through the REAL `session.bind` resolver, the closure `connect_hub` installs.
+/// Both a soft rebind and an SDK dead-loop FULL rebind re-run that exact path.
+/// With a live background task, the test drives an identical rebind (`Reused`) and then a changed-explicit-toolset rebind (`Reresolved`).
+/// The changed rebind runs with no in-flight tool calls.
+/// Both keep the session-owned backend (`Arc::ptr_eq`) and the running task; the changed rebind swaps the advertised handler set.
 ///
-/// The remaining matrix-#3 sub-asserts live beside the swap tests above:
-/// persistent-shell cwd preservation
-/// (`reresolved_swap_preserves_persistent_shell_cwd`) and the
-/// snapshot-driven rebuild with a live task
-/// (`re_resolve_all_sessions_preserves_session_terminal_backend`).
+/// The remaining matrix-#3 sub-asserts live beside the swap tests above.
+/// Persistent-shell cwd preservation is in `reresolved_swap_preserves_persistent_shell_cwd`.
+/// The snapshot-driven rebuild with a live task is in `re_resolve_all_sessions_preserves_session_terminal_backend`.
 #[tokio::test]
 async fn bind_flow_rebinds_keep_backend_and_task_alive_end_to_end() {
     let orphaned_before = orphaned_swap_count();
@@ -4460,8 +4360,7 @@ async fn bind_flow_rebinds_keep_backend_and_task_alive_end_to_end() {
     );
     backend.kill_task(&bg.task_id).await;
 }
-/// Dropping and rebinding a session with the same ID surfaces the
-/// new `viewer_ctx` (kill-switch for mid-session staleness).
+/// Dropping and rebinding a session with the same ID picks up the new `viewer_ctx`, the kill switch for a stale value mid-session.
 #[tokio::test]
 async fn drop_then_rebind_session_replaces_viewer_ctx_value() {
     let handle = make_handle();
@@ -4516,7 +4415,7 @@ fn skipped(reason: &str) -> EnqueueOutcome {
         reason: reason.to_owned(),
     }
 }
-/// Both archives durably enqueued → `Enqueued`, `artifact_count == 2`.
+/// Both archives durably enqueued yields `Enqueued` and `artifact_count == 2`.
 #[test]
 fn reduce_outcomes_both_enqueued() {
     let (status, count, msg) = reduce_enqueue_outcomes(&enq(), &enq());
@@ -4524,8 +4423,7 @@ fn reduce_outcomes_both_enqueued() {
     assert_eq!(count, 2);
     assert_eq!(msg, None);
 }
-/// A single failure makes the whole ack `Failed` and carries the reason,
-/// while still counting the durable sibling toward `artifact_count`.
+/// A single failure makes the whole ack `Failed` and carries the reason, while still counting the durable sibling toward `artifact_count`.
 #[test]
 fn reduce_outcomes_one_failed_one_enqueued() {
     let (status, count, msg) = reduce_enqueue_outcomes(&enq(), &failed("disk full"));
@@ -4555,8 +4453,7 @@ fn reduce_outcomes_collect_deadline_skip_is_not_failure() {
     assert_eq!(count, 1);
     assert_eq!(msg, None);
 }
-/// Inline fallback is a success for the status but is NOT on the durable
-/// spill, so it does not add to `artifact_count`.
+/// Inline fallback is a success for the status but is NOT on the durable spill, so it does not add to `artifact_count`.
 #[test]
 fn reduce_outcomes_inline_fallback_counts_as_success_not_durable() {
     let (status, count, msg) = reduce_enqueue_outcomes(&enq(), &inline());
@@ -4570,7 +4467,7 @@ fn reduce_outcomes_inline_fallback_counts_as_success_not_durable() {
     assert_eq!(status, AfterTurnAckStatus::Enqueued);
     assert_eq!(count, 0);
 }
-/// No durable-queue handles at all (queue disabled / not proxy) → `Skipped`.
+/// No durable-queue handles at all (queue disabled / not proxy) yields `Skipped`.
 #[tokio::test]
 async fn resolve_ack_skipped_when_no_handles() {
     let (status, count, msg) = resolve_after_turn_ack(
@@ -4594,8 +4491,7 @@ async fn resolve_ack_skipped_when_no_handles() {
     assert_eq!(count, 0);
     assert_eq!(msg.as_deref(), Some("data_collection_disabled"));
 }
-/// Two real enqueue tasks that both report `Enqueued` resolve to a clean
-/// `Enqueued` ack with `artifact_count == 2`.
+/// Two real enqueue tasks that both report `Enqueued` resolve to a clean `Enqueued` ack with `artifact_count == 2`.
 #[tokio::test]
 async fn resolve_ack_awaits_real_handles() {
     let before = tokio::spawn(async { EnqueueOutcome::Enqueued });
@@ -4611,8 +4507,7 @@ async fn resolve_ack_awaits_real_handles() {
     assert_eq!(count, 2);
     assert_eq!(msg, None);
 }
-/// A before-turn enqueue that outlives the watchdog is reported as
-/// `Failed { "watchdog_timeout" }` WITHOUT blocking the ack on the slow task.
+/// A before-turn enqueue that outlives the watchdog is reported as `Failed { "watchdog_timeout" }` WITHOUT blocking the ack on the slow task.
 #[tokio::test]
 async fn resolve_ack_watchdog_trips_on_slow_before() {
     let before = tokio::spawn(async {
@@ -4636,16 +4531,14 @@ async fn resolve_ack_watchdog_trips_on_slow_before() {
     assert_eq!(count, 1, "only the after archive landed durably");
     assert_eq!(msg.as_deref(), Some("watchdog_timeout"));
 }
-/// `await_enqueue_outcome(None, ..)` maps a missing handle to a truthful
-/// `Failed` (not a panic / not a silent success).
+/// `await_enqueue_outcome(None, ..)` maps a missing handle to a truthful `Failed` (not a panic / not a silent success).
 #[tokio::test]
 async fn await_missing_handle_is_failed() {
     let outcome =
         await_enqueue_outcome(None, std::time::Duration::from_secs(1), "before_enqueue").await;
     assert!(matches!(outcome, EnqueueOutcome::Failed { .. }));
 }
-/// The hand-written decode `match` must not drift from the enum's
-/// serde snake_case forms.
+/// The hand-written decode `match` must not drift from the enum's serde snake_case forms.
 #[test]
 fn session_relationship_wire_forms_round_trip() {
     for variant in [SessionRelationship::Primary, SessionRelationship::Subagent] {
@@ -4663,8 +4556,7 @@ fn session_relationship_wire_forms_round_trip() {
         SessionRelationship::Primary
     ));
 }
-/// The workspace decodes the bare snake_case `cancellation_category` string
-/// back into the enum; unknown / absent values decode to `None`.
+/// The workspace decodes the bare snake_case `cancellation_category` string back into the enum; unknown / absent values decode to `None`.
 #[test]
 fn cancellation_category_decode_round_trips() {
     assert_eq!(
@@ -4678,9 +4570,8 @@ fn cancellation_category_decode_round_trips() {
     assert_eq!(decode_cancellation_category(Some("not_a_category")), None);
     assert_eq!(decode_cancellation_category(None), None);
 }
-/// Without a durable upload queue (tests / local mode) a before turn
-/// produces no enqueue handle, so nothing is registered in
-/// `inflight_enqueues` and the ack machinery has nothing to await.
+/// Without a durable upload queue (tests / local mode) a before turn produces no enqueue handle.
+/// Nothing is registered in `inflight_enqueues` and the ack machinery has nothing to await.
 #[tokio::test]
 async fn no_upload_queue_registers_no_inflight_enqueue() {
     use xai_tool_protocol::turn_hook::BeforeTurnPayload;
@@ -4703,10 +4594,9 @@ async fn no_upload_queue_registers_no_inflight_enqueue() {
         "queue-less mode must not store any inflight before-turn enqueue handle"
     );
 }
-/// The request/response `After` turn hook performs the turn-end work and
-/// returns the ack on the reply: queue-less mode is a truthful `Skipped`
-/// with the `no_upload_queue` diagnostic, and a stored inflight before-turn
-/// entry is evicted by the turn-end path.
+/// The request/response `After` turn hook performs the turn-end work and returns the ack on the reply.
+/// Queue-less mode is a truthful `Skipped` with the `no_upload_queue` diagnostic.
+/// The turn-end path evicts a stored inflight before-turn entry.
 #[tokio::test]
 async fn compute_turn_injections_after_returns_skipped_ack_without_queue() {
     use xai_tool_protocol::turn_hook::{AfterTurnPayload, TurnHookOutcome, TurnHookRequest};
@@ -4766,9 +4656,8 @@ async fn compute_turn_injections_after_returns_skipped_ack_without_queue() {
     assert_eq!(ack.status, AfterTurnAckStatus::Skipped);
     assert_eq!(ack.error_message.as_deref(), Some("no_upload_queue"));
 }
-/// A `Before` request answers with a no-op reply (no ack) while driving
-/// the same turn-start work as the fire-and-forget hook — the request
-/// channel is the only turn signal the server-side sampler sends.
+/// A `Before` request answers with a no-op reply (no ack) while driving the same turn-start work as the fire-and-forget hook.
+/// The request channel is the only turn signal the server-side sampler sends.
 #[tokio::test]
 async fn compute_turn_injections_before_runs_turn_start_and_replies_noop() {
     use xai_tool_protocol::turn_hook::{BeforeTurnPayload, HookReply, TurnHookRequest};
@@ -4792,9 +4681,8 @@ async fn compute_turn_injections_before_runs_turn_start_and_replies_noop() {
         "Before request must drive on_before_turn (activity tracking)"
     );
 }
-/// The extended after-turn cancellation pair is decoded into the
-/// `TurnEnded` line: the category string becomes the enum's snake_case form
-/// and the context object passes through verbatim.
+/// The extended after-turn cancellation pair is decoded into the `TurnEnded` line.
+/// The category string becomes the enum's snake_case form and the context object passes through verbatim.
 #[tokio::test]
 async fn after_turn_decodes_cancellation_fields_into_events_jsonl() {
     use xai_tool_protocol::turn_hook::{AfterTurnPayload, BeforeTurnPayload, TurnHookOutcome};
@@ -5098,9 +4986,8 @@ async fn workspace_tool_definitions_payload_none_for_unknown_session() {
         "unknown session yields no payload"
     );
 }
-/// Handle backed by a real upload queue and a pre-created "main" session;
-/// `tool_defs_enabled` and `upload_queue_enabled` are injected via `build`
-/// so tests never race process env.
+/// Handle backed by a real upload queue and a pre-created "main" session.
+/// `tool_defs_enabled` and `upload_queue_enabled` are injected via `build` so tests never race process env.
 fn make_handle_with_queue_routing(
     tool_defs_enabled: bool,
     upload_queue_enabled: bool,
@@ -5160,8 +5047,7 @@ fn make_handle_with_queue_routing(
     handle.create_session("main").expect("create main session");
     (handle, queue, home)
 }
-/// [`make_handle_with_queue_routing`] with the legacy (queue-routing off)
-/// default used by most tests.
+/// [`make_handle_with_queue_routing`] with the legacy (queue-routing off) default used by most tests.
 fn make_handle_with_queue(
     tool_defs_enabled: bool,
 ) -> (
@@ -5363,8 +5249,7 @@ async fn spawn_producer_is_counted_and_withholds_idle() {
         "idle must be restored after the producer completes"
     );
 }
-/// A producer spawned after a drain has started stays TRACKED (the idle
-/// gate must keep seeing it) and is counted as at-risk.
+/// A producer spawned after a drain has started stays TRACKED (the idle gate must keep seeing it) and is counted as at-risk.
 #[tokio::test]
 async fn spawn_producer_after_drain_start_stays_tracked() {
     let handle = make_handle();
@@ -5388,8 +5273,7 @@ async fn spawn_producer_after_drain_start_stays_tracked() {
     let _ = tx.send(());
     assert_eq!(join.await.expect("task must run"), 42);
 }
-/// The producer tracker survives a completed drain: a workspace that keeps
-/// running after a hub evict still tracks (and idle-gates) new producers.
+/// The producer tracker survives a completed drain: a workspace that keeps running after a hub evict still tracks (and idle-gates) new producers.
 #[tokio::test]
 async fn producer_tracker_usable_after_drain() {
     let handle = make_handle();
@@ -5437,10 +5321,9 @@ async fn tool_definitions_emit_registers_producer() {
         "tool-definitions emission must register in the producer tracker"
     );
 }
-/// The drain must wait for a slow producer (phase 1.5) so its artifact
-/// reaches the queue before the queue drain runs: the producer enqueues an
-/// item the unreachable test queue can never upload, so `unfinished == 1`
-/// is only observable if the enqueue landed before phase 2 concluded.
+/// The drain must wait for a slow producer (phase 1.5) so its artifact reaches the queue before the queue drain runs.
+/// The producer enqueues an item the unreachable test queue can never upload.
+/// `unfinished == 1` is therefore only observable if the enqueue landed before phase 2 concluded.
 #[tokio::test]
 async fn two_phase_drain_waits_for_producer_then_drains_queue() {
     use std::sync::atomic::Ordering;
@@ -5480,9 +5363,9 @@ async fn two_phase_drain_waits_for_producer_then_drains_queue() {
         "the producer's artifact must be in the queue when the queue drain times out"
     );
 }
-/// Phase 1.5 is capped at half the post-phase-1 remainder: a producer that
-/// would finish within the total budget (at 400ms of 600ms) but past the
-/// cap (300ms) is cut off there, preserving the phase-2 floor.
+/// Phase 1.5 is capped at half the post-phase-1 remainder.
+/// A producer that would finish within the total budget (at 400ms of 600ms) but past the cap (300ms) is cut off there.
+/// That preserves the phase-2 floor.
 #[tokio::test(start_paused = true)]
 async fn drain_phase15_is_capped_at_half_the_remaining_budget() {
     let handle = make_handle();
@@ -5505,9 +5388,8 @@ async fn drain_phase15_is_capped_at_half_the_remaining_budget() {
          400ms producer; drained in {elapsed:?}"
     );
 }
-/// A wedged producer must not starve the phase-2 queue flush: items
-/// already durably enqueued before the drain still get drain time and are
-/// truthfully counted at the end.
+/// A wedged producer must not starve the phase-2 queue flush.
+/// Items already durably enqueued before the drain still get drain time and are truthfully counted at the end.
 #[tokio::test]
 async fn drain_wedged_producer_does_not_starve_queue_flush() {
     let factory = Arc::new(TestSessionContextFactory::new());
@@ -5545,8 +5427,7 @@ async fn drain_wedged_producer_does_not_starve_queue_flush() {
         "the wedged producer dominates the outcome label"
     );
 }
-/// A producer that outlives the whole grace budget classifies as
-/// `producers_timeout` and must not wedge the drain.
+/// A producer that outlives the whole grace budget classifies as `producers_timeout` and must not wedge the drain.
 #[tokio::test(start_paused = true)]
 async fn two_phase_drain_producer_exceeding_budget_times_out() {
     let handle = make_handle();

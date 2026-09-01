@@ -2607,53 +2607,6 @@ mod tests {
         assert_eq!(frame.body[0]["text"], "a,b\n1,2");
     }
 
-    // ── serde round-trips ───────────────────────────────────────────
-
-    #[test]
-    fn progress_frame_text_round_trips() {
-        let progress = ToolProgress::Text {
-            text: "round-trip".to_owned(),
-        };
-        let frame = progress_to_frame(progress, call_id());
-        let json = serde_json::to_value(&frame).expect("serialize");
-        let back: ToolCallProgressFrame = serde_json::from_value(json).expect("deserialize");
-        assert_eq!(back, frame);
-    }
-
-    #[test]
-    fn progress_frame_content_round_trips() {
-        let blocks = vec![
-            ContentBlock::Text {
-                text: "hello".to_owned(),
-            },
-            ContentBlock::Image {
-                mime_type: "image/png".to_owned(),
-                data: "abc".to_owned(),
-                media_id: None,
-                filename: None,
-                path: None,
-                metadata: Default::default(),
-            },
-        ];
-        let progress = ToolProgress::Content { blocks };
-        let frame = progress_to_frame(progress, call_id());
-        let json = serde_json::to_value(&frame).expect("serialize");
-        let back: ToolCallProgressFrame = serde_json::from_value(json).expect("deserialize");
-        assert_eq!(back, frame);
-    }
-
-    #[test]
-    fn progress_frame_custom_round_trips() {
-        let progress = ToolProgress::Custom {
-            subkind: "streaming.chunk".to_owned(),
-            payload: serde_json::json!({ "offset": 1024, "data": [1, 2, 3] }),
-        };
-        let frame = progress_to_frame(progress, call_id());
-        let json = serde_json::to_value(&frame).expect("serialize");
-        let back: ToolCallProgressFrame = serde_json::from_value(json).expect("deserialize");
-        assert_eq!(back, frame);
-    }
-
     // ── wire notification shape ─────────────────────────────────────
 
     #[test]

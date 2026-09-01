@@ -1,6 +1,6 @@
-//! Applies a model switch to a session — the ungated path. `set_session_model`
-//! enforces the `allowed_models` gate before delegating here; internal callers
-//! (`new_session`, `load_session`) call `apply` directly.
+//! Applies a model switch to a session, the ungated path.
+//! `set_session_model` enforces the `allowed_models` gate before delegating here.
+//! Internal callers (`new_session`, `load_session`) call `apply` directly.
 use crate::agent::config;
 use crate::agent::mvp_agent::reasoning_effort::EffortTarget;
 use crate::agent::mvp_agent::{
@@ -10,7 +10,7 @@ use crate::session::SessionCommand;
 use agent_client_protocol::{self as acp};
 use tokio::sync::oneshot;
 use xai_grok_sampling_types::ReasoningEffort;
-/// Apply a model switch to a session (no gate — `set_session_model` gates first).
+/// Apply a model switch to a session (no gate; `set_session_model` gates first).
 pub(crate) async fn apply(
     agent: &MvpAgent,
     args: acp::SetSessionModelRequest,
@@ -250,9 +250,9 @@ pub(crate) async fn apply(
         .cloned(),
     ))
 }
-/// Broadcast a `ModelChanged` to every client subscribed to this session so
-/// followers mirror the new model. The originating client ignores its own echo
-/// (gated by `model_switch_pending`). Broadcast-only — no eventId, not persisted.
+/// Broadcast a `ModelChanged` to every client subscribed to this session so followers mirror the new model.
+/// The originating client ignores its own echo (gated by `model_switch_pending`).
+/// It is broadcast-only: it carries no eventId and is not persisted.
 fn broadcast_model_changed(
     agent: &MvpAgent,
     session_id: &acp::SessionId,

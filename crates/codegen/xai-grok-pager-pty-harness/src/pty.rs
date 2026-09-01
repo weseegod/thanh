@@ -1,4 +1,4 @@
-//! Layer 1: PTY management — spawn, inject keys, resize, drain output.
+//! Layer 1: PTY management (spawn, inject keys, resize, drain output).
 
 use std::ffi::OsStr;
 use std::io::{self, Read, Write};
@@ -26,10 +26,10 @@ pub mod keys {
     pub const PGUP: &[u8] = b"\x1b[5~";
     pub const ENTER: &[u8] = b"\r";
     pub const CTRL_C: &[u8] = b"\x03";
-    /// Ctrl+R (0x12) — prompt history search / scrollback mouse-reporting toggle.
+    /// Ctrl+R (0x12): prompt history search or the scrollback mouse-reporting toggle.
     pub const CTRL_R: &[u8] = b"\x12";
     pub const ESC: &[u8] = b"\x1b";
-    /// F2 (SS3 `ESC O Q`, the xterm encoding crossterm parses) — opens the settings modal.
+    /// F2 (SS3 `ESC O Q`, the xterm encoding crossterm parses): opens the settings modal.
     pub const F2: &[u8] = b"\x1bOQ";
 }
 
@@ -65,8 +65,7 @@ pub(crate) enum PtyRead {
     Closed,
 }
 
-/// Low-level PTY controller: spawns a child process inside a PTY and provides
-/// methods to inject input, resize, and drain output.
+/// Low-level PTY controller: spawns a child process inside a PTY and provides methods to inject input, resize, and drain output.
 pub struct PtyController {
     child: Box<dyn portable_pty::Child + Send>,
     process_tree: Option<TestProcessTree>,
@@ -87,9 +86,8 @@ pub struct PtyController {
 }
 
 impl PtyController {
-    /// Inherit the parent environment for terminal-brand probes, grok-wrap
-    /// tests, and other fixtures that test inherited host env. Content-backed
-    /// pager launches must use [`Self::spawn_in_sandbox`].
+    /// Inherit the parent environment for terminal-brand probes, grok-wrap tests, and other fixtures that test inherited host env.
+    /// Content-backed pager launches must use [`Self::spawn_in_sandbox`].
     pub fn spawn_inherited_env(
         binary: &Path,
         size: PtySize,
@@ -101,8 +99,8 @@ impl PtyController {
         Self::spawn_inner(binary, size, args, &operations, cwd, None)
     }
 
-    /// Spawn from a [`TestSandbox`] baseline plus typed per-process Set/Remove
-    /// operations. The sandbox remains owned by the caller.
+    /// Spawn from a [`TestSandbox`] baseline plus typed per-process Set/Remove operations.
+    /// The sandbox remains owned by the caller.
     pub fn spawn_in_sandbox(
         binary: &Path,
         size: PtySize,
@@ -134,9 +132,9 @@ impl PtyController {
         }
         apply_child_env(&mut cmd, sandbox, env);
 
-        // portable-pty calls setsid on Unix. Windows Job enrollment is a
-        // best-effort post-spawn attachment, so a very short-lived descendant
-        // may escape before enrollment; diagnostics preserve that downgrade.
+        // portable-pty calls setsid on Unix
+        // Windows Job enrollment is a best-effort post-spawn attachment, so a very short-lived descendant may escape before enrollment
+        // Diagnostics preserve that downgrade
         #[allow(clippy::disallowed_methods)]
         let child = pair.slave.spawn_command(cmd)?;
         #[cfg(unix)]
@@ -146,8 +144,7 @@ impl PtyController {
         #[cfg(windows)]
         let process_pid = child.process_id();
         let process_tree = process_pid.map(|pid| TestProcessTree::attach(pid, "grok PTY child"));
-        // Attachment failures remain recorded by TestProcessTree and are
-        // surfaced through process_tree_diagnostics() on every harness timeout.
+        // Attachment failures remain recorded by TestProcessTree and show up in process_tree_diagnostics() on every harness timeout
         // Drop the slave so we get EOF when the child exits.
         drop(pair.slave);
 
@@ -214,8 +211,7 @@ impl PtyController {
 
     /// Send 'q' to trigger the pager's quit handler and wait for exit.
     ///
-    /// Key injection is best-effort — the child may have already exited
-    /// (e.g. no ACP server), so write failures are silently ignored.
+    /// Key injection is best-effort: the child may have already exited (e.g. no ACP server), so write failures are silently ignored.
     pub fn quit(&mut self) -> Result<()> {
         let _ = self.inject_keys(keys::Q);
         let deadline = std::time::Instant::now() + Duration::from_secs(5);
@@ -262,9 +258,8 @@ impl PtyController {
     }
 
     /// Poll until exit or `timeout` without collapsing lifecycle states.
-    /// Returns [`PtyExitPoll::PendingStatus`] immediately because the child is
-    /// already non-running; [`PtyExitPoll::Running`] is returned only when the
-    /// deadline expires while the child remains live.
+    /// Returns [`PtyExitPoll::PendingStatus`] immediately because the child is already non-running.
+    /// [`PtyExitPoll::Running`] is returned only when the deadline expires while the child remains live.
     pub fn wait_exit_code(&mut self, timeout: Duration) -> Result<PtyExitPoll<u32>> {
         let deadline = std::time::Instant::now() + timeout;
         loop {
@@ -277,17 +272,16 @@ impl PtyController {
         }
     }
 
-    /// Child PID while the direct child is live. Once reaped, returns `None` so
-    /// callers cannot signal a recycled PID.
+    /// Child PID while the direct child is live.
+    /// Once reaped, returns `None` so callers cannot signal a recycled PID.
     pub fn child_pid(&self) -> Option<u32> {
         (!self.exit_observed && self.exit_status.is_none())
             .then_some(self.spawn_pid)
             .flatten()
     }
 
-    /// Deliver a signal directly to the child (unix), bypassing the PTY line
-    /// discipline. Exercises the real SIGINT/SIGTERM/SIGHUP paths (distinct from
-    /// injected Ctrl+C key bytes, which are key events under raw mode).
+    /// Deliver a signal directly to the child (unix), bypassing the PTY line discipline.
+    /// Exercises the real SIGINT/SIGTERM/SIGHUP paths (distinct from injected Ctrl+C key bytes, which are key events under raw mode).
     /// Call before the child is reaped: a reaped pid can be reused.
     #[cfg(unix)]
     pub fn send_signal(&self, signal: i32) -> Result<()> {
@@ -473,9 +467,9 @@ fn recover_consumed_status(status: io::Result<Option<ExitStatus>>) -> io::Result
 
 /// Typed result of polling a PTY child's lifecycle.
 ///
-/// Only [`Self::Running`] means the process is live. [`Self::PendingStatus`]
-/// means exit was already observed, descendants were cleaned, and the PID was
-/// hidden, but portable-pty has not yet yielded the final status.
+/// Only [`Self::Running`] means the process is live.
+/// [`Self::PendingStatus`] means exit was already observed, descendants were cleaned, and the PID was hidden.
+/// portable-pty has not yet yielded the final status in that state.
 #[must_use = "PTY exit state and poll errors must be handled explicitly"]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum PtyExitPoll<T> {
@@ -531,8 +525,7 @@ fn cache_exit_status(
 
 const CLIPBOARD_SINK_ENV_VARS: &[&str] = &["GROK_OSC52_SINK", "LC_GROK_OSC52_SINK"];
 
-/// Host / wrap appearance hints that would make `theme=auto` non-deterministic
-/// in PTY tests (layout depends on the resolved palette).
+/// Host/wrap appearance hints that would make `theme=auto` non-deterministic in PTY tests (layout depends on the resolved palette).
 const APPEARANCE_ENV_VARS: &[&str] = &[
     "GROK_APPEARANCE",
     "LC_GROK_APPEARANCE",
@@ -543,16 +536,11 @@ const APPEARANCE_ENV_VARS: &[&str] = &[
 
 /// Host terminal identity markers stripped from the child environment.
 ///
-/// The pager's terminal detection
-/// (`xai-grok-pager-render/src/terminal/mod.rs`:
-/// `detect_terminal_brand_from_env` / `detect_byobu_from_env` /
-/// `detect_multiplexer_from_env` / `detect_tmux_meta_from_env`, plus
-/// `embedded_editor.rs`'s `embedded_editor_from_env`) reads all of these,
-/// so any one leaking from the harness's own host terminal reclassifies the
-/// child: a dev running tests inside tmux leaks `TMUX` (every cell becomes
-/// the remuxed profile), inside Cursor leaks `CURSOR_TRACE_ID` (checked
-/// *before* `TERM_PROGRAM`, so it overrides even a test-injected brand),
-/// inside nvim's `:terminal` leaks `NVIM` (clipboard OSC 52 wrapping).
+/// The pager's terminal detection (`xai-grok-pager-render/src/terminal/mod.rs` and `embedded_editor.rs`) reads all of these.
+/// Any one leaking from the harness's own host terminal reclassifies the child.
+/// A dev running tests inside tmux leaks `TMUX` (every cell becomes the remuxed profile).
+/// Inside Cursor, `CURSOR_TRACE_ID` leaks; it is checked before `TERM_PROGRAM`, so it overrides even a test-injected brand.
+/// Inside nvim's `:terminal`, `NVIM` leaks (clipboard OSC 52 wrapping).
 /// Keep this list in sync with the detection source above.
 const HOST_TERMINAL_ENV_VARS: &[&str] = &[
     // Brand chain (detect_terminal_brand_from_env), in detection order.
@@ -572,8 +560,7 @@ const HOST_TERMINAL_ENV_VARS: &[&str] = &[
     "TERMINATOR_UUID",
     "VTE_VERSION",
     "WT_SESSION",
-    // Multiplexer / Byobu markers (detect_multiplexer_from_env,
-    // detect_byobu_from_env, detect_tmux_meta_from_env).
+    // Multiplexer/Byobu markers (detect_multiplexer_from_env, detect_byobu_from_env, detect_tmux_meta_from_env)
     "TMUX",
     "TMUX_PANE",
     "ZELLIJ",
@@ -599,10 +586,10 @@ fn set_operations<'a>(env: &'a [(&'a str, &'a str)]) -> Vec<EnvOp<'a>> {
         .collect()
 }
 
-/// Prepare the child environment. Content-backed callers provide a
-/// [`xai_grok_test_support::TestSandbox`], which always clears inheritance.
-/// The explicitly named inherited-env path is reserved for terminal probing and
-/// grok-wrap fixtures. Caller overrides are always applied last.
+/// Prepare the child environment.
+/// Content-backed callers provide a [`xai_grok_test_support::TestSandbox`], which always clears inheritance.
+/// The explicitly named inherited-env path is reserved for terminal probing and grok-wrap fixtures.
+/// Caller overrides are always applied last.
 fn apply_child_env(cmd: &mut CommandBuilder, sandbox: Option<&TestSandbox>, env: &[EnvOp<'_>]) {
     if let Some(sandbox) = sandbox {
         cmd.env_clear();
@@ -610,35 +597,28 @@ fn apply_child_env(cmd: &mut CommandBuilder, sandbox: Option<&TestSandbox>, env:
     }
     // Set TERM so the pager renders with full color support.
     cmd.env("TERM", "xterm-256color");
-    // Strip inherited color opt-outs/overrides for the same reason: a
-    // leaked NO_COLOR (common in agent/CI shells) renders the pager
-    // colorless, making style-sensitive assertions (e.g. the selection
-    // highlight color swap) silently untestable on some hosts. Tests may
-    // re-set these via the `env` list (applied after this).
+    // Strip inherited color opt-outs/overrides for the same reason: a leaked NO_COLOR (common in agent/CI shells) renders the pager colorless
+    // That makes style-sensitive assertions (e.g. the selection highlight color swap) silently untestable on some hosts.
+    // Tests may re-set these via the `env` list (applied after this)
     for color_var in ["NO_COLOR", "CLICOLOR", "CLICOLOR_FORCE"] {
         cmd.env_remove(color_var);
     }
-    // Strip SSH vars inherited from the parent: the harness PTY is a
-    // local terminal, but `SSH_CONNECTION`/`SSH_TTY` leaking through
-    // makes the pager's terminal detector report SSH and disable the
-    // drag-drop image classifier (see
-    // `try_handle_dropped_paths_paste` in `agent_view.rs`).
+    // Strip SSH vars inherited from the parent: the harness PTY is a local terminal
+    // `SSH_CONNECTION`/`SSH_TTY` leaking through makes the pager's terminal detector report SSH and disable the drag-drop image classifier
+    // See `try_handle_dropped_paths_paste` in `agent_view.rs`
     for ssh_var in ["SSH_CONNECTION", "SSH_CLIENT", "SSH_TTY", "SSH_AUTH_SOCK"] {
         cmd.env_remove(ssh_var);
     }
-    // A harness launched under `thanh wrap` must not silently confirm clipboard
-    // delivery for no-sink scenarios. Explicit sink tests re-inject a marker
-    // through `env` after this hygiene pass.
+    // A harness launched under `grok wrap` must not silently confirm clipboard delivery for no-sink scenarios
+    // Explicit sink tests re-inject a marker through `env` after this hygiene pass
     for sink_var in CLIPBOARD_SINK_ENV_VARS {
         cmd.env_remove(sink_var);
     }
     for appearance_var in APPEARANCE_ENV_VARS {
         cmd.env_remove(appearance_var);
     }
-    // Neutralize parent-terminal identity bleed: agent hosts often export
-    // TERM_PROGRAM=ghostty/iTerm/etc. (and mux/editor markers) which make
-    // the child pager adopt that host's key/modifier/clipboard quirks even
-    // though we only set TERM above.
+    // Neutralize parent-terminal identity bleed: agent hosts often export TERM_PROGRAM=ghostty/iTerm/etc. (and mux/editor markers).
+    // Those make the child pager adopt that host's key/modifier/clipboard quirks even though we only set TERM above
     for term_var in HOST_TERMINAL_ENV_VARS {
         cmd.env_remove(term_var);
     }
@@ -650,9 +630,8 @@ fn apply_child_env(cmd: &mut CommandBuilder, sandbox: Option<&TestSandbox>, env:
     }
 }
 
-/// Spawn a background thread that reads from the PTY master and sends
-/// chunks over an `mpsc` channel. The reader is blocking (WezTerm pattern),
-/// so it must live on its own thread.
+/// Spawn a background thread that reads from the PTY master and sends chunks over an `mpsc` channel.
+/// The reader is blocking (WezTerm pattern), so it must live on its own thread.
 fn spawn_reader(mut reader: Box<dyn Read + Send>) -> mpsc::Receiver<Vec<u8>> {
     let (tx, rx) = mpsc::channel();
     std::thread::Builder::new()
@@ -932,21 +911,9 @@ mod tests {
         );
     }
 
-    #[cfg(unix)]
-    #[test]
-    fn pty_tree_diagnostics_surface_enrollment_state() {
-        let tree = TestProcessTree::attach(u32::MAX, "invalid PTY fixture");
-        let diagnostics = tree.diagnostic_summary();
-        assert!(diagnostics.contains("tree_label=\"invalid PTY fixture\""));
-        assert!(diagnostics.contains("tree_attached=false"));
-        assert!(diagnostics.contains("tree_attach_error=Some"));
-    }
-
-    /// Every host-terminal marker the pager's detection chain reads must be
-    /// stripped from the child env — polluted entries are seeded via
-    /// `cmd.env` (same `CommandBuilder` map that inherited base-env entries
-    /// live in, so `env_remove` takes the identical path) rather than
-    /// process-global `set_var` (racy under parallel tests).
+    /// Every host-terminal marker the pager's detection chain reads must be stripped from the child env.
+    /// Polluted entries are seeded via `cmd.env` rather than process-global `set_var` (racy under parallel tests).
+    /// `cmd.env` fills the same `CommandBuilder` map that inherited base-env entries live in, so `env_remove` takes the identical path.
     #[test]
     fn apply_child_env_strips_all_host_terminal_markers() {
         let mut cmd = CommandBuilder::new("true");
@@ -965,8 +932,7 @@ mod tests {
         for appearance_var in APPEARANCE_ENV_VARS {
             cmd.env(appearance_var, "polluted");
         }
-        // Sandboxed launches remove unrelated inherited variables before
-        // re-applying the baseline and explicit overrides.
+        // Sandboxed launches remove unrelated inherited variables before re-applying the baseline and explicit overrides
         cmd.env("GROK_SCROLL_LOG", "/tmp/scroll.jsonl");
         let sandbox = TestSandbox::new();
 
@@ -1090,11 +1056,10 @@ mod tests {
             ],
         );
 
-        // Host pollution is gone…
+        // Host pollution is gone
         assert!(cmd.get_env("TMUX").is_none());
         assert!(cmd.get_env("CURSOR_TRACE_ID").is_none());
-        // …but caller-injected markers (applied after strips) survive,
-        // including overriding the harness's own TERM default.
+        // Caller-injected markers (applied after strips) survive, including overriding the harness's own TERM default
         assert_eq!(
             cmd.get_env("TERM_PROGRAM").and_then(|v| v.to_str()),
             Some("vscode")

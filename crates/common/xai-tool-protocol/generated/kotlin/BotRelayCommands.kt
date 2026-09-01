@@ -15,7 +15,12 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 
 val V1_COMMAND_ALLOWLIST: List<String> = listOf(
+    "attachUpload",
     "createAgent",
+    "createGroup",
+    "deleteAgents",
+    "dismissUserForm",
+    "dismissWidget",
     "getAgentAvatar",
     "getAgentThread",
     "getAgentTranscript",
@@ -23,12 +28,22 @@ val V1_COMMAND_ALLOWLIST: List<String> = listOf(
     "getAgentTranscriptTail",
     "getAgentTranscriptWindow",
     "getSubagents",
+    "injectChromeCookies",
+    "interruptAgentRun",
     "listAgents",
+    "promptAcceptanceStatus",
+    "reactToMessage",
     "readAttachmentChunk",
     "readAttachmentImage",
     "readAttachmentText",
     "readVoiceCallAgentContext",
+    "respondToWidget",
     "sendPrompt",
+    "setAgentUnread",
+    "setGroupMembers",
+    "submitUserForm",
+    "updateAgent",
+    "uploadAttachment",
 )
 
 /**
@@ -39,6 +54,17 @@ sealed interface BotCommand {
     val name: String
 
     @Serializable
+    data class AttachUpload(
+        val agentId: String,
+        @EncodeDefault override val name: String = NAME,
+        val args: ArgsAttachUpload,
+    ) : BotCommand {
+        companion object {
+            const val NAME = "attachUpload"
+        }
+    }
+
+    @Serializable
     data class CreateAgent(
         val agentId: String,
         @EncodeDefault override val name: String = NAME,
@@ -46,6 +72,50 @@ sealed interface BotCommand {
     ) : BotCommand {
         companion object {
             const val NAME = "createAgent"
+        }
+    }
+
+    @Serializable
+    data class CreateGroup(
+        val agentId: String,
+        @EncodeDefault override val name: String = NAME,
+        val args: ArgsCreateGroup,
+    ) : BotCommand {
+        companion object {
+            const val NAME = "createGroup"
+        }
+    }
+
+    @Serializable
+    data class DeleteAgents(
+        val agentId: String,
+        @EncodeDefault override val name: String = NAME,
+        val args: ArgsDeleteAgents,
+    ) : BotCommand {
+        companion object {
+            const val NAME = "deleteAgents"
+        }
+    }
+
+    @Serializable
+    data class DismissUserForm(
+        val agentId: String,
+        @EncodeDefault override val name: String = NAME,
+        val args: ArgsDismissUserForm,
+    ) : BotCommand {
+        companion object {
+            const val NAME = "dismissUserForm"
+        }
+    }
+
+    @Serializable
+    data class DismissWidget(
+        val agentId: String,
+        @EncodeDefault override val name: String = NAME,
+        val args: ArgsDiscardDraft,
+    ) : BotCommand {
+        companion object {
+            const val NAME = "dismissWidget"
         }
     }
 
@@ -127,6 +197,28 @@ sealed interface BotCommand {
     }
 
     @Serializable
+    data class InjectChromeCookies(
+        val agentId: String,
+        @EncodeDefault override val name: String = NAME,
+        val args: ArgsInjectChromeCookies,
+    ) : BotCommand {
+        companion object {
+            const val NAME = "injectChromeCookies"
+        }
+    }
+
+    @Serializable
+    data class InterruptAgentRun(
+        val agentId: String,
+        @EncodeDefault override val name: String = NAME,
+        val args: SandAsyncTaskLabelParams,
+    ) : BotCommand {
+        companion object {
+            const val NAME = "interruptAgentRun"
+        }
+    }
+
+    @Serializable
     data class ListAgents(
         val agentId: String,
         @EncodeDefault override val name: String = NAME,
@@ -134,6 +226,28 @@ sealed interface BotCommand {
     ) : BotCommand {
         companion object {
             const val NAME = "listAgents"
+        }
+    }
+
+    @Serializable
+    data class PromptAcceptanceStatus(
+        val agentId: String,
+        @EncodeDefault override val name: String = NAME,
+        val args: GatewayAcceptanceStatusArgs,
+    ) : BotCommand {
+        companion object {
+            const val NAME = "promptAcceptanceStatus"
+        }
+    }
+
+    @Serializable
+    data class ReactToMessage(
+        val agentId: String,
+        @EncodeDefault override val name: String = NAME,
+        val args: ArgsReactToMessage,
+    ) : BotCommand {
+        companion object {
+            const val NAME = "reactToMessage"
         }
     }
 
@@ -174,10 +288,21 @@ sealed interface BotCommand {
     data class ReadVoiceCallAgentContext(
         val agentId: String,
         @EncodeDefault override val name: String = NAME,
-        val args: SandAsyncTaskLabelParams,
+        val args: ArgsReadVoiceCallAgentContext,
     ) : BotCommand {
         companion object {
             const val NAME = "readVoiceCallAgentContext"
+        }
+    }
+
+    @Serializable
+    data class RespondToWidget(
+        val agentId: String,
+        @EncodeDefault override val name: String = NAME,
+        val args: ArgsRespondToWidget,
+    ) : BotCommand {
+        companion object {
+            const val NAME = "respondToWidget"
         }
     }
 
@@ -191,13 +316,73 @@ sealed interface BotCommand {
             const val NAME = "sendPrompt"
         }
     }
+
+    @Serializable
+    data class SetAgentUnread(
+        val agentId: String,
+        @EncodeDefault override val name: String = NAME,
+        val args: ArgsSetAgentUnread,
+    ) : BotCommand {
+        companion object {
+            const val NAME = "setAgentUnread"
+        }
+    }
+
+    @Serializable
+    data class SetGroupMembers(
+        val agentId: String,
+        @EncodeDefault override val name: String = NAME,
+        val args: ArgsSetGroupMembers,
+    ) : BotCommand {
+        companion object {
+            const val NAME = "setGroupMembers"
+        }
+    }
+
+    @Serializable
+    data class SubmitUserForm(
+        val agentId: String,
+        @EncodeDefault override val name: String = NAME,
+        val args: ArgsSubmitUserForm,
+    ) : BotCommand {
+        companion object {
+            const val NAME = "submitUserForm"
+        }
+    }
+
+    @Serializable
+    data class UpdateAgent(
+        val agentId: String,
+        @EncodeDefault override val name: String = NAME,
+        val args: ArgsUpdateAgent,
+    ) : BotCommand {
+        companion object {
+            const val NAME = "updateAgent"
+        }
+    }
+
+    @Serializable
+    data class UploadAttachment(
+        val agentId: String,
+        @EncodeDefault override val name: String = NAME,
+        val args: SandUploadAttachmentArgs,
+    ) : BotCommand {
+        companion object {
+            const val NAME = "uploadAttachment"
+        }
+    }
 }
 
 object BotCommandSerializer :
     JsonContentPolymorphicSerializer<BotCommand>(BotCommand::class) {
     override fun selectDeserializer(element: JsonElement): KSerializer<out BotCommand> {
         return when (element.jsonObject["name"]?.jsonPrimitive?.content) {
+            BotCommand.AttachUpload.NAME -> BotCommand.AttachUpload.serializer()
             BotCommand.CreateAgent.NAME -> BotCommand.CreateAgent.serializer()
+            BotCommand.CreateGroup.NAME -> BotCommand.CreateGroup.serializer()
+            BotCommand.DeleteAgents.NAME -> BotCommand.DeleteAgents.serializer()
+            BotCommand.DismissUserForm.NAME -> BotCommand.DismissUserForm.serializer()
+            BotCommand.DismissWidget.NAME -> BotCommand.DismissWidget.serializer()
             BotCommand.GetAgentAvatar.NAME -> BotCommand.GetAgentAvatar.serializer()
             BotCommand.GetAgentThread.NAME -> BotCommand.GetAgentThread.serializer()
             BotCommand.GetAgentTranscript.NAME -> BotCommand.GetAgentTranscript.serializer()
@@ -205,12 +390,22 @@ object BotCommandSerializer :
             BotCommand.GetAgentTranscriptTail.NAME -> BotCommand.GetAgentTranscriptTail.serializer()
             BotCommand.GetAgentTranscriptWindow.NAME -> BotCommand.GetAgentTranscriptWindow.serializer()
             BotCommand.GetSubagents.NAME -> BotCommand.GetSubagents.serializer()
+            BotCommand.InjectChromeCookies.NAME -> BotCommand.InjectChromeCookies.serializer()
+            BotCommand.InterruptAgentRun.NAME -> BotCommand.InterruptAgentRun.serializer()
             BotCommand.ListAgents.NAME -> BotCommand.ListAgents.serializer()
+            BotCommand.PromptAcceptanceStatus.NAME -> BotCommand.PromptAcceptanceStatus.serializer()
+            BotCommand.ReactToMessage.NAME -> BotCommand.ReactToMessage.serializer()
             BotCommand.ReadAttachmentChunk.NAME -> BotCommand.ReadAttachmentChunk.serializer()
             BotCommand.ReadAttachmentImage.NAME -> BotCommand.ReadAttachmentImage.serializer()
             BotCommand.ReadAttachmentText.NAME -> BotCommand.ReadAttachmentText.serializer()
             BotCommand.ReadVoiceCallAgentContext.NAME -> BotCommand.ReadVoiceCallAgentContext.serializer()
+            BotCommand.RespondToWidget.NAME -> BotCommand.RespondToWidget.serializer()
             BotCommand.SendPrompt.NAME -> BotCommand.SendPrompt.serializer()
+            BotCommand.SetAgentUnread.NAME -> BotCommand.SetAgentUnread.serializer()
+            BotCommand.SetGroupMembers.NAME -> BotCommand.SetGroupMembers.serializer()
+            BotCommand.SubmitUserForm.NAME -> BotCommand.SubmitUserForm.serializer()
+            BotCommand.UpdateAgent.NAME -> BotCommand.UpdateAgent.serializer()
+            BotCommand.UploadAttachment.NAME -> BotCommand.UploadAttachment.serializer()
             else -> throw IllegalArgumentException(
                 "Unknown BotCommand name: ${element.jsonObject["name"]?.jsonPrimitive?.content}",
             )
@@ -222,17 +417,32 @@ object BotCommandSerializer :
  * JSON-RPC `bot.command` result is the bare reply value, not `{ name, result }`.
  * Decode the result as the typealias for `name`.
  */
+typealias BotCommandReplyAttachUpload = SandUploadAttachmentResult
 typealias BotCommandReplyCreateAgent = SandCreateAgentResult
+typealias BotCommandReplyCreateGroup = SandCreateAgentResult
+typealias BotCommandReplyDeleteAgents = SandDeleteAgentResult
+typealias BotCommandReplyDismissUserForm = JsonElement
+typealias BotCommandReplyDismissWidget = SandWidgetAnswerResult
 typealias BotCommandReplyGetAgentAvatar = SandAgentAvatarResult
 typealias BotCommandReplyGetAgentThread = SandAgentThread
 typealias BotCommandReplyGetAgentTranscript = List<SandTranscriptEntry>
-typealias BotCommandReplyGetAgentTranscriptPage = SandTranscriptPage
+typealias BotCommandReplyGetAgentTranscriptPage = SandRetainedTranscriptPage
 typealias BotCommandReplyGetAgentTranscriptTail = SandTranscriptPage
 typealias BotCommandReplyGetAgentTranscriptWindow = SandTranscriptWindow
 typealias BotCommandReplyGetSubagents = List<SandSubagentInfo>
+typealias BotCommandReplyInjectChromeCookies = ReplyInjectChromeCookies
+typealias BotCommandReplyInterruptAgentRun = SandInterruptAgentRunResult
 typealias BotCommandReplyListAgents = List<SandAgentSummary>
+typealias BotCommandReplyPromptAcceptanceStatus = PromptAcceptanceLookup
+typealias BotCommandReplyReactToMessage = JsonElement
 typealias BotCommandReplyReadAttachmentChunk = SandAttachmentChunk?
 typealias BotCommandReplyReadAttachmentImage = ResolvedImageAttachment?
 typealias BotCommandReplyReadAttachmentText = ReplyReadAttachmentTextValue?
 typealias BotCommandReplyReadVoiceCallAgentContext = SandVoiceCallAgentContext
+typealias BotCommandReplyRespondToWidget = SandWidgetAnswerResult?
 typealias BotCommandReplySendPrompt = SandSendPromptResult?
+typealias BotCommandReplySetAgentUnread = JsonElement
+typealias BotCommandReplySetGroupMembers = SandAgentSummary?
+typealias BotCommandReplySubmitUserForm = JsonElement
+typealias BotCommandReplyUpdateAgent = SandAgentSummary?
+typealias BotCommandReplyUploadAttachment = SandUploadAttachmentResult

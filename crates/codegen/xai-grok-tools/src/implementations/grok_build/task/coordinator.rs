@@ -69,6 +69,7 @@ pub struct SubagentCoordinator<R: ChildRunner> {
     completed: HashMap<String, CompletedChild>,
     completed_order: VecDeque<String>,
     waiters: HashMap<String, Vec<BlockingWaiter>>,
+    drain_waiters: HashMap<PromptScope, Vec<oneshot::Sender<SubagentOutstandingReply>>>,
     workflow_cancel_waiters: HashMap<String, Vec<oneshot::Sender<SubagentCancelOutcome>>>,
     /// Per-parent delete-path teardown drain, present only while a
     /// responder-bearing `TeardownSession` (`/delete`) waits for the session's
@@ -228,6 +229,7 @@ impl<R: ChildRunner> SubagentCoordinator<R> {
             completed: HashMap::new(),
             completed_order: VecDeque::new(),
             waiters: HashMap::new(),
+            drain_waiters: HashMap::new(),
             workflow_cancel_waiters: HashMap::new(),
             teardown_drains: HashMap::new(),
             spawn_blocked_sessions: HashSet::new(),
@@ -316,8 +318,16 @@ impl<R: ChildRunner> SubagentCoordinator<R> {
                         None => commands_open = false,
                     }
                 }
+                // A foreground caller dropping its spawn-reply receiver must wake
+                // the loop here: the reap that clears it from the turn-blocking
+                // set, and any parked drain waiting on it, would otherwise stall
+                // until the next command or the far-later foreground deadline.
+                _ = std::future::poll_fn(|cx| {
+                    poll_caller_abandoned(&mut self.pending, &mut self.active, cx)
+                }) => self.reap_abandoned_callers(),
                 _ = sleep_until(deadline), if deadline.is_some() => self.process_deadlines(),
             }
+            self.resolve_drain_waiters();
             while self.completed.len() > MAX_COMPLETED_ENTRIES {
                 let Some(id) = self.completed_order.pop_front() else {
                     break;
@@ -434,62 +444,22 @@ impl<R: ChildRunner> SubagentCoordinator<R> {
                 }
             }
             SubagentEvent::Outstanding(request) => {
-                // Reap again here so turn-freeze / Outstanding polls see
-                // ParentGone even if no other command woke the actor first.
-                self.reap_abandoned_callers();
-                let scoped = |candidate: &SubagentRequest| {
-                    candidate.parent_session_id == request.parent_session_id
-                        && candidate.parent_prompt_id.as_deref() == Some(&request.prompt_id)
-                        && !candidate.owner.is_workflow()
-                };
-                let mut live_ids: Vec<_> = self
-                    .pending
-                    .values()
-                    .filter(|child| scoped(&child.request) && !child.handle_only)
-                    .map(|child| child.request.id.clone())
-                    .chain(
-                        self.active
-                            .values()
-                            .filter(|child| {
-                                // Definition-declared background children are
-                                // background for accounting even while the
-                                // spawning tool block-awaits them.
-                                scoped(&child.request)
-                                    && !child.handle_only
-                                    && !child.definition_background
-                            })
-                            .map(|child| child.request.id.clone()),
-                    )
-                    .chain(
-                        self.queued
-                            .iter()
-                            .filter(|queued| {
-                                scoped(&queued.request)
-                                    && !queued.caller.is_backgrounded()
-                                    && !queued.request.run_in_background
-                            })
-                            .map(|queued| queued.request.id.clone()),
-                    )
-                    .collect();
-                live_ids.sort();
-                let background_live = self
-                    .pending
-                    .values()
-                    .any(|child| scoped(&child.request) && child.handle_only)
-                    || self.active.values().any(|child| {
-                        scoped(&child.request) && (child.handle_only || child.definition_background)
-                    })
-                    || self.queued.iter().any(|queued| {
-                        scoped(&queued.request)
-                            && (queued.request.run_in_background || queued.caller.is_backgrounded())
-                    });
-                let scope =
-                    PromptScope::new(request.parent_session_id.clone(), request.prompt_id.clone());
-                let _ = request.respond_to.send(SubagentOutstandingReply {
-                    live_ids,
-                    background_live,
-                    subagent_usage_not_applied: self.usage_not_applied_prompts.contains(&scope),
-                });
+                let reply = self.outstanding_reply(&request.parent_session_id, &request.prompt_id);
+                let _ = request.respond_to.send(reply);
+            }
+            SubagentEvent::WaitPromptDrained(request) => {
+                let reply = self.outstanding_reply(&request.parent_session_id, &request.prompt_id);
+                if reply.live_ids.is_empty() {
+                    let _ = request.respond_to.send(reply);
+                } else {
+                    self.drain_waiters
+                        .entry(PromptScope::new(
+                            request.parent_session_id,
+                            request.prompt_id,
+                        ))
+                        .or_default()
+                        .push(request.respond_to);
+                }
             }
             SubagentEvent::ClearUsageNotApplied(request) => {
                 self.usage_not_applied_prompts.remove(&PromptScope::new(
@@ -743,6 +713,97 @@ impl<R: ChildRunner> SubagentCoordinator<R> {
             .count()
     }
 
+    fn live_turn_blocking_ids<'a>(
+        &'a self,
+        parent_session_id: &'a str,
+        prompt_id: &'a str,
+    ) -> impl Iterator<Item = &'a str> + 'a {
+        self.pending
+            .values()
+            .filter(move |child| {
+                request_in_scope(&child.request, parent_session_id, prompt_id) && !child.handle_only
+            })
+            .map(|child| child.request.id.as_str())
+            .chain(
+                self.active
+                    .values()
+                    .filter(move |child| {
+                        request_in_scope(&child.request, parent_session_id, prompt_id)
+                            && !child.handle_only
+                            && !child.definition_background
+                    })
+                    .map(|child| child.request.id.as_str()),
+            )
+            .chain(
+                self.queued
+                    .iter()
+                    .filter(move |queued| {
+                        request_in_scope(&queued.request, parent_session_id, prompt_id)
+                            && !queued.caller.is_backgrounded()
+                            && !queued.request.run_in_background
+                    })
+                    .map(|queued| queued.request.id.as_str()),
+            )
+    }
+
+    fn outstanding_reply(
+        &self,
+        parent_session_id: &str,
+        prompt_id: &str,
+    ) -> SubagentOutstandingReply {
+        let mut live_ids: Vec<String> = self
+            .live_turn_blocking_ids(parent_session_id, prompt_id)
+            .map(str::to_owned)
+            .collect();
+        live_ids.sort();
+        let scoped =
+            |request: &SubagentRequest| request_in_scope(request, parent_session_id, prompt_id);
+        let background_live = self
+            .pending
+            .values()
+            .any(|child| scoped(&child.request) && child.handle_only)
+            || self.active.values().any(|child| {
+                scoped(&child.request) && (child.handle_only || child.definition_background)
+            })
+            || self.queued.iter().any(|queued| {
+                scoped(&queued.request)
+                    && (queued.request.run_in_background || queued.caller.is_backgrounded())
+            });
+        let scope = PromptScope::new(parent_session_id.to_owned(), prompt_id.to_owned());
+        SubagentOutstandingReply {
+            live_ids,
+            background_live,
+            subagent_usage_not_applied: self.usage_not_applied_prompts.contains(&scope),
+        }
+    }
+
+    fn scope_has_live_turn_blocking(&self, parent_session_id: &str, prompt_id: &str) -> bool {
+        self.live_turn_blocking_ids(parent_session_id, prompt_id)
+            .next()
+            .is_some()
+    }
+
+    /// Parking (the `WaitPromptDrained` arm) and this wake share the one actor
+    /// loop, so a check-then-park never misses a wake and needs no lock.
+    fn resolve_drain_waiters(&mut self) {
+        if self.drain_waiters.is_empty() {
+            return;
+        }
+        let mut parked = std::mem::take(&mut self.drain_waiters);
+        parked.retain(|scope, waiters| {
+            if self.scope_has_live_turn_blocking(&scope.parent_session_id, &scope.prompt_id) {
+                waiters.retain(|w| !w.is_closed());
+                return !waiters.is_empty();
+            }
+            let reply = self.outstanding_reply(&scope.parent_session_id, &scope.prompt_id);
+            for respond_to in waiters.drain(..) {
+                let _ = respond_to.send(reply.clone());
+            }
+            false
+        });
+        self.drain_waiters = parked;
+    }
+
     fn begin_terminalization(&mut self, id: &str, output: ChildRunOutput<R::CompletionData>) {
         let Some(child) = self.active.get_mut(id) else {
             self.finish_child(id, output);
@@ -751,6 +812,8 @@ impl<R: ChildRunner> SubagentCoordinator<R> {
         match child.active_messages.start_terminalizing() {
             Some(is_clean) => self.finish_terminalized_child(id, output, is_clean),
             None => {
+                // Stays in `self.active` while buffered, so a parked drain keeps
+                // counting it live until the last admission settles.
                 self.terminal_outputs.insert(id.to_owned(), output);
             }
         }
@@ -1281,6 +1344,41 @@ impl<R: ChildRunner> SubagentCoordinator<R> {
 
 fn belongs_to_session(request: &SubagentRequest, parent_session_id: Option<&str>) -> bool {
     parent_session_id.is_none_or(|id| request.parent_session_id == id)
+}
+
+fn request_in_scope(request: &SubagentRequest, parent_session_id: &str, prompt_id: &str) -> bool {
+    request.parent_session_id == parent_session_id
+        && request.parent_prompt_id.as_deref() == Some(prompt_id)
+        && !request.owner.is_workflow()
+}
+
+/// Ready as soon as any still-foreground caller drops its spawn-reply receiver.
+/// The actor `select!` uses this so an abandonment wakes the loop rather than
+/// waiting on the next command or the foreground deadline. Backgrounded children
+/// are skipped: their callers no longer gate the turn, and a lingering closed
+/// reply on one must not busy-wake the loop.
+fn poll_caller_abandoned<C: ChildControl>(
+    pending: &mut HashMap<String, PendingChild>,
+    active: &mut HashMap<String, ActiveChild<C>>,
+    cx: &mut std::task::Context<'_>,
+) -> std::task::Poll<()> {
+    for child in pending.values_mut() {
+        if !child.handle_only
+            && let Some(reply) = child.spawn_reply.as_mut()
+            && reply.poll_closed(cx).is_ready()
+        {
+            return std::task::Poll::Ready(());
+        }
+    }
+    for child in active.values_mut() {
+        if !child.handle_only
+            && let Some(reply) = child.spawn_reply.as_mut()
+            && reply.poll_closed(cx).is_ready()
+        {
+            return std::task::Poll::Ready(());
+        }
+    }
+    std::task::Poll::Pending
 }
 
 impl<R: ChildRunner> Drop for SubagentCoordinator<R> {

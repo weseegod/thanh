@@ -12,11 +12,11 @@ pub(crate) fn resolve_catalog_key(
     models
         .iter()
         .rev()
-        .find(|(_, entry)| entry.info.model == id_str)
+        .find(|(_, entry)| entry.info.has_model_id(id_str))
         .map(|(key, _)| acp::ModelId::new(key.clone()))
 }
 
-/// Catalog key for a persisted session model id, restricted to **selectable**
+/// Catalog key for a persisted session model id, restricted to **selectable** entries.
 pub(crate) fn selectable_catalog_key_for_persisted(
     models: &IndexMap<String, ModelEntry>,
     available: &IndexMap<acp::ModelId, acp::ModelInfo>,
@@ -27,14 +27,15 @@ pub(crate) fn selectable_catalog_key_for_persisted(
     }
     let id_str = id.0.as_ref();
     if let Some((key, _)) = models.iter().rev().find(|(key, entry)| {
-        available.contains_key(&acp::ModelId::new((*key).clone())) && entry.info.model == id_str
+        available.contains_key(&acp::ModelId::new((*key).clone()))
+            && entry.info.has_model_id(id_str)
     }) {
         return Some(acp::ModelId::new(key.clone()));
     }
     resolve_catalog_key(models, id).filter(|key| available.contains_key(key))
 }
 
-/// A "campaign-only" preferred flip: the default changed and either side's value
+/// A "campaign-only" preferred flip: the default changed and either side's value is an active campaign default.
 pub(crate) fn is_campaign_only_flip(
     old_preferred: &Option<String>,
     new_preferred: &Option<String>,
@@ -51,7 +52,7 @@ pub(crate) fn is_campaign_only_flip(
             .is_some_and(|p| campaign_defaults.contains(p))
 }
 
-/// Pick the default model: CLI > env > config > remote-settings hint, falling
+/// Pick the default model: CLI > env > config > remote-settings hint, falling back to the first visible model, then the bundled default.
 pub(crate) fn resolve_default_model(
     cfg: &config::Config,
     catalog: &IndexMap<String, ModelEntry>,
@@ -100,7 +101,7 @@ pub(crate) fn resolve_default_model(
         Some(pref) => {
             let found = visible
                 .get_key_value(&pref.value)
-                .or_else(|| visible.iter().find(|(_, m)| m.model == pref.value));
+                .or_else(|| visible.iter().find(|(_, m)| m.has_model_id(&pref.value)));
 
             if let Some((key, entry)) = found {
                 (key.clone(), entry.clone(), pref.source)
@@ -132,7 +133,7 @@ pub(crate) fn resolve_default_model(
                         .filter(|s| !s.is_empty())
                     && let Some((key, entry)) = visible
                         .get_key_value(prev)
-                        .or_else(|| visible.iter().find(|(_, m)| m.model == prev))
+                        .or_else(|| visible.iter().find(|(_, m)| m.has_model_id(prev)))
                 {
                     tracing::info!(
                         unavailable = %pref.value, fallback = %prev,
@@ -194,7 +195,7 @@ impl ModelGlobSet {
     }
 }
 
-/// Single source of truth for the catalog. Applies, in order: `disabled_models`
+/// Single source of truth for the catalog: applies `disabled_models`, then `allowed_models`, then `hidden_models`.
 pub(crate) fn resolve_model_catalog(
     cfg: &config::Config,
     prefetched: Option<IndexMap<String, ModelEntry>>,
@@ -242,18 +243,23 @@ pub(crate) fn resolve_model_catalog(
         && let Some(entry) = catalog.get_mut(default_id)
         && entry.info.supports_reasoning_effort
     {
-        entry.info.reasoning_effort = Some(effort);
+        stamp_effort(&mut entry.info, effort);
     }
 
     if let Some(effort) = cfg.reasoning_effort_override {
         for entry in catalog.values_mut() {
             if model_offers_reasoning_effort(&entry.info, effort) {
-                entry.info.reasoning_effort = Some(effort);
+                stamp_effort(&mut entry.info, effort);
             }
         }
     }
 
     catalog
+}
+
+/// The entry keeps its own model id, and `model_at` picks the id for this effort when a request is prepared.
+fn stamp_effort(info: &mut config::ModelInfo, effort: ReasoningEffort) {
+    info.reasoning_effort = Some(effort);
 }
 
 /// Whether `effort` is a value this model will accept on the wire.
@@ -286,7 +292,8 @@ pub(crate) fn allowlist_matches_nothing(
         && !catalog.values().any(|e| e.info.user_selectable)
 }
 
-/// Reject an `allowed_models` allowlist that leaves no selectable model, or excludes an explicitly configured default; run only against a real catalog.
+/// Reject an `allowed_models` allowlist that leaves no selectable model, or excludes an explicitly configured default.
+/// Run only against a real catalog.
 pub(crate) fn validate_selectable(
     cfg: &config::Config,
     catalog: &IndexMap<String, ModelEntry>,
@@ -308,7 +315,7 @@ pub(crate) fn validate_selectable(
         if let Some(id) = id
             && let Some(entry) = catalog
                 .get(id)
-                .or_else(|| catalog.values().find(|e| e.model == id))
+                .or_else(|| catalog.values().find(|e| e.has_model_id(id)))
             && !entry.info.user_selectable
         {
             return Err(format!(

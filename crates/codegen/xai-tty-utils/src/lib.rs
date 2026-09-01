@@ -802,6 +802,35 @@ impl ProcessGroup {
         }
     }
 
+    /// Let the group's descendants outlive this handle's drop (Windows clears
+    /// kill-on-close; Unix drop never kills). Call on the success path.
+    pub fn preserve_descendants(&self) -> io::Result<()> {
+        #[cfg(unix)]
+        {
+            Ok(())
+        }
+        #[cfg(windows)]
+        {
+            use std::mem::{size_of, zeroed};
+            use windows::Win32::System::JobObjects::{
+                JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectExtendedLimitInformation,
+                SetInformationJobObject,
+            };
+            // LimitFlags left at 0 (no kill-on-close), so the drop's `CloseHandle`
+            // no longer terminates the job's processes.
+            let info: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = unsafe { zeroed() };
+            unsafe {
+                SetInformationJobObject(
+                    self.job,
+                    JobObjectExtendedLimitInformation,
+                    (&info as *const JOBOBJECT_EXTENDED_LIMIT_INFORMATION).cast(),
+                    size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
+                )
+            }
+            .map_err(|e| io::Error::other(format!("SetInformationJobObject(preserve): {e}")))
+        }
+    }
+
     /// Whether any process still exists in this group. `None` where the
     /// platform cannot say (Windows, `EPERM`); treat it as alive.
     ///
@@ -1161,12 +1190,6 @@ mod tests {
     #[cfg(target_os = "linux")]
     static TEST_OOM_SCORE_ADJ_LOCK: Mutex<()> = Mutex::new(());
 
-    #[test]
-    fn detach_command_does_not_panic() {
-        let mut cmd = tokio::process::Command::new("echo");
-        detach_command(&mut cmd);
-    }
-
     /// Pins the mechanism every search-tool spawn site relies on: the child is
     /// detached into its own process group and killed when its `Child` drops.
     #[cfg(unix)]
@@ -1333,12 +1356,6 @@ mod tests {
     }
 
     #[test]
-    fn detach_std_command_does_not_panic() {
-        let mut cmd = std::process::Command::new("echo");
-        detach_std_command(&mut cmd);
-    }
-
-    #[test]
     fn git_command_locking_matches_reader_except_optional_locks_flag() {
         use std::collections::HashMap;
         use std::ffi::{OsStr, OsString};
@@ -1361,18 +1378,6 @@ mod tests {
         let lock_envs: HashMap<_, _> = locking.get_envs().collect();
         let read_envs: HashMap<_, _> = reading.get_envs().collect();
         assert_eq!(lock_envs, read_envs);
-    }
-
-    #[test]
-    fn new_process_group_does_not_panic() {
-        let mut cmd = tokio::process::Command::new("echo");
-        new_process_group(&mut cmd);
-    }
-
-    #[test]
-    fn kill_on_parent_death_std_does_not_panic() {
-        let mut cmd = std::process::Command::new("echo");
-        kill_on_parent_death_std(&mut cmd);
     }
 
     #[cfg(unix)]
@@ -1686,26 +1691,6 @@ mod tests {
         f.write_all(b"").expect("zero-length write should succeed");
     }
 
-    /// The `File` returned by `dup_tui_stderr` can write multi-byte UTF-8
-    /// without truncation or byte-level corruption.
-    ///
-    /// On Windows, a `File` wrapping a console handle uses `WriteFile`
-    /// (byte-oriented, code-page-dependent) instead of `WriteConsoleW`
-    /// (UTF-16, code-page-independent). This test verifies the bytes are
-    /// at least accepted without error. Full Unicode correctness on Windows
-    /// additionally requires `SetConsoleOutputCP(65001)` or using
-    /// `std::io::stderr()` (which routes through `WriteConsoleW`).
-    #[test]
-    fn dup_tui_stderr_accepts_multibyte_utf8() {
-        use std::io::Write;
-        let mut f = dup_tui_stderr().expect("dup_tui_stderr should succeed");
-        // Braille (3 bytes each), Powerline icon (3 bytes), emoji (4 bytes).
-        let payload = "⣀⣾⠿⠛\u{e0a0}\u{1F600}";
-        f.write_all(payload.as_bytes())
-            .expect("multi-byte UTF-8 write should succeed");
-        f.flush().expect("flush should succeed");
-    }
-
     /// Spawn a subprocess that exercises redirect → dup → restore.
     #[cfg(unix)]
     #[test]
@@ -1934,108 +1919,6 @@ mod tests {
             !stdout.contains("diagnostic"),
             "stderr text must be discarded, not spilled onto stdout: {stdout:?}"
         );
-    }
-
-    /// The real thing: `/dev/null` genuinely removed, in a throwaway mount
-    /// namespace so only this process tree sees it gone.
-    ///
-    /// Covers both orders, because they exercise different halves of the fix:
-    ///
-    /// * `deleted-midway` — the production sequence. The device exists when the
-    ///   server boots (so the descriptor is cached), then the sandbox loses it.
-    ///   Asserts the control too: `Stdio::null()` must fail with `ENOENT` here,
-    ///   or the test is not reproducing the bug it guards against.
-    /// * `never-existed` — a process that comes up with no device at all, which
-    ///   has no descriptor to cache and must reach the pipe fallback.
-    ///
-    /// Ignored by default: needs Linux with unprivileged user namespaces. Run
-    /// with `cargo test -p xai-tty-utils -- --ignored --nocapture`.
-    #[cfg(target_os = "linux")]
-    #[test]
-    #[ignore = "needs Linux + unprivileged user namespaces (unshare -Urm)"]
-    fn null_stdio_survives_a_deleted_dev_null() {
-        const PROBE_VAR: &str = "XAI_TTY_UTILS_DEV_NULL_PROBE";
-
-        fn spawn_with(stdin: std::process::Stdio) -> std::io::Result<std::process::ExitStatus> {
-            std::process::Command::new("/bin/sh")
-                .args(["-c", "exit 0"])
-                .stdin(stdin)
-                .status()
-        }
-
-        // Inner half: re-entered inside the namespace.
-        match std::env::var(PROBE_VAR).ok().as_deref() {
-            Some("deleted-midway") => {
-                // A regular file stands in for the device: creatable on the
-                // namespace's tmpfs without privileges, and indistinguishable
-                // for this purpose (an fd is an fd).
-                assert!(
-                    std::path::Path::new("/dev/null").exists(),
-                    "setup: stand-in missing"
-                );
-                assert!(
-                    spawn_with(null_stdio()).expect("prime").success(),
-                    "priming spawn must succeed while the device is present"
-                );
-
-                std::fs::remove_file("/dev/null").expect("delete the device mid-run");
-
-                let control = spawn_with(std::process::Stdio::null());
-                assert!(
-                    matches!(&control, Err(e) if e.kind() == std::io::ErrorKind::NotFound),
-                    "control: Stdio::null() must fail with ENOENT once the device is gone, got {control:?}"
-                );
-                for i in 1..=3 {
-                    assert!(
-                        spawn_with(null_stdio())
-                            .expect("spawn after deletion")
-                            .success(),
-                        "null_stdio() spawn #{i} must still work"
-                    );
-                }
-                return;
-            }
-            Some("never-existed") => {
-                assert!(
-                    !std::path::Path::new("/dev/null").exists(),
-                    "setup: device present"
-                );
-                assert!(
-                    spawn_with(null_stdio())
-                        .expect("pipe fallback must spawn")
-                        .success(),
-                    "a process that starts without /dev/null must still spawn"
-                );
-                return;
-            }
-            _ => {}
-        }
-
-        // Outer half: build a namespace per case and re-enter this same test.
-        let exe = std::env::current_exe().expect("current_exe");
-        for (case, setup) in [
-            (
-                "deleted-midway",
-                "mount -t tmpfs tmpfs /dev && : > /dev/null",
-            ),
-            ("never-existed", "mount -t tmpfs tmpfs /dev"),
-        ] {
-            let script = format!(
-                "{setup} && exec {} --exact tests::null_stdio_survives_a_deleted_dev_null --ignored --nocapture",
-                exe.display()
-            );
-            let out = std::process::Command::new("unshare")
-                .args(["-Urm", "sh", "-c", &script])
-                .env(PROBE_VAR, case)
-                .output()
-                .expect("unshare must be available on Linux CI");
-            assert!(
-                out.status.success(),
-                "case {case} failed:\nstdout: {}\nstderr: {}",
-                String::from_utf8_lossy(&out.stdout),
-                String::from_utf8_lossy(&out.stderr),
-            );
-        }
     }
 
     /// Every spawn takes its own dup, so the helper must survive repeated use

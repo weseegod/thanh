@@ -1,7 +1,5 @@
-//! Permission resolution engine: merges native `.grok/config.toml`,
-//! managed/enterprise settings, and (via `claude_settings`) `.claude`
-//! settings into the effective `PermissionConfig`; MCP/marketplace
-//! allowlists; always-approve policy.
+//! Merges native `.grok/config.toml`, managed/enterprise settings, and `.claude` settings into the effective `PermissionConfig`.
+//! Also holds the MCP-server and marketplace allowlists and the always-approve policy pin.
 
 use crate::permission::claude_settings::*;
 use crate::permission::rules::*;
@@ -20,11 +18,11 @@ use crate::permission::types::{
 enum UserDefaultModeLoad {
     /// Apply most-specific user/project/local `defaultMode`.
     Apply,
-    /// Managed-settings already owns the mode — load allow/deny/ask only.
+    /// Managed-settings already owns the mode; load allow/deny/ask only.
     SkipManagedOwns,
 }
 
-/// Synthetic rules + skip records for `acceptEdits` / `bypassPermissions`.
+/// Synthetic rules and skip records for `acceptEdits` / `bypassPermissions`.
 ///
 /// Shared by managed and user-tier application so pin handling cannot drift.
 fn synthetic_rules_for_default_mode(
@@ -70,8 +68,7 @@ fn synthetic_rules_for_default_mode(
     (rules, skipped, bypass_blocked)
 }
 
-/// Parse a raw defaultMode string: unknown → [`DefaultPermissionMode::Default`]
-/// (fail-safe) with a warn + skip record for `grok inspect`.
+/// Parse a defaultMode string; an unknown value fails safe to [`DefaultPermissionMode::Default`] with a warn and a skip record for `grok inspect`.
 fn parse_default_mode_claiming_scope(
     raw: &str,
     path: &Path,
@@ -94,8 +91,8 @@ fn parse_default_mode_claiming_scope(
     }
 }
 
-/// Parse `[permission]` from TOML. Tries compact (`deny = ["Read(...)"]`) first,
-/// falls back to verbose (`[[permission.rules]]`).
+/// Parse `[permission]` from TOML.
+/// Tries compact (`deny = ["Read(...)"]`) first, falls back to verbose (`[[permission.rules]]`).
 fn parse_toml_permission_section(
     permission_value: &toml::Value,
 ) -> Result<Vec<PermissionRule>, String> {
@@ -212,19 +209,15 @@ fn load_requirements_permissions() -> Vec<Sourced<PermissionRule>> {
 /// Load `[permission]` rules from native Grok TOML config files:
 ///
 ///   * `~/.grok/config.toml` (lowest priority)
-///   * Each `.grok/config.toml` from the git repo root down to `cwd`
-///     (highest priority last) — same walk as folder-trust's
-///     [`crate::project_config::find_project_configs`] so detector and loader
-///     cannot disagree on which project configs exist.
+///   * Each `.grok/config.toml` from the git repo root down to `cwd` (highest priority last).
+///     The walk matches folder-trust's [`crate::project_config::find_project_configs`], so detector and loader agree on which project configs exist.
 ///
-/// Returns the rules tagged with `RequirementSource::Config`. Empty if no
-/// config file contains a `[permission]` section.
+/// Returns the rules tagged with `RequirementSource::Config`, or empty if no config file contains a `[permission]` section.
 fn load_config_toml_permissions(cwd: &Path, project_trusted: bool) -> Vec<Sourced<PermissionRule>> {
     let mut rules = Vec::new();
 
     // Global `~/.grok/config.toml` first (lowest priority within this layer).
-    // Gated on user_grok_home() so a project's .grok/config.toml is never read as
-    // global permissions when neither GROK_HOME nor a home dir resolves.
+    // Gated on user_grok_home() so a project's .grok/config.toml is never read as global permissions when neither GROK_HOME nor a home dir resolves
     if let Some(global_path) = xai_grok_config::user_grok_home().map(|g| g.join("config.toml"))
         && global_path.is_file()
     {
@@ -241,8 +234,7 @@ fn load_config_toml_permissions(cwd: &Path, project_trusted: bool) -> Vec<Source
     }
 
     // Project-scoped configs walking from git root down to cwd, gated on trust.
-    // An untrusted clone must not contribute allow/deny/ask rules via
-    // `.grok/config.toml` (same gate as project `.claude/settings.json`).
+    // An untrusted clone must not contribute allow/deny/ask rules via `.grok/config.toml` (same gate as project `.claude/settings.json`)
     if project_trusted {
         for path in crate::project_config::find_project_configs(cwd) {
             match xai_grok_config::load_config_file(&path) {
@@ -277,16 +269,13 @@ fn managed_config_permissions(
 // ═════════════════════════════════════════════════════════════════════════════
 
 /// Resolve permission config, merging native Grok and Claude sources.
-/// Evaluation is order-independent (deny > ask > allow); merge order affects
-/// provenance display only.
+/// Evaluation is order-independent (deny > ask > allow); merge order affects provenance display only.
 ///
-/// `defaultMode: "acceptEdits"` in Claude settings generates a synthetic
-/// `Allow Edit` rule appended to the Claude rules.
+/// `defaultMode: "acceptEdits"` in Claude settings generates a synthetic `Allow Edit` rule appended to the Claude rules.
 ///
-/// `project_trusted` gates project-tier `.claude/settings.json` and
-/// `.grok/config.toml` permission rules (mirrors [`load_claude_env_with_project`]).
-/// Global/user/admin tiers always load. Callers pass the folder-trust bridge
-/// verdict for local sessions; hub/cloud defaults trusted.
+/// `project_trusted` gates project-tier `.claude/settings.json` and `.grok/config.toml` permission rules (mirrors [`load_claude_env_with_project`]).
+/// Global/user/admin tiers always load.
+/// Callers pass the folder-trust bridge verdict for local sessions; hub/cloud defaults trusted.
 pub async fn resolve_permission_config_with_fallback(
     cwd: &Path,
     project_trusted: bool,
@@ -296,33 +285,24 @@ pub async fn resolve_permission_config_with_fallback(
         .map(|r| r.config)
 }
 
-/// Wire value a client sets in `startupHints.permissionMode` to pre-declare an
-/// allow answer for permission prompts (headless sessions with no client
-/// attached on agent-initiated turns).
+/// Wire value a client sets in `startupHints.permissionMode` to pre-declare an allow answer for permission prompts.
+/// Meant for headless sessions where no client is attached on agent-initiated turns.
 ///
-/// **Trust model:** any authenticated client that can create or cold-load the
-/// session can stamp this — there is no separate "trusted stamper" tier. That
-/// is a deliberate equivalence: per ACP, `session/request_permission` answers
-/// are the client's to give and clients MAY auto-allow, so a stamping client
-/// is granted exactly what it could already achieve by staying connected and
-/// answering allow to every prompt. The difference the hint adds is
-/// disconnect-safety (agent-initiated turns keep resolving after the client
-/// hangs up), which is its whole purpose for headless sessions. It never
-/// weakens rule enforcement: deny rules and pre-prompt rejections are decided
-/// before the prompt gate, an org can kill it fleet-wide with the
-/// always-approve pin (`[ui] disable_bypass_permissions_mode`), and an
-/// explicitly configured `defaultMode` outranks it.
+/// **Trust model:** any authenticated client that can create or cold-load the session can stamp this; there is no separate trusted-stamper tier.
+/// Per ACP, `session/request_permission` answers are the client's to give and clients MAY auto-allow.
+/// Stamping grants nothing a client could not get by staying connected and answering allow to every prompt.
+/// The hint adds one thing: agent-initiated turns keep resolving after the client hangs up.
+/// It never weakens rule enforcement: deny rules and pre-prompt rejections are decided before the prompt gate.
+/// The always-approve pin (`[ui] disable_bypass_permissions_mode`) kills it fleet-wide, and an explicitly configured `defaultMode` outranks it.
 pub const PERMISSION_MODE_ALWAYS_ALLOW: &str = "alwaysAllow";
 
-/// Apply a client-requested `startupHints.permissionMode` to the resolved
-/// session permission config. Only [`PERMISSION_MODE_ALWAYS_ALLOW`] is honored
-/// (see its trust-model note), and only when (a) always-approve is not pinned
-/// off by managed policy (`policy_block`) and (b) no settings layer explicitly
-/// configured `permissions.defaultMode` — keyed on
-/// [`PermissionConfig::default_mode_configured`], not on `prompt_policy`,
-/// because explicit `default` / `plan` / `acceptEdits` and invalid fail-safe
-/// modes all project to `Ask` and must not be upgraded. Returns whether the
-/// hint was applied.
+/// Apply a client-requested `startupHints.permissionMode` to the resolved session permission config.
+/// Only [`PERMISSION_MODE_ALWAYS_ALLOW`] is honored (see its trust-model note).
+/// It applies only when always-approve is not pinned off by managed policy (`policy_block`).
+/// It also requires that no settings layer explicitly configured `permissions.defaultMode`.
+/// That check keys on [`PermissionConfig::default_mode_configured`], not on `prompt_policy`.
+/// Explicit `default` / `plan` / `acceptEdits` and invalid fail-safe modes all project to `Ask` and must not be upgraded.
+/// Returns whether the hint was applied.
 pub fn apply_permission_mode_hint(
     config: &mut Option<PermissionConfig>,
     requested: Option<&str>,
@@ -353,14 +333,11 @@ pub fn apply_permission_mode_hint(
     true
 }
 
-/// Patterns of `Deny` rules that forbid *reading* a path — those on `Read`,
-/// `Grep`, or `Any` (the tools that surface file contents). Write-only denies
-/// (`Edit`/`Write`/`Bash`) and non-deny actions are excluded.
+/// Patterns of `Deny` rules that forbid *reading* a path: those on `Read`, `Grep`, or `Any` (the tools that return file contents).
+/// Write-only denies (`Edit`/`Write`/`Bash`) and non-deny actions are excluded.
 ///
-/// Public so a caller holding the manager's *effective* config (managed +
-/// claude fallback + CLI `--deny`) can derive the Grep tool's ripgrep excludes
-/// from that same config, rather than re-resolving managed-only and missing CLI
-/// read denies.
+/// Public so a caller holding the manager's *effective* config (managed, claude fallback, CLI `--deny`) can derive Grep's ripgrep excludes from it.
+/// Re-resolving would see managed-only rules and miss CLI read denies.
 pub fn deny_read_globs_from_config(config: &PermissionConfig) -> Vec<String> {
     config
         .rules
@@ -402,9 +379,8 @@ fn tag_with_source(
     }));
 }
 
-/// Whether an Allow rule is a blanket `--yolo` substitute the pin must drop:
-/// a catch-all on `Any` or a freeform authority dimension
-/// (Bash/MCP/WebFetch/AgentMessage). Read/Edit/Grep catch-alls survive.
+/// Whether an Allow rule is a blanket `--yolo` substitute the pin must drop.
+/// That means a catch-all on `Any` or on a freeform authority dimension (Bash/MCP/WebFetch/AgentMessage); Read/Edit/Grep catch-alls survive.
 pub fn is_catchall_allow(rule: &PermissionRule) -> bool {
     if rule.action != RuleAction::Allow {
         return false;
@@ -418,8 +394,8 @@ pub fn is_catchall_allow(rule: &PermissionRule) -> bool {
     crate::permission::policy::rule_is_catchall(rule)
 }
 
-/// Root-owned tiers whose catch-all allows survive the pin (managed-settings,
-/// system requirements). Keyed on provenance, never a spoofable `path`.
+/// Root-owned tiers whose catch-all allows survive the pin (managed-settings, system requirements).
+/// Keyed on provenance, never a spoofable `path`.
 fn is_admin_source(source: &RequirementSource) -> bool {
     matches!(
         source,
@@ -427,8 +403,8 @@ fn is_admin_source(source: &RequirementSource) -> bool {
     )
 }
 
-/// Under the pin, drop untrusted catch-all Allow rules (they substitute for the
-/// blocked `--yolo`); keep admin-tier ones. Records each drop for `grok inspect`.
+/// Under the pin, drop untrusted catch-all Allow rules (they substitute for the blocked `--yolo`); keep admin-tier ones.
+/// Records each drop for `grok inspect`.
 fn drop_untrusted_catchall_allows(
     rules: Vec<Sourced<PermissionRule>>,
     policy_block: Option<&'static str>,
@@ -460,23 +436,21 @@ fn drop_untrusted_catchall_allows(
         .collect()
 }
 
-/// Inputs to [`resolve_permissions_with_provenance_inner`]. Production uses
-/// [`ResolveInputs::live`]; tests construct the fields directly so no test
-/// reads the host's real managed files through this seam.
+/// Inputs to [`resolve_permissions_with_provenance_inner`].
+/// Production uses [`ResolveInputs::live`]; tests construct the fields directly so they never read the host's real managed files.
 struct ResolveInputs<'a> {
     policy_block: Option<&'static str>,
     managed: &'a ManagedSettings,
     managed_config_rules: Vec<Sourced<PermissionRule>>,
-    /// Folder-trust verdict for `cwd`. When false, project-tier
-    /// `.claude/settings.json` / `.grok/config.toml` permission rules are dropped
-    /// (global/user/admin tiers still load).
+    /// Folder-trust verdict for `cwd`.
+    /// When false, project-tier `.claude/settings.json` / `.grok/config.toml` permission rules are dropped (global/user/admin tiers still load).
     project_trusted: bool,
 }
 
 impl ResolveInputs<'static> {
-    fn live(project_trusted: bool) -> Self {
+    fn live(project_trusted: bool, policy_block: Option<&'static str>) -> Self {
         Self {
-            policy_block: yolo_disabled_by_policy(),
+            policy_block,
             managed: managed_settings(),
             managed_config_rules: managed_config_permissions(
                 &xai_grok_config::managed_config_layers(),
@@ -486,35 +460,43 @@ impl ResolveInputs<'static> {
     }
 }
 
-/// Collect permission rules from every source, keeping each rule's origin:
-/// requirements.toml, managed-settings.json, managed_config.toml,
-/// config.toml, and .claude/settings.json. A deny always wins over an ask,
-/// and an ask over an allow, no matter which file a rule comes from; the
-/// source order above only affects how origins are displayed.
+/// Collect permission rules from every source, keeping each rule's origin.
+/// Sources: requirements.toml, managed-settings.json, managed_config.toml, config.toml, and .claude/settings.json.
+/// A deny always wins over an ask, and an ask over an allow, no matter which file a rule comes from.
+/// The source order above only affects how origins are displayed.
 ///
-/// Rules are read when a session starts. Changes take effect in the next
-/// session.
+/// Rules are read when a session starts.
+/// Changes take effect in the next session.
 ///
-/// `permissions.defaultMode` from **managed-settings** outranks user/project/local
-/// for the *mode* scalar (managed scope wins). User-tier defaultMode is
-/// applied only when managed does not set one.
+/// `permissions.defaultMode` from **managed-settings** outranks user/project/local for the *mode* scalar (managed scope wins).
+/// User-tier defaultMode is applied only when managed does not set one.
 ///
-/// **Always-approve (yolo) is independent of defaultMode:** session always-approve
-/// still auto-approves before [`PromptPolicy::Deny`] (`dontAsk`) is consulted,
-/// so always-approve outranks `defaultMode` unless
-/// bypass is pinned off via grok `requirements.toml`
-/// (`[ui] disable_bypass_permissions_mode = true`). Pair managed `dontAsk` with
-/// that pin when org policy must not be bypassable by `--always-approve`.
+/// **Always-approve (yolo) is independent of defaultMode.**
+/// Session always-approve still auto-approves before [`PromptPolicy::Deny`] (`dontAsk`) is consulted, so it outranks `defaultMode`.
+/// The exception: bypass pinned off via grok `requirements.toml` (`[ui] disable_bypass_permissions_mode = true`).
+/// Pair managed `dontAsk` with that pin when org policy must not be bypassable by `--always-approve`.
 ///
-/// `project_trusted` gates project-tier Claude settings and `.grok/config.toml`
-/// permission rules the same way [`load_claude_env_with_project`] gates env.
-/// Without this, an untrusted clone can ship `defaultMode: bypassPermissions`
-/// or broad allow rules and disable approval prompts.
+/// `project_trusted` gates project-tier Claude settings and `.grok/config.toml` permission rules just as [`load_claude_env_with_project`] gates env.
+/// An untrusted clone could otherwise ship `defaultMode: bypassPermissions` or broad allow rules and disable approval prompts.
 pub async fn resolve_permissions_with_provenance(
     cwd: &Path,
     project_trusted: bool,
 ) -> Option<ResolvedPermissions> {
-    resolve_permissions_with_provenance_inner(cwd, ResolveInputs::live(project_trusted)).await
+    let lock = yolo_policy_lock();
+    resolve_permissions_with_provenance_pinned(cwd, project_trusted, lock.as_ref()).await
+}
+
+/// [`resolve_permissions_with_provenance`] with a caller-supplied pin, so the `grok inspect` report reads the pin once and cannot contradict itself.
+pub async fn resolve_permissions_with_provenance_pinned(
+    cwd: &Path,
+    project_trusted: bool,
+    yolo_lock: Option<&YoloPolicyLock>,
+) -> Option<ResolvedPermissions> {
+    resolve_permissions_with_provenance_inner(
+        cwd,
+        ResolveInputs::live(project_trusted, yolo_lock.map(|lock| lock.reason)),
+    )
+    .await
 }
 
 async fn resolve_permissions_with_provenance_inner(
@@ -529,8 +511,7 @@ async fn resolve_permissions_with_provenance_inner(
     } = inputs;
     let config_toml_rules = load_config_toml_permissions(cwd, project_trusted);
 
-    // Managed defaultMode wins; skip user-tier defaultMode application so a
-    // project acceptEdits cannot loosen a managed dontAsk/auto/default.
+    // Managed defaultMode wins; skip user-tier defaultMode application so a project acceptEdits cannot loosen a managed dontAsk/auto/default
     let managed_mode = managed.default_mode;
     let user_mode_load = if managed_mode.is_some() {
         UserDefaultModeLoad::SkipManagedOwns
@@ -555,7 +536,7 @@ async fn resolve_permissions_with_provenance_inner(
     let mut prompt_policy = PromptPolicy::default();
     let mut default_mode_configured = false;
 
-    // Apply managed defaultMode synthetics + prompt policy (highest mode tier).
+    // Apply managed defaultMode synthetics and prompt policy (highest mode tier)
     if let Some(mode) = managed_mode {
         default_mode_configured = true;
         prompt_policy = mode.effects().prompt_policy;
@@ -591,15 +572,14 @@ async fn resolve_permissions_with_provenance_inner(
         );
     }
 
-    // Must run while provenance is in scope (discarded by the unzip below). CLI
-    // `--allow '*'` is filtered at its own merge site (acp_session).
+    // Must run while provenance is in scope (discarded by the unzip below)
+    // CLI `--allow '*'` is filtered at its own merge site (acp_session)
     let all_rules = drop_untrusted_catchall_allows(all_rules, policy_block, &mut skipped);
 
-    // Keep skip-only resolutions alive so the drop reaches `grok inspect`; zero
-    // rules with Ask is a no-op for the evaluator, identical to the `None` arm.
-    // A rule-less explicit defaultMode (`default` / `plan`) must also survive:
-    // dropping it to `None` would erase `default_mode_configured` and let the
-    // alwaysAllow startup hint upgrade an explicitly configured mode.
+    // Keep skip-only resolutions alive so the drop reaches `grok inspect`
+    // Zero rules with Ask is a no-op for the evaluator, identical to the `None` arm
+    // A rule-less explicit defaultMode (`default` / `plan`) must also survive
+    // Dropping it to `None` would erase `default_mode_configured` and let the alwaysAllow startup hint upgrade an explicitly configured mode
     if all_rules.is_empty()
         && prompt_policy == PromptPolicy::Ask
         && skipped.is_empty()
@@ -624,27 +604,24 @@ async fn resolve_permissions_with_provenance_inner(
     })
 }
 
-/// Resolve permissions from Claude settings, merging allow/deny/ask across all
-/// settings scopes so broad global grants aren't dropped when a project file also
-/// exists. `defaultMode` is not merged: the most-specific file that sets it wins
-/// (including unrecognized values, which claim the slot as `default` — an
-/// unknown → default fail-safe).
+/// Resolve permissions from Claude settings, merging allow/deny/ask across all settings scopes.
+/// Broad global grants therefore survive when a project file also exists.
+/// `defaultMode` is not merged: the most-specific file that sets it wins.
+/// An unrecognized value still claims the slot, as the fail-safe `default`.
 ///
 /// `defaultMode` handling:
-///   - `bypassPermissions`: catch-all `Allow Any`, but ignored (recorded as a
-///     [`SkippedPermission`]) when [`yolo_disabled_by_policy`] pins bypass off
+///   - `bypassPermissions`: catch-all `Allow Any`, but ignored (recorded as a [`SkippedPermission`]) when [`yolo_disabled_by_policy`] pins bypass off
 ///   - `acceptEdits`: synthetic `Allow Edit`
 ///   - `default` / `plan`: no synthetic rules
 ///   - `dontAsk`: [`PromptPolicy::Deny`] (unapproved tools auto-denied)
 ///   - `auto`: [`PromptPolicy::Auto`] (classifier; seeded on the manager)
 ///
-/// When [`UserDefaultModeLoad::SkipManagedOwns`], only allow/deny/ask rules are
-/// loaded from user/project/local files.
+/// When [`UserDefaultModeLoad::SkipManagedOwns`], only allow/deny/ask rules are loaded from user/project/local files.
 ///
 /// Synthetic rules are appended last as fallbacks (explicit deny still wins).
 /// `policy_block` is threaded for testability; prod passes the live pin.
-/// When `project_trusted` is false, only global `~/.claude` settings load —
-/// project-tree rules and `defaultMode` are dropped (same gate as env injection).
+/// When `project_trusted` is false, only global `~/.claude` settings load.
+/// Project-tree rules and `defaultMode` are dropped (same gate as env injection).
 fn resolve_claude_settings_inner(
     cwd: &Path,
     project_trusted: bool,
@@ -655,8 +632,7 @@ fn resolve_claude_settings_inner(
     let mut all_skipped = Vec::new();
     let mut primary_source_path: Option<PathBuf> = None;
     // Track defaultMode from the most specific file (paths are most-specific-first).
-    // Also track its source path so synthetic rules have provenance even when
-    // no explicit permissions block exists.
+    // Also track its source path so synthetic rules have provenance even when no explicit permissions block exists
     let mut default_mode_source: Option<PathBuf> = None;
     let mut applied_mode: Option<DefaultPermissionMode> = None;
     let mut prompt_policy = PromptPolicy::default();
@@ -676,8 +652,8 @@ fn resolve_claude_settings_inner(
             );
         }
 
-        // defaultMode: most-specific file that *sets* the key wins — including
-        // typos (treated as default). Skipped when managed-settings owns mode.
+        // defaultMode: most-specific file that *sets* the key wins, including typos (treated as default)
+        // Skipped when managed-settings owns mode
         if user_mode_load == UserDefaultModeLoad::Apply
             && default_mode_source.is_none()
             && let Some(raw) = &settings.default_mode
@@ -693,9 +669,8 @@ fn resolve_claude_settings_inner(
             for w in &warnings {
                 warn!(path = %path.display(), "{}", w);
             }
-            // Rules *or* skip-only parse failures still own provenance for
-            // `grok inspect` (all-invalid allow/deny/ask must not leave
-            // primary_source_path unset and panic below).
+            // Rules *or* skip-only parse failures still own provenance for `grok inspect`
+            // All-invalid allow/deny/ask must not leave primary_source_path unset and panic below
             if (!cfg.rules.is_empty() || !warnings.is_empty()) && primary_source_path.is_none() {
                 primary_source_path = Some(path.clone());
             }
@@ -730,9 +705,8 @@ fn resolve_claude_settings_inner(
         all_rules.extend(syn_rules);
     }
 
-    // A blocked bypass, a claimed defaultMode (incl. typo→default), or skip
-    // records still resolve (possibly zero rules) so provenance reaches
-    // `grok inspect` via the outer resolver.
+    // A blocked bypass, a claimed defaultMode (incl. a typo treated as default), or skip records still resolve (possibly zero rules).
+    // Provenance then reaches `grok inspect` via the outer resolver
     if all_rules.is_empty()
         && prompt_policy == PromptPolicy::Ask
         && !bypass_blocked
@@ -750,8 +724,7 @@ fn resolve_claude_settings_inner(
         );
     }
 
-    // Prefer the first file with explicit permission rules or skip-only
-    // parse failures; fall back to the file that provided defaultMode.
+    // Prefer the first file with explicit permission rules or skip-only parse failures; fall back to the file that provided defaultMode
     // Never panic: a skip-only / mode-only resolution must always surface.
     let source_path = primary_source_path
         .or(default_mode_source)
@@ -782,12 +755,8 @@ fn resolve_claude_settings_inner(
 use std::sync::OnceLock;
 
 /// Claude `managed-settings.json` subset we load.
-///
-/// **Supported surface today:** a single file from
-/// [`xai_grok_config::claude_managed_settings_path`] (platform path such as
-/// `/Library/Application Support/ClaudeCode/managed-settings.json`). We do
-/// **not** yet merge Claude's `managed-settings.d/` drop-ins, MDM plist, or
-/// Windows registry delivery.
+/// Loads one file, [`xai_grok_config::claude_managed_settings_path`] (e.g. `/Library/Application Support/ClaudeCode/managed-settings.json`).
+/// Claude's `managed-settings.d/` drop-ins, MDM plist, and Windows registry delivery are not merged yet.
 #[derive(Debug, Default)]
 pub struct ManagedSettings {
     pub features: ManagedSettingsFeatures,
@@ -899,10 +868,9 @@ fn parse_managed_settings_json(json: &serde_json::Value, path: &Path) -> Managed
 const ALLOWED_MCP_SERVERS_KEY: &str = "allowedMcpServers";
 const DENIED_MCP_SERVERS_KEY: &str = "deniedMcpServers";
 
-/// Parse `serverUrl` → Http, `command` → Stdio, `serverName` → Name (the keys
-/// Claude's MCP policy supports). A dropped deny entry = silent zero
-/// enforcement, so unsupported `deniedMcpServers` keys `warn!`; the allow side
-/// stays silent (an ungranted entry is fail-closed).
+/// Parse `serverUrl` into Http, `command` into Stdio, and `serverName` into Name (the keys Claude's MCP policy supports).
+/// Dropping a deny entry silently enforces nothing, so unsupported `deniedMcpServers` keys `warn!`.
+/// The allow side stays silent (an ungranted entry is fail-closed).
 fn parse_mcp_entries(json: &serde_json::Value, key: &str) -> Vec<AllowedMcpServer> {
     let Some(arr) = json.get(key).and_then(|v| v.as_array()) else {
         return Vec::new();
@@ -936,10 +904,9 @@ fn parse_mcp_entries(json: &serde_json::Value, key: &str) -> Vec<AllowedMcpServe
     entries
 }
 
-/// Allow matching compares schemes literally ([`url_allow_matches`]), so a
-/// pattern with no scheme or a glob in the scheme (`*://host/*`,
-/// `*.corp.com/*`) can never match a runtime URL. That fails closed, but a
-/// fleet policy written this way silently loses its grants — tell the admin.
+/// Allow matching compares schemes literally ([`url_allow_matches`]).
+/// A pattern with no scheme or a glob in the scheme (`*://host/*`, `*.corp.com/*`) can never match a runtime URL.
+/// That fails closed, but a fleet policy written this way silently loses its grants; tell the admin.
 fn warn_on_unmatchable_allow_url(pattern: &str) {
     match split_scheme(pattern) {
         (None, _) => warn!(
@@ -956,10 +923,8 @@ fn warn_on_unmatchable_allow_url(pattern: &str) {
             let (authority, _) = split_authority_path(rest);
             let authority = authority.rsplit('@').next().unwrap_or(authority);
             if is_bracketed_ipv6(authority) {
-                // Bracketed IPv6 compares by parsed address — any spelling
-                // of the same address matches. Its port still matches as a
-                // literal number, so a glob or non-numeric port grants
-                // nothing, same as on a domain host.
+                // Bracketed IPv6 compares by parsed address; any spelling of the same address matches
+                // Its port still matches as a literal number, so a glob or non-numeric port grants nothing, same as on a domain host
                 let suffix = authority.split_once(']').map_or("", |(_, rest)| rest);
                 let port_ok = suffix.is_empty()
                     || suffix
@@ -973,18 +938,15 @@ fn warn_on_unmatchable_allow_url(pattern: &str) {
                 }
                 return;
             }
-            // Warn against the MATCHER's view of the pattern (host = before
-            // the last `:`, trailing dots trimmed like canonicalization) —
-            // a shape the matcher already handles must not warn: a false
-            // "can never match" trains admins to ignore load-bearing warns.
+            // Warn against the MATCHER's view of the pattern (host is everything before the last `:`, trailing dots trimmed like canonicalization)
+            // A shape the matcher already handles must not warn: a false "can never match" trains admins to ignore load-bearing warns
             let (host, port) = match authority.rsplit_once(':') {
                 Some((h, p)) => (h, Some(p)),
                 None => (authority, None),
             };
             let host = host.trim_end_matches('.');
-            // Ports are literal numbers; a glob or non-numeric port grants
-            // nothing — the pre-split whole-URL glob semantics honored
-            // `:*`, so legacy configs must hear about the change.
+            // Ports are literal numbers; a glob or non-numeric port grants nothing
+            // The old whole-URL glob match honored `:*`, so legacy configs must hear about the change
             if !host.contains(':')
                 && let Some(p) = port
                 && p.parse::<u16>().is_err()
@@ -1001,9 +963,8 @@ fn warn_on_unmatchable_allow_url(pattern: &str) {
                     "allowedMcpServers serverUrl has no host; this entry can never match"
                 );
             } else if let Ok(v6) = host.parse::<std::net::Ipv6Addr>() {
-                // The matcher's host text works iff it equals the canonical
-                // spelling the runtime side reports (`…::1:443` with a
-                // canonical address + port works; `2001:0db8::1:443` not).
+                // The matcher's host text works only when it equals the canonical spelling the runtime side reports
+                // `…::1:443` with a canonical address and port works; `2001:0db8::1:443` does not
                 if v6.to_string() != host {
                     warn!(
                         pattern,
@@ -1012,9 +973,8 @@ fn warn_on_unmatchable_allow_url(pattern: &str) {
                     );
                 }
             } else if host.contains(':') && !host.contains(['*', '?', '[']) {
-                // A colon-bearing LITERAL that isn't a valid address (the
-                // port split ate part of an unbracketed IPv6); a glob host
-                // like `2001:db8*` can still match and stays silent.
+                // A colon-bearing LITERAL that isn't a valid address (the port split ate part of an unbracketed IPv6)
+                // A glob host like `2001:db8*` can still match and stays silent
                 warn!(
                     pattern,
                     "allowedMcpServers serverUrl IPv6 host must be bracketed; as written this entry can never match"
@@ -1022,9 +982,8 @@ fn warn_on_unmatchable_allow_url(pattern: &str) {
             } else if let Some(ip) = parse_ip_host(host)
                 && ip.to_string() != host
             {
-                // Allow hosts glob-match the canonical runtime host, so an
-                // IP in a non-canonical spelling (`127.1`, `0xa9fea9fe`)
-                // can never match its connect target.
+                // Allow hosts glob-match the canonical runtime host
+                // An IP in a non-canonical spelling (`127.1`, `0xa9fea9fe`) can never match its connect target
                 warn!(
                     pattern,
                     canonical = %ip,
@@ -1042,10 +1001,8 @@ fn warn_on_unmatchable_allow_url(pattern: &str) {
     }
 }
 
-/// A deny entry that can never match is silent zero enforcement — tell the
-/// admin. Covers a host-less pattern, a host glob that doesn't compile
-/// (matching nothing, since no parseable runtime host contains `[`), and a
-/// label mixing Unicode with glob chars.
+/// A deny entry that can never match silently enforces nothing; tell the admin.
+/// Covers a host-less pattern, a host glob that doesn't compile (no parseable runtime host contains `[`), and a label mixing Unicode with glob chars.
 fn warn_on_unmatchable_deny_url(pattern: &str) {
     let (host, _) = split_host_path(pattern);
     match host {
@@ -1065,8 +1022,7 @@ fn warn_on_unmatchable_deny_url(pattern: &str) {
     }
 }
 
-/// A host label mixing non-ASCII with glob metacharacters can never match:
-/// runtime hosts are punycoded, and a partial label can't be.
+/// A host label mixing non-ASCII with glob metacharacters can never match: runtime hosts are punycoded, and a partial label can't be.
 fn warn_on_dead_unicode_glob_label(pattern: &str, host: &str, key: &str) {
     if host
         .split('.')
@@ -1159,26 +1115,36 @@ fn parse_disable_bypass_permissions(json: &serde_json::Value) -> Option<bool> {
     Some(val.as_str() == Some("disable"))
 }
 
-/// Shared pin-reason literals ([`yolo_disabled_by_policy`]); the named source
-/// tells an admin which file activated the lock.
+/// Shared pin-reason literals ([`yolo_disabled_by_policy`]); the named source tells an admin which file activated the lock.
 pub const YOLO_PIN_REASON_REQUIREMENTS: &str = "always-approve disabled by managed policy ([ui] disable_bypass_permissions_mode = true in requirements.toml)";
 /// Back-compat: the legacy `[ui] yolo = false` requirements key still locks.
 pub const YOLO_PIN_REASON_LEGACY_YOLO: &str =
     "always-approve disabled by managed policy ([ui] yolo = false in requirements.toml)";
 
-/// Hard-lock predicate (client gates, permission manager, vendor bypass gate):
-/// `Some(reason)` iff a requirements layer sets `[ui]
-/// disable_bypass_permissions_mode = true` (or legacy `[ui] yolo = false`).
-/// Vendor `managed-settings.json` `disableBypassPermissionsMode` is deliberately
-/// not consulted: grok must not inherit a host-wide always-approve lockdown from
-/// that file. grok still honors that file's permission rules / MCP / marketplace
-/// allowlists, and the user's own `--yolo` / `[ui] permission_mode` / runtime
-/// toggle drive always-approve; to disable it in grok use a root-owned
-/// `requirements.toml`. Fails open on user-writable layers.
+/// The active always-approve hard lock: the pin reason plus the label of the requirements layer that set it.
+/// The label is a file path, or the diskless macOS MDM source id.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct YoloPolicyLock {
+    pub source_label: String,
+    pub reason: &'static str,
+}
+
+/// Hard-lock predicate (client gates, permission manager, vendor bypass gate).
+/// Returns `Some(reason)` iff a requirements layer sets `[ui] disable_bypass_permissions_mode = true` (or legacy `[ui] yolo = false`).
+/// Vendor `managed-settings.json` `disableBypassPermissionsMode` is deliberately not consulted.
+/// grok must not inherit a host-wide always-approve lockdown from that file.
+/// grok still honors that file's permission rules and MCP / marketplace allowlists.
+/// The user's own `--yolo` / `[ui] permission_mode` / runtime toggle drive always-approve.
+/// To disable it in grok, use a root-owned `requirements.toml`.
+/// Fails open on user-writable layers.
 pub fn yolo_disabled_by_policy() -> Option<&'static str> {
+    yolo_policy_lock().map(|lock| lock.reason)
+}
+
+/// Layer-attributed form of [`yolo_disabled_by_policy`] so provenance displays can name the pinning layer.
+pub fn yolo_policy_lock() -> Option<YoloPolicyLock> {
     let layers = xai_grok_config::requirements_layers();
-    // The source label only names the layer in the non-bool warning; materialize
-    // it as a PathBuf so the borrowed iterator below outlives the temporaries.
+    // Owned so the label outlives the borrowed layer temporaries below.
     let labeled: Vec<(PathBuf, &toml::Value)> = layers
         .iter()
         .map(|l| (PathBuf::from(l.source.label().as_ref()), &l.value))
@@ -1186,8 +1152,7 @@ pub fn yolo_disabled_by_policy() -> Option<&'static str> {
     resolve_yolo_policy_block(labeled.iter().map(|(p, v)| (p.as_path(), *v)))
 }
 
-/// Read `[ui] <key>` as a bool; a non-bool value warns (naming key + layer)
-/// rather than silently failing to lock.
+/// Read `[ui] <key>` as a bool; a non-bool value warns (naming key and layer) rather than silently failing to lock.
 fn requirements_lock_bool(ui: Option<&toml::Value>, key: &str, path: &Path) -> Option<bool> {
     let value = ui?.get(key)?;
     match value.as_bool() {
@@ -1204,21 +1169,26 @@ fn requirements_lock_bool(ui: Option<&toml::Value>, key: &str, path: &Path) -> O
     }
 }
 
-/// Pure form of [`yolo_disabled_by_policy`] over pre-loaded layers (testable
-/// without `~/.grok`); `path` only names the layer in a non-bool warning.
+/// Pure form of [`yolo_policy_lock`] over pre-loaded layers; `path` labels the lock's provenance and non-bool warnings.
 fn resolve_yolo_policy_block<'a>(
     requirement_layers: impl Iterator<Item = (&'a Path, &'a toml::Value)>,
-) -> Option<&'static str> {
+) -> Option<YoloPolicyLock> {
+    let lock = |path: &Path, reason| {
+        Some(YoloPolicyLock {
+            source_label: path.display().to_string(),
+            reason,
+        })
+    };
     for (path, layer) in requirement_layers {
         let ui = layer.get("ui");
         // Native lock key (default false). `true` pins always-approve off.
         if requirements_lock_bool(ui, "disable_bypass_permissions_mode", path) == Some(true) {
-            return Some(YOLO_PIN_REASON_REQUIREMENTS);
+            return lock(path, YOLO_PIN_REASON_REQUIREMENTS);
         }
-        // Back-compat alias: `[ui] yolo = false` in requirements.toml still pins
-        // (pre-rename configs). A config.toml `yolo` is unaffected (not read here).
+        // Back-compat alias: `[ui] yolo = false` in requirements.toml still pins (pre-rename configs)
+        // A config.toml `yolo` is unaffected (not read here)
         if requirements_lock_bool(ui, "yolo", path) == Some(false) {
-            return Some(YOLO_PIN_REASON_LEGACY_YOLO);
+            return lock(path, YOLO_PIN_REASON_LEGACY_YOLO);
         }
     }
     None
@@ -1238,8 +1208,8 @@ pub enum AllowedMcpServer {
     },
 }
 
-/// MCP server policy from managed-settings.json: `allowedMcpServers` plus
-/// `deniedMcpServers`. Deny takes precedence over allow (deny-wins semantics).
+/// MCP server policy from managed-settings.json: `allowedMcpServers` plus `deniedMcpServers`.
+/// Deny takes precedence over allow.
 #[derive(Debug, Clone, Default)]
 pub struct McpServerAllowlist {
     pub entries: Vec<AllowedMcpServer>,
@@ -1268,9 +1238,9 @@ fn split_mcp_entries(entries: &[AllowedMcpServer]) -> (Vec<String>, Vec<String>,
 }
 
 impl McpServerAllowlist {
-    /// Build a policy from raw allow/deny entries. Public so the enforcement
-    /// chokepoint can be exercised in tests without a managed-settings.json on
-    /// disk (the runtime path goes through [`parse_managed_settings_json`]).
+    /// Build a policy from raw allow/deny entries.
+    /// Public so tests can exercise this enforcement path without a managed-settings.json on disk.
+    /// The runtime path goes through [`parse_managed_settings_json`].
     pub fn new(
         entries: Vec<AllowedMcpServer>,
         deny_entries: Vec<AllowedMcpServer>,
@@ -1327,9 +1297,9 @@ impl McpServerAllowlist {
 
     /// Check whether an MCP server is allowed by this policy.
     ///
-    /// Deny beats allow. `serverName` is a transport-agnostic dimension enforced
-    /// here at the server level; allow is a union across dimensions (match any
-    /// applicable URL/command/name), and a deny-only policy allows the rest.
+    /// Deny beats allow.
+    /// `serverName` is a transport-agnostic dimension enforced here at the server level.
+    /// Allow is a union across dimensions (match any applicable URL/command/name), and a deny-only policy allows the rest.
     pub fn is_server_allowed(&self, server: &agent_client_protocol::McpServer) -> bool {
         if !self.is_restricted() {
             return true;
@@ -1342,8 +1312,7 @@ impl McpServerAllowlist {
         let mut restricted = false;
         let mut matched = false;
 
-        // Name and URL/command allows are a union — a serverName allow grants any
-        // URL (more permissive than a strict URL-precedence scheme).
+        // Name and URL/command allows are a union: a serverName allow grants any URL (more permissive than a strict URL-precedence scheme)
         if !self.names.is_empty() {
             restricted = true;
             matched |= self
@@ -1352,10 +1321,9 @@ impl McpServerAllowlist {
                 .any(|pat| mcp_name_matches(pat, mcp_server_name(server)));
         }
 
-        // Emptiness checks live INSIDE the arms: a match guard that fails
-        // would fall through to `_`, and the `_` arm's fail-closed gate must
-        // catch only genuinely unknown transports — a command-only allowlist
-        // restricts stdio, never HTTP (per-dimension union).
+        // Emptiness checks live INSIDE the arms: a match guard that fails would fall through to `_`
+        // The `_` arm's fail-closed gate must catch only genuinely unknown transports
+        // A command-only allowlist restricts stdio, never HTTP (per-dimension union)
         match server {
             agent_client_protocol::McpServer::Http(agent_client_protocol::McpServerHttp {
                 url,
@@ -1383,9 +1351,8 @@ impl McpServerAllowlist {
                     matched |= self.commands.iter().any(|c| *c == command);
                 }
             }
-            // `McpServer` is #[non_exhaustive] as of acp 0.10. A transport
-            // we can't inspect must not slip a URL/command lockdown (fail
-            // closed); name allows were already checked above.
+            // `McpServer` is #[non_exhaustive] as of acp 0.10
+            // A transport we can't inspect must not slip a URL/command lockdown (fail closed); name allows were already checked above
             _ => {
                 restricted =
                     restricted || !self.url_patterns.is_empty() || !self.commands.is_empty();
@@ -1395,8 +1362,7 @@ impl McpServerAllowlist {
         !restricted || matched
     }
 
-    /// True when the server matches a `deniedMcpServers` entry (vs merely
-    /// missing from the allowlist) — lets callers report the right reason.
+    /// True when the server matches a `deniedMcpServers` entry (vs merely missing from the allowlist); lets callers report the right reason.
     /// Includes a transport-agnostic `serverName` deny match.
     pub fn is_server_denied(&self, server: &agent_client_protocol::McpServer) -> bool {
         if self
@@ -1435,14 +1401,12 @@ impl McpServerAllowlist {
 /// Policy matching still uses this spelling.
 pub const MANAGED_MCP_PREFIX: &str = "grok_com_";
 
-/// Max `char` length of a managed runtime name (`grok_com_` + normalized display
-/// name), sized to the 64-char tool-name budget. Shared with `mcp_name_matches`
-/// so a long policy `serverName` still matches its truncated runtime name.
+/// Max `char` length of a managed runtime name (`grok_com_` + normalized display name), sized to the 64-char tool-name budget.
+/// Shared with `mcp_name_matches` so a long policy `serverName` still matches its truncated runtime name.
 pub const MANAGED_MCP_NAME_MAX_CHARS: usize = 39;
 
-/// Normalize a bare MCP display name to its runtime spelling (lowercase, spaces
-/// → `_`). Shared with `mcp_name_matches` so the policy and runtime sides never
-/// drift.
+/// Normalize a bare MCP display name to its runtime spelling (lowercase, spaces become `_`).
+/// Shared with `mcp_name_matches` so the policy and runtime sides never drift.
 pub fn normalize_managed_name(bare: &str) -> String {
     bare.to_lowercase().replace(' ', "_")
 }
@@ -1459,16 +1423,15 @@ fn mcp_server_name(server: &agent_client_protocol::McpServer) -> &str {
     }
 }
 
-/// Match a policy `serverName` against a runtime server name: both sides
-/// reduce to one key (strip `grok_com_`, [`normalize_managed_name`]) and
-/// compare by exact equality — never substring; an empty key never matches.
+/// Match a policy `serverName` against a runtime server name.
+/// Both sides reduce to one key (strip `grok_com_`, [`normalize_managed_name`]) and compare by exact equality, never substring.
+/// An empty key never matches.
 fn mcp_name_matches(pattern: &str, name: &str) -> bool {
     fn key(s: &str) -> String {
         normalize_managed_name(s.strip_prefix(MANAGED_MCP_PREFIX).unwrap_or(s))
     }
-    // Mirror the legacy injected-name truncation: `grok_com_*` runtime
-    // names were capped at MANAGED_MCP_NAME_MAX_CHARS total (prefix-inclusive
-    // on the bare part).
+    // Mirror the legacy injected-name truncation: `grok_com_*` runtime names were capped at MANAGED_MCP_NAME_MAX_CHARS total
+    // The cap counts the prefix, so the bare part keeps the remainder
     fn truncate(key: String) -> String {
         let max_bare = MANAGED_MCP_NAME_MAX_CHARS - MANAGED_MCP_PREFIX.len();
         match key.char_indices().nth(max_bare) {
@@ -1478,10 +1441,9 @@ fn mcp_name_matches(pattern: &str, name: &str) -> bool {
     }
     let mut pattern_key = key(pattern);
     let mut name_key = key(name);
-    // Truncate only for the shape runtime truncation produces (a managed
-    // name at exactly the cap), so a long entry never becomes a prefix grant
-    // over decoys. Residual: a decoy spelled exactly like the truncated
-    // managed name is string-identical — no name matcher can tell them apart.
+    // Truncate only for the shape runtime truncation produces (a managed name at exactly the cap)
+    // That way a long entry never becomes a prefix grant over decoys
+    // Residual: a decoy spelled exactly like the truncated managed name is string-identical; no name matcher can tell them apart
     if name.starts_with(MANAGED_MCP_PREFIX) && name.chars().count() == MANAGED_MCP_NAME_MAX_CHARS {
         pattern_key = truncate(pattern_key);
         name_key = truncate(name_key);
@@ -1489,18 +1451,16 @@ fn mcp_name_matches(pattern: &str, name: &str) -> bool {
     !pattern_key.is_empty() && pattern_key == name_key
 }
 
-/// Glob options for hosts and DENY paths: case-insensitive (hosts are, and
-/// an insensitive deny only over-blocks), `*` spans `/` — path scoping is
-/// enforced by the authority/path split, not by the glob.
+/// Glob options for hosts and DENY paths: case-insensitive (hosts are, and an insensitive deny only over-blocks), `*` spans `/`.
+/// Path scoping is enforced by the authority/path split, not by the glob.
 const POLICY_GLOB_OPTS: glob::MatchOptions = glob::MatchOptions {
     case_sensitive: false,
     require_literal_separator: false,
     require_literal_leading_dot: false,
 };
 
-/// Glob options for ALLOW paths: case-sensitive — URL paths name
-/// case-sensitive resources, and an allow match is a positive grant, so
-/// `/mcp/*` must not grant `/MCP/*`.
+/// Glob options for ALLOW paths: case-sensitive.
+/// URL paths name case-sensitive resources, and an allow match is a positive grant, so `/mcp/*` must not grant `/MCP/*`.
 const ALLOW_PATH_GLOB_OPTS: glob::MatchOptions = glob::MatchOptions {
     case_sensitive: true,
     require_literal_separator: false,
@@ -1515,10 +1475,9 @@ fn split_authority_path(s: &str) -> (&str, &str) {
     }
 }
 
-/// A runtime MCP URL reduced to its connect-time components by the WHATWG
-/// parser reqwest uses — hand-parsing diverges from the connect target,
-/// which is the gap behind every dodge in this class (`\` authority ends,
-/// `%2e%2e` segments, userinfo, default ports, alternate IP spellings).
+/// A runtime MCP URL reduced to its connect-time components by the WHATWG parser reqwest uses.
+/// Hand-parsing diverges from the connect target; that gap is behind every dodge in this class.
+/// Examples: `\` authority ends, `%2e%2e` segments, userinfo, default ports, alternate IP spellings.
 /// Patterns must NOT use this: they may hold globs the parser rejects.
 struct RuntimeUrl {
     scheme: String,
@@ -1541,8 +1500,7 @@ impl RuntimeUrl {
         })
     }
 
-    /// Canonical bare host (lowercase, trailing dot stripped, unbracketed
-    /// IPv6) — the same shape [`split_host_path`] yields for patterns.
+    /// Canonical bare host (lowercase, trailing dot stripped, unbracketed IPv6); the same shape [`split_host_path`] yields for patterns.
     fn host_text(&self) -> String {
         match &self.host {
             url::Host::Domain(d) => d.trim_end_matches('.').to_ascii_lowercase(),
@@ -1551,8 +1509,7 @@ impl RuntimeUrl {
         }
     }
 
-    /// Canonical `host[:port]` for allow matching; IPv6 stays bracketed so it
-    /// lines up with `[...]` patterns.
+    /// Canonical `host[:port]` for allow matching; IPv6 stays bracketed so it lines up with `[...]` patterns.
     fn authority(&self) -> String {
         let host = match &self.host {
             url::Host::Ipv6(a) => format!("[{a}]"),
@@ -1565,12 +1522,11 @@ impl RuntimeUrl {
     }
 }
 
-/// Glob-match an ALLOW pattern: scheme, host, port, and path matched
-/// separately so a wildcard can't cross a component boundary (an allow match
-/// is a positive grant under the lockdown). Scheme and port stay literal,
-/// except a scheme-default `:443`/`:80` matches the port-less spelling. The
-/// URL side is parsed as the client connects ([`RuntimeUrl`]); unparseable =
-/// no grant. Deny matching must NOT reuse this — see [`url_deny_matches`].
+/// Glob-match an ALLOW pattern: scheme, host, port, and path matched separately so a wildcard can't cross a component boundary.
+/// An allow match is a positive grant under the lockdown.
+/// Scheme and port stay literal, except a scheme-default `:443`/`:80` matches the port-less spelling.
+/// The URL side is parsed as the client connects ([`RuntimeUrl`]); an unparseable URL grants nothing.
+/// Deny matching must NOT reuse this; see [`url_deny_matches`].
 fn url_allow_matches(pattern: &str, url: &str) -> bool {
     let Some(runtime) = RuntimeUrl::parse(url) else {
         return false;
@@ -1582,16 +1538,12 @@ fn url_allow_matches(pattern: &str, url: &str) -> bool {
         _ => return false,
     }
     let (pat_authority, pat_path) = split_authority_path(pat_rest);
-    // Userinfo in a pattern drops like the connect-time parser drops it —
-    // before bracket detection, so `token@[::1]` still reads as IPv6.
+    // Userinfo in a pattern drops like the connect-time parser drops it: before bracket detection, so `token@[::1]` still reads as IPv6
     let pat_authority = pat_authority.rsplit('@').next().unwrap_or(pat_authority);
     let url_authority = runtime.authority();
-    // A bracketed IPv6 PATTERN isn't a valid glob (`[` opens a class):
-    // compare parsed addresses, ports literal, so alternate spellings can't
-    // dodge. Only the pattern side chooses this branch — a host glob like
-    // `*` must still see IPv6 runtimes or wildcard allows lose those grants.
-    // A leading `[` whose content isn't an address opens a glob character
-    // class and matches below, like the deny side.
+    // A bracketed IPv6 PATTERN isn't a valid glob (`[` opens a class): compare parsed addresses, ports literal, so alternate spellings can't dodge
+    // Only the pattern side chooses this branch; a host glob like `*` must still see IPv6 runtimes or wildcard allows lose those grants
+    // A leading `[` whose content isn't an address opens a glob character class and matches below, like the deny side
     if is_bracketed_ipv6(pat_authority) {
         let pat_authority = strip_pattern_default_port(pat_authority, &runtime.scheme);
         if !ipv6_authorities_equal(pat_authority, &url_authority) {
@@ -1599,9 +1551,8 @@ fn url_allow_matches(pattern: &str, url: &str) -> bool {
         }
         return allow_path_matches(&canonicalize_pattern_path(pat_path), &runtime.path);
     }
-    // Host and port match separately so a trailing host wildcard can't
-    // absorb a port constraint. No pattern port = scheme-default only; an
-    // explicit port matches the effective connect port either spelling.
+    // Host and port match separately so a trailing host wildcard can't absorb a port constraint
+    // No pattern port means scheme-default only; an explicit port matches the effective connect port either spelling
     let (pat_host, pat_port) = match pat_authority.rsplit_once(':') {
         Some((host, port)) => (host, Some(port)),
         None => (pat_authority, None),
@@ -1614,8 +1565,7 @@ fn url_allow_matches(pattern: &str, url: &str) -> bool {
     if !glob_match(&canonicalize_pattern_host(pat_host), &runtime.host_text()) {
         return false;
     }
-    // Ports are literal numbers — a glob or non-numeric port grants nothing
-    // (fail closed), and leading zeros compare numerically.
+    // Ports are literal numbers; a glob or non-numeric port grants nothing (fail closed), and leading zeros compare numerically
     let port_ok = match (pat_port, runtime.port) {
         (None, None) => true,
         (None, Some(_)) => false,
@@ -1629,9 +1579,8 @@ fn url_allow_matches(pattern: &str, url: &str) -> bool {
     allow_path_matches(&canonicalize_pattern_path(pat_path), &runtime.path)
 }
 
-/// Canonicalize a pattern host like the WHATWG parser: IDNA/punycode
-/// (`bücher.example` → `xn--bcher-kva.example`), percent-decoding
-/// (`%61dmin.example` → `admin.example`), lowercase, trailing dot dropped.
+/// Canonicalize a pattern host like the WHATWG parser: lowercase, trailing dot dropped, IDNA/punycode, percent-decoding.
+/// `bücher.example` becomes `xn--bcher-kva.example`; `%61dmin.example` becomes `admin.example`.
 /// Per label; glob labels stay literal.
 fn canonicalize_pattern_host(host: &str) -> String {
     let host = host.trim_end_matches('.');
@@ -1653,14 +1602,11 @@ fn canonicalize_pattern_host(host: &str) -> String {
         .join(".")
 }
 
-/// Decode percent escapes of UNRESERVED bytes (RFC 3986 alphanumeric +
-/// `-._~`), which the WHATWG parser leaves as-is — otherwise `/%61dmin/x`
-/// dodges a `/admin/*` deny. Reserved escapes (`%2F`) stay encoded (decoding
-/// them would change the path structure) but normalize to uppercase hex:
-/// the parser preserves pre-existing escape case, and allow paths match
-/// case-sensitively, so `%2f` and `%2F` must compare equal. Escaped dot
-/// segments are already resolved on the runtime side, so a remaining `%2e`
-/// can't re-create one.
+/// Decode percent escapes of UNRESERVED bytes (RFC 3986 alphanumeric and `-._~`), which the WHATWG parser leaves as-is.
+/// Otherwise `/%61dmin/x` dodges a `/admin/*` deny.
+/// Reserved escapes (`%2F`) stay encoded (decoding them would change the path structure) but normalize to uppercase hex.
+/// The parser preserves pre-existing escape case, and allow paths match case-sensitively, so `%2f` and `%2F` must compare equal.
+/// Escaped dot segments are already resolved on the runtime side, so a remaining `%2e` can't re-create one.
 fn decode_unreserved_escapes(path: &str) -> String {
     fn hex_val(b: u8) -> Option<u8> {
         match b {
@@ -1696,12 +1642,10 @@ fn decode_unreserved_escapes(path: &str) -> String {
     String::from_utf8_lossy(&out).into_owned()
 }
 
-/// Resolve literal `.`/`..` segments in a PATTERN path the way the WHATWG
-/// parser resolves the runtime path, so a deny spelled `/x/../admin/*`
-/// scopes to `/admin/*` instead of never matching (the runtime side always
-/// arrives resolved). `..` clamps at root; a trailing dot segment keeps the
-/// directory slash, like the serializer. A glob counts as one segment, so
-/// `..` pops it whole.
+/// Resolve literal `.`/`..` segments in a PATTERN path the way the WHATWG parser resolves the runtime path.
+/// A deny spelled `/x/../admin/*` then scopes to `/admin/*` instead of never matching (the runtime side always arrives resolved).
+/// `..` clamps at root; a trailing dot segment keeps the directory slash, like the serializer.
+/// A glob counts as one segment, so `..` pops it whole.
 fn resolve_pattern_dot_segments(path: &str) -> String {
     if !path.contains("/.") {
         return path.to_string();
@@ -1729,11 +1673,10 @@ fn resolve_pattern_dot_segments(path: &str) -> String {
     joined
 }
 
-/// Percent-encode a pattern path the way the WHATWG serializer emits
-/// runtime paths, so a Unicode policy path (`/café/*`) matches its connect
-/// spelling (`/caf%C3%A9/*`); unreserved escapes decode (kept escapes
-/// uppercase, both sides) and dot segments resolve first. `?` stays literal
-/// (glob metachar; a runtime path can't contain one).
+/// Percent-encode a pattern path the way the WHATWG serializer emits runtime paths.
+/// A Unicode policy path (`/café/*`) then matches its connect spelling (`/caf%C3%A9/*`).
+/// Unreserved escapes decode (kept escapes uppercase, both sides) and dot segments resolve first.
+/// `?` stays literal (glob metachar; a runtime path can't contain one).
 fn canonicalize_pattern_path(path: &str) -> String {
     let path = resolve_pattern_dot_segments(&decode_unreserved_escapes(path));
     fn needs_encoding(b: u8) -> bool {
@@ -1765,8 +1708,8 @@ fn canonicalize_pattern_path(path: &str) -> String {
     out
 }
 
-/// Default port the WHATWG parser elides for a scheme; `None` for unknown
-/// schemes (their pattern ports stay literal, failing closed on a mismatch).
+/// Default port the WHATWG parser elides for a scheme.
+/// `None` for unknown schemes (their pattern ports stay literal, failing closed on a mismatch).
 fn scheme_default_port(scheme: &str) -> Option<&'static str> {
     match scheme {
         "http" | "ws" => Some("80"),
@@ -1775,10 +1718,9 @@ fn scheme_default_port(scheme: &str) -> Option<&'static str> {
     }
 }
 
-/// Strip an explicit scheme-default port (numerically, so `:0443` counts)
-/// from a bracketed-IPv6 pattern authority — the WHATWG parser elides it on
-/// the URL side, and both spellings name the same connect target. The `]`
-/// guard keeps a port-less address ending in a default-port hextet intact.
+/// Strip an explicit scheme-default port (numerically, so `:0443` counts) from a bracketed-IPv6 pattern authority.
+/// The WHATWG parser elides it on the URL side, and both spellings name the same connect target.
+/// The `]` guard keeps a port-less address ending in a default-port hextet intact.
 fn strip_pattern_default_port<'a>(authority: &'a str, scheme: &str) -> &'a str {
     let Some(default) = scheme_default_port(scheme).and_then(|d| d.parse::<u16>().ok()) else {
         return authority;
@@ -1789,9 +1731,8 @@ fn strip_pattern_default_port<'a>(authority: &'a str, scheme: &str) -> &'a str {
     }
 }
 
-/// Allow-side path match: an authority-only pattern matches only the root
-/// path; `/*` spans nested segments. The URL path arrives WHATWG-normalized,
-/// so the glob sees what the server will actually receive.
+/// Allow-side path match: an authority-only pattern matches only the root path; `/*` spans nested segments.
+/// The URL path arrives WHATWG-normalized, so the glob sees what the server will actually receive.
 fn allow_path_matches(pat_path: &str, url_path: &str) -> bool {
     if pat_path.is_empty() || pat_path == "/" {
         return url_path == "/";
@@ -1801,9 +1742,8 @@ fn allow_path_matches(pat_path: &str, url_path: &str) -> bool {
         .unwrap_or(false)
 }
 
-/// True when a pattern authority is a bracketed IPv6 literal, `[v6]` or
-/// `[v6]:port`. A leading `[` whose content doesn't parse as an address
-/// opens a glob character class instead (`[ab]host.example`).
+/// True when a pattern authority is a bracketed IPv6 literal, `[v6]` or `[v6]:port`.
+/// A leading `[` whose content doesn't parse as an address opens a glob character class instead (`[ab]host.example`).
 fn is_bracketed_ipv6(authority: &str) -> bool {
     authority
         .strip_prefix('[')
@@ -1811,11 +1751,9 @@ fn is_bracketed_ipv6(authority: &str) -> bool {
         .is_some_and(|(addr, _)| addr.parse::<std::net::Ipv6Addr>().is_ok())
 }
 
-/// Compare two bracketed-IPv6 authorities by parsed address (ports numeric
-/// when both parse, so `:0443` ≡ `:443`), so alternate spellings of one
-/// address (`[2001:0db8::1]`, `[2001:db8:0:0:0:0:0:1]`) can't dodge a
-/// policy entry. When either side isn't a parseable bracketed literal, fall
-/// back to the literal comparison (an imprecise allow only over-blocks).
+/// Compare two bracketed-IPv6 authorities by parsed address (ports numeric when both parse, so `:0443` equals `:443`).
+/// Alternate spellings of one address (`[2001:0db8::1]`, `[2001:db8:0:0:0:0:0:1]`) then can't dodge a policy entry.
+/// When either side isn't a parseable bracketed literal, fall back to the literal comparison (an imprecise allow only over-blocks).
 fn ipv6_authorities_equal(a: &str, b: &str) -> bool {
     fn parse(authority: &str) -> Option<(std::net::Ipv6Addr, &str)> {
         let rest = authority.strip_prefix('[')?;
@@ -1848,12 +1786,10 @@ fn split_scheme(s: &str) -> (Option<&str>, &str) {
     }
 }
 
-/// Host-normalized, scheme/port-agnostic match of a DENY pattern against a
-/// URL. Deliberately asymmetric with [`url_allow_matches`]: an imprecise
-/// allow only over-blocks (safe), but a deny must never fail open — so
-/// scheme and port are ignored and a `host` / `scheme://host/*` entry blocks
-/// that host on ANY scheme, port, and path. A URL [`RuntimeUrl`] rejects is
-/// denied outright: a spelling we can't interpret must not slip past.
+/// Host-normalized, scheme/port-agnostic match of a DENY pattern against a URL.
+/// Deliberately asymmetric with [`url_allow_matches`]: an imprecise allow only over-blocks (safe), but a deny must never fail open.
+/// Scheme and port are therefore ignored: a `host` / `scheme://host/*` entry blocks that host on ANY scheme, port, and path.
+/// A URL [`RuntimeUrl`] rejects is denied outright: a spelling we can't interpret must not slip past.
 fn url_deny_matches(pattern: &str, url: &str) -> bool {
     let (Some(pat_host), pat_path) = split_host_path(pattern) else {
         return false;
@@ -1867,9 +1803,8 @@ fn url_deny_matches(pattern: &str, url: &str) -> bool {
         Ok(p) => p.matches_with(s, POLICY_GLOB_OPTS),
         Err(_) => pat.eq_ignore_ascii_case(s),
     };
-    // IP-named entries compare parsed addresses so alternate spellings of
-    // one connect target (`0xa9fea9fe`, `127.1`) are still denied; globs
-    // never parse as an IP and fall through.
+    // IP-named entries compare parsed addresses so alternate spellings of one connect target (`0xa9fea9fe`, `127.1`) are still denied
+    // Globs never parse as an IP and fall through
     if let (Some(pat_ip), Some(url_ip)) = (parse_ip_host(&pat_host), parse_ip_host(&url_host)) {
         if pat_ip != url_ip {
             return false;
@@ -1877,19 +1812,17 @@ fn url_deny_matches(pattern: &str, url: &str) -> bool {
     } else if !glob_match(&canonicalize_pattern_host(&pat_host), &url_host) {
         return false;
     }
-    // A host-only pattern blocks every path on that host — including every
-    // spelling whose CANONICAL path is `/` (`https://host/`, `/.`,
-    // `/mcp/..`), all WHATWG-equal to the pathless form. Otherwise glob the
-    // canonical pattern path against the WHATWG-normalized URL path, so
-    // `/admin/*` can't be dodged by spelling the URL `/mcp/../admin/x`.
+    // A host-only pattern blocks every path on that host
+    // That includes every spelling whose CANONICAL path is `/` (`https://host/`, `/.`, `/mcp/..`), all WHATWG-equal to the pathless form
+    // Otherwise glob the canonical pattern path against the WHATWG-normalized URL path
+    // `/admin/*` then can't be dodged by spelling the URL `/mcp/../admin/x`
     let pat_path = canonicalize_pattern_path(&pat_path);
     if pat_path.is_empty() || pat_path == "/" {
         return true;
     }
     match glob::Pattern::new(&pat_path) {
         Ok(p) => p.matches_with(&runtime.path, POLICY_GLOB_OPTS),
-        // Host matched + broken path glob: deny the whole host, never
-        // fail open.
+        // Host matched and broken path glob: deny the whole host, never fail open
         Err(e) => {
             warn!(
                 pattern,
@@ -1901,10 +1834,9 @@ fn url_deny_matches(pattern: &str, url: &str) -> bool {
     }
 }
 
-/// Parse a bare host as an IP, accepting every spelling the WHATWG parser
-/// canonicalizes at connect time (hex, shortened, decimal, unbracketed
-/// IPv6). IPv4-mapped IPv6 canonicalizes to the IPv4 it reaches on a
-/// dual-stack socket. Domains and glob patterns return `None`.
+/// Parse a bare host as an IP, accepting every spelling the WHATWG parser canonicalizes at connect time (hex, shortened, decimal, unbracketed IPv6).
+/// IPv4-mapped IPv6 canonicalizes to the IPv4 it reaches on a dual-stack socket.
+/// Domains and glob patterns return `None`.
 fn parse_ip_host(host: &str) -> Option<std::net::IpAddr> {
     let addr = if let Ok(v6) = host.parse::<std::net::Ipv6Addr>() {
         std::net::IpAddr::V6(v6)
@@ -1918,11 +1850,9 @@ fn parse_ip_host(host: &str) -> Option<std::net::IpAddr> {
     Some(addr.to_canonical())
 }
 
-/// Split a URL PATTERN into `(host, path)`, dropping scheme, userinfo, and
-/// port. The host is lowercased with a trailing dot stripped; the path keeps
-/// its original case and any glob metacharacters. Runtime URLs must be parsed
-/// with [`RuntimeUrl`] instead — hand-splitting a runtime URL diverges from
-/// the connect target.
+/// Split a URL PATTERN into `(host, path)`, dropping scheme, userinfo, and port.
+/// The host is lowercased with a trailing dot stripped; the path keeps its original case and any glob metacharacters.
+/// Runtime URLs must be parsed with [`RuntimeUrl`] instead; hand-splitting a runtime URL diverges from the connect target.
 fn split_host_path(s: &str) -> (Option<String>, String) {
     let after_scheme = match s.find("://") {
         Some(i) => &s[i + 3..],
@@ -1932,13 +1862,10 @@ fn split_host_path(s: &str) -> (Option<String>, String) {
         Some(i) => (&after_scheme[..i], &after_scheme[i..]),
         None => (after_scheme, ""),
     };
-    // Drop userinfo then the port; IPv6 keeps its colons whether bracketed
-    // or not (a naive `:`-split truncates `2001:db8::1` to `2001`). A
-    // decimal suffix is also a valid hextet; the `host:port` reading wins
-    // that ambiguity (`…::1:443` is a copied URL's host + port, and reading
-    // it as an address under-blocks the intended host). `:ffff` is a hextet.
-    // A leading `[` only means IPv6 when its content parses as one —
-    // otherwise it opens a glob character class (`[ab]evil.example`).
+    // Drop userinfo then the port; IPv6 keeps its colons whether bracketed or not (a naive `:`-split truncates `2001:db8::1` to `2001`)
+    // A decimal suffix is also a valid hextet; the `host:port` reading wins that ambiguity
+    // `…::1:443` is a copied URL's host and port, and reading it as an address under-blocks the intended host. `:ffff` is a hextet.
+    // A leading `[` only means IPv6 when its content parses as one; otherwise it opens a glob character class (`[ab]evil.example`)
     let authority = authority.rsplit('@').next().unwrap_or(authority);
     let bracket_ipv6 = authority.strip_prefix('[').and_then(|rest| {
         let content = match rest.find(']') {
@@ -1972,8 +1899,7 @@ fn split_host_path(s: &str) -> (Option<String>, String) {
     }
 }
 
-/// When non-empty, only git marketplace sources matching an allowed URL are
-/// permitted.
+/// When non-empty, only git marketplace sources matching an allowed URL are permitted.
 #[derive(Debug, Clone, Default)]
 pub struct MarketplaceAllowlist {
     pub allowed_urls: Vec<String>,

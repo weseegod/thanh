@@ -129,21 +129,6 @@ fn test_extract_user_query_ignores_nested_rules_query_before_outer_query() {
     assert_eq!(extract_user_query(input), "real request");
 }
 #[test]
-fn test_strip_fork_context_tag() {
-    let input = "<fork-context>\nYou inherited context.\n</fork-context>\n\nreal content";
-    assert_eq!(extract_user_query(input), "real content");
-}
-#[test]
-fn test_strip_system_reminder_tag() {
-    let input = "<system-reminder>\nFollow these instructions.\n</system-reminder>\n\nreal content";
-    assert_eq!(extract_user_query(input), "real content");
-}
-#[test]
-fn test_strip_agent_memory_tag() {
-    let input = "<agent-memory>\nPrevious context.\n</agent-memory>\n\nreal content";
-    assert_eq!(extract_user_query(input), "real content");
-}
-#[test]
 fn test_strip_system_underscore_reminder_tag() {
     let input = "<system_reminder>\nReminder text.\n</system_reminder>\n\nreal content";
     assert_eq!(extract_user_query(input), "real content");

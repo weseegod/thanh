@@ -425,6 +425,8 @@ View credit usage or manage billing. Alias: `/cost`.
 /usage manage
 ```
 
+For persisted per-turn token and cost totals of any local session, use `grok usage <session-id> [turn]` from the shell. See [Session Management](17-sessions.md#the-grok-usage-subcommand).
+
 ### `/privacy`
 
 Open Settings on **Coding data, retention, and training**, where you choose

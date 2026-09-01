@@ -63,7 +63,8 @@ pub trait SubagentBackend: Send + Sync + 'static {
     async fn cancel(&self, id: &str) -> SubagentCancelOutcome;
 
     /// Validate a subagent type synchronously before spawning.
-    /// Returns `ValidationUnavailable` on channel close / responder drop / timeout.
+    /// Returns `CoordinatorGone` on channel close and `ValidationUnavailable`
+    /// on responder drop / timeout.
     async fn validate_type(
         &self,
         subagent_type: &str,
@@ -615,29 +616,11 @@ impl SubagentBackend for ChannelBackend {
         {
             tracing::warn!(
                 subagent_type,
-                "coordinator validation channel closed, treating as ValidationUnavailable",
+                "coordinator validation channel closed, treating as CoordinatorGone",
             );
-            return SubagentValidateTypeOutcome::ValidationUnavailable;
+            return SubagentValidateTypeOutcome::CoordinatorGone;
         }
-        let timeout = validate_type_timeout();
-        match tokio::time::timeout(timeout, response_rx).await {
-            Ok(Ok(outcome)) => outcome,
-            Ok(Err(_)) => {
-                tracing::warn!(
-                    subagent_type,
-                    "coordinator validation responder dropped, treating as ValidationUnavailable",
-                );
-                SubagentValidateTypeOutcome::ValidationUnavailable
-            }
-            Err(_) => {
-                tracing::warn!(
-                    subagent_type,
-                    timeout_ms = timeout.as_millis() as u64,
-                    "coordinator validation timed out, treating as ValidationUnavailable",
-                );
-                SubagentValidateTypeOutcome::ValidationUnavailable
-            }
-        }
+        await_validate_reply(subagent_type, validate_type_timeout(), response_rx).await
     }
 
     async fn describe_subagent_type(
@@ -667,7 +650,7 @@ impl SubagentBackend for ChannelBackend {
             );
             return SubagentDescribeOutcome::Unavailable;
         }
-        let timeout = validate_type_timeout();
+        let timeout = describe_type_timeout();
         match tokio::time::timeout(timeout, response_rx).await {
             Ok(Ok(outcome)) => outcome,
             Ok(Err(_)) => {
@@ -689,29 +672,73 @@ impl SubagentBackend for ChannelBackend {
     }
 }
 
-/// Default `validate_type` timeout. Override via [`VALIDATE_TYPE_TIMEOUT_ENV_VAR`].
-pub const VALIDATE_TYPE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
+/// Race the coordinator's validation reply against `timeout`; the timeout
+/// WARN reports the raced (post-override) duration.
+async fn await_validate_reply(
+    subagent_type: &str,
+    timeout: std::time::Duration,
+    response_rx: oneshot::Receiver<SubagentValidateTypeOutcome>,
+) -> SubagentValidateTypeOutcome {
+    match tokio::time::timeout(timeout, response_rx).await {
+        Ok(Ok(outcome)) => outcome,
+        Ok(Err(_)) => {
+            tracing::warn!(
+                subagent_type,
+                "coordinator validation responder dropped, treating as ValidationUnavailable",
+            );
+            SubagentValidateTypeOutcome::ValidationUnavailable
+        }
+        Err(_) => {
+            tracing::warn!(
+                subagent_type,
+                timeout_ms = timeout.as_millis() as u64,
+                "coordinator validation timed out, treating as ValidationUnavailable",
+            );
+            SubagentValidateTypeOutcome::ValidationUnavailable
+        }
+    }
+}
+
+/// Default `validate_type` timeout; override via [`VALIDATE_TYPE_TIMEOUT_ENV_VAR`].
+/// A short default false-fails while the coordinator is busy; a shut-down
+/// coordinator still fails instantly on the closed channel.
+pub const VALIDATE_TYPE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// Default `describe_subagent_type` timeout. Kept short: the `/goal` role gate
+/// awaits describe serially per distinct agent type before failing open, so a
+/// long budget multiplies into a turn-start stall. Override via
+/// [`DESCRIBE_TYPE_TIMEOUT_ENV_VAR`].
+pub const DESCRIBE_TYPE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
 
 /// Env-var override for [`VALIDATE_TYPE_TIMEOUT`] (positive milliseconds).
 pub const VALIDATE_TYPE_TIMEOUT_ENV_VAR: &str = "XAI_VALIDATE_TYPE_TIMEOUT_MS";
 
+/// Env-var override for [`DESCRIBE_TYPE_TIMEOUT`] (positive milliseconds).
+pub const DESCRIBE_TYPE_TIMEOUT_ENV_VAR: &str = "XAI_DESCRIBE_TYPE_TIMEOUT_MS";
+
 /// Validation timeout, honoring the env-var override.
 pub fn validate_type_timeout() -> std::time::Duration {
-    let value = std::env::var(VALIDATE_TYPE_TIMEOUT_ENV_VAR).ok();
-    parse_timeout_ms(value.as_deref())
-        .map(std::time::Duration::from_millis)
-        .unwrap_or(VALIDATE_TYPE_TIMEOUT)
+    env_duration_or(VALIDATE_TYPE_TIMEOUT_ENV_VAR, VALIDATE_TYPE_TIMEOUT)
 }
 
-/// Parse a positive `u64` millisecond value; `None` for unset, invalid, or zero.
-pub(crate) fn parse_timeout_ms(value: Option<&str>) -> Option<u64> {
-    value.and_then(crate::util::env::parse_positive)
+/// Describe timeout, honoring the env-var override.
+pub fn describe_type_timeout() -> std::time::Duration {
+    env_duration_or(DESCRIBE_TYPE_TIMEOUT_ENV_VAR, DESCRIBE_TYPE_TIMEOUT)
 }
 
 /// Resolve a `Duration` from a positive-millisecond env override, falling back
 /// to `default` when the var is unset / non-numeric / zero.
 pub fn env_duration_or(env_var: &str, default: std::time::Duration) -> std::time::Duration {
-    parse_timeout_ms(std::env::var(env_var).ok().as_deref())
+    duration_or(std::env::var(env_var).ok().as_deref(), default)
+}
+
+/// Value-taking core of [`env_duration_or`], testable without env mutation.
+pub(crate) fn duration_or(
+    value: Option<&str>,
+    default: std::time::Duration,
+) -> std::time::Duration {
+    value
+        .and_then(crate::util::env::parse_positive)
         .map(std::time::Duration::from_millis)
         .unwrap_or(default)
 }

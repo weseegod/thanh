@@ -5,7 +5,10 @@
 use std::path::Path;
 use std::path::PathBuf;
 
-use xai_grok_config::{GlobalHookSource, missing_configured_sources, resolve_global_hook_sources};
+use xai_grok_config::{
+    GlobalHookSource, missing_configured_sources, resolve_global_hook_sources,
+    resolve_trust_boundary_sources,
+};
 
 #[cfg(unix)]
 use xai_grok_config::validated_hook_json_files_for_sources;
@@ -66,7 +69,7 @@ pub struct PathIdentity {
     pub nlink: u64,
 }
 
-/// No-follow identity; regular files require `st_nlink == 1`.
+/// Captures identity without following symlinks; regular files require `st_nlink == 1`.
 #[cfg(any(target_os = "linux", all(unix, test)))]
 pub fn capture_path_identity(path: &Path) -> Result<PathIdentity, HookWriteDenyError> {
     use std::os::unix::fs::MetadataExt;
@@ -131,7 +134,9 @@ fn reject_hardlinked_files(sources: &[GlobalHookSource]) -> Result<(), HookWrite
     for s in sources {
         let is_file_slot = matches!(
             s.kind,
-            GlobalHookSourceKind::RegistryFile | GlobalHookSourceKind::ConfiguredSource
+            GlobalHookSourceKind::RegistryFile
+                | GlobalHookSourceKind::ConfiguredSource
+                | GlobalHookSourceKind::TrustBoundaryFile
         );
         if !is_file_slot || !s.path.exists() || s.path.is_dir() {
             continue;
@@ -195,12 +200,14 @@ pub fn resolve_hook_write_deny_snapshot() -> Result<Vec<GlobalHookSource>, HookW
                 .join(", "),
         ));
     }
-    reject_hardlinked_files(&resolved.sources)?;
+    let mut sources = resolved.sources;
+    sources.extend(resolve_trust_boundary_sources(grok.as_path())?);
+    reject_hardlinked_files(&sources)?;
     #[cfg(unix)]
     {
-        validated_hook_json_files_for_sources(&resolved.sources)?;
+        validated_hook_json_files_for_sources(&sources)?;
     }
-    Ok(resolved.sources)
+    Ok(sources)
 }
 
 #[cfg(target_os = "linux")]
@@ -224,7 +231,7 @@ pub fn profile_hook_write_deny(profile: &ProfileName) -> anyhow::Result<Vec<Glob
     resolve_hook_write_deny_snapshot().map_err(|e| anyhow::anyhow!("{e}"))
 }
 
-/// Top-level sources plus validated immediate discovery JSON under directories.
+/// Returns the top-level source paths plus the validated hook JSON files directly under each directory source.
 #[cfg(target_os = "linux")]
 pub fn enforcement_leaf_paths(
     sources: &[GlobalHookSource],

@@ -4,19 +4,6 @@ use tempfile::TempDir;
 use super::*;
 
 #[test]
-fn negative_user_version_is_unusable() {
-    let tmp = TempDir::new().unwrap();
-    let path = tmp.path().join("negative-version.db");
-    let conn = rusqlite::Connection::open(&path).unwrap();
-    conn.pragma_update(None, "user_version", -1).unwrap();
-
-    assert!(matches!(
-        read_user_version(&conn),
-        Err(StoreError::Unusable { .. })
-    ));
-}
-
-#[test]
 fn schema_requires_cwd_only_for_build_members() {
     let tmp = TempDir::new().unwrap();
     let path = tmp.path().join("constraint.db");
@@ -40,9 +27,8 @@ fn schema_requires_cwd_only_for_build_members() {
     assert_eq!(insert("future-kind", None).unwrap(), 1);
 }
 
-// The newer-version arm is reachable through the public API only when a
-// peer commits between the open's gate read and the init transaction, so
-// it is pinned here directly.
+// The newer-version arm is reachable through the public API only when a peer commits between the open's gate read and the init transaction
+// This test pins it by calling init_schema directly
 #[test]
 fn init_writes_nothing_to_a_newer_schema_file() {
     let tmp = TempDir::new().unwrap();

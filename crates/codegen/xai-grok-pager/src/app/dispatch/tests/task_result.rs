@@ -5,6 +5,7 @@ use super::super::task_result::{
     wrap_host_image_request_eligible,
 };
 use super::*;
+use xai_grok_shell::session::helpers::session_compact::COMPACT_CANCELLED_MSG;
 use xai_grok_shell::session::unified_list::ListScope;
 
 fn doctor_target(app: &AppView, id: AgentId) -> crate::app::actions::DoctorFixTarget {
@@ -532,8 +533,7 @@ fn wrap_host_image_request_eligible_covers_full_miss_and_attachment_error_only()
         ClipboardPasteCompletion::Failed(ClipboardPasteFailure::AttachmentRead)
     ));
 
-    // Every other outcome is a real dead end: it must keep toasting and never
-    // solicit the host image.
+    // Every other outcome is a real dead end: it must keep toasting and never solicit the host image
     for completion in [
         ClipboardPasteCompletion::Handled,
         ClipboardPasteCompletion::Dropped,
@@ -732,8 +732,7 @@ fn plugins_action_success_sets_result_notice_and_autoreload_preserves_it() {
         app.agents.get_mut(&id).unwrap().extensions_modal = Some(modal);
     }
 
-    // A successful update surfaces its message as a row-anchored result notice
-    // (the fix for "I can't tell what happened after r/u"), non-covering.
+    // A successful update surfaces its message as a row-anchored, non-covering result notice, so the user can tell what happened after r/u
     dispatch(
         Action::TaskComplete(TaskResult::PluginsActionResult {
             agent_id: id,
@@ -756,8 +755,7 @@ fn plugins_action_success_sets_result_notice_and_autoreload_preserves_it() {
         assert_eq!(n.entry_index, Some(2), "anchored to the acted row");
     }
 
-    // The auto-reload chained from `requires_reload` returns a generic message;
-    // it must NOT clobber the specific update notice already on screen.
+    // The auto-reload chained from `requires_reload` returns a generic message; it must NOT clobber the specific update notice already on screen
     dispatch(
         Action::TaskComplete(TaskResult::PluginsActionResult {
             agent_id: id,
@@ -817,7 +815,7 @@ fn uninstall_result_notice_is_footer_only_not_row_anchored() {
     let id = AgentId(0);
     {
         let mut modal = ExtensionsModalState::new(ExtensionsTab::Plugins);
-        // A row action was in flight, but it's an uninstall — the row goes away.
+        // A row action was in flight, but it's an uninstall, so the row goes away
         modal.pending_entry_index = Some(1);
         modal.last_plugins_action = Some(xai_hooks_plugins_types::PluginsAction::Uninstall {
             plugin_id: "user/ab12/gone".into(),
@@ -903,9 +901,8 @@ fn confirmation_required_builds_plugins_confirmation_with_confirmed_true() {
     }
 }
 
-/// Regression (Bugbot): a failed `x.ai/subagent/cancel` RPC must NOT
-/// finalize the row — the subagent may still be running. Only a shell
-/// response of "nothing live" finalizes it.
+/// Regression: a failed `x.ai/subagent/cancel` RPC must NOT finalize the row; the subagent may still be running.
+/// Only a shell response of "nothing live" finalizes it.
 #[test]
 fn kill_rpc_failure_does_not_finalize_but_nothing_live_does() {
     let mut app = test_app_with_agent();
@@ -918,7 +915,7 @@ fn kill_rpc_failure_does_not_finalize_but_nothing_live_does() {
         agent.subagent_sessions.insert("child-1".into(), info);
     }
 
-    // RPC failed → leave the row (the subagent may still be running).
+    // The RPC failed, so leave the row (the subagent may still be running)
     dispatch_task_result(
         TaskResult::KillSubagentComplete {
             session_id: sid.clone(),
@@ -932,7 +929,7 @@ fn kill_rpc_failure_does_not_finalize_but_nothing_live_does() {
         "a failed cancel RPC must not finalize the row"
     );
 
-    // Nothing live → no finish coming, so the pager finalizes the row.
+    // Nothing live means no finish is coming, so the pager finalizes the row
     dispatch_task_result(
         TaskResult::KillSubagentComplete {
             session_id: sid,
@@ -947,8 +944,8 @@ fn kill_rpc_failure_does_not_finalize_but_nothing_live_does() {
     );
 }
 
-/// An already-finished orphan's real terminal status (`NothingLive { status:
-/// Some(..) }`) is forwarded to the finalized row, not flattened to "cancelled".
+/// An already-finished orphan's real terminal status (`NothingLive { status: Some(..) }`) is forwarded to the finalized row.
+/// It is not flattened to "cancelled".
 #[test]
 fn kill_nothing_live_with_status_stamps_real_terminal_status() {
     let mut app = test_app_with_agent();
@@ -1023,9 +1020,7 @@ fn switch_model_complete_success_updates_model_and_pushes_message() {
         &mut app,
     );
 
-    // Pending flag cleared.
     assert!(!app.agents[&id].session.model_switch_pending);
-    // Current model updated.
     assert_eq!(
         app.agents[&id].session.models.current,
         Some(model_id.clone())
@@ -1232,9 +1227,7 @@ fn switch_model_complete_failure_pushes_error_and_clears_pending() {
     );
 
     assert!(effects.is_empty());
-    // Pending flag cleared.
     assert!(!app.agents[&id].session.model_switch_pending);
-    // Current model unchanged.
     assert_eq!(app.agents[&id].session.models.current, old_current);
     // Error message pushed to scrollback.
     assert_eq!(app.agents[&id].scrollback.len(), initial_scrollback + 1);
@@ -1276,7 +1269,6 @@ fn switch_model_incompatible_agent_shows_question_modal() {
 
     // No effects emitted (modal is synchronous state).
     assert!(effects.is_empty());
-    // Pending flag cleared.
     assert!(!app.agents[&id].session.model_switch_pending);
     // Question modal is open.
     assert!(app.agents[&id].question_view.is_some());
@@ -1291,9 +1283,8 @@ fn switch_model_incompatible_agent_shows_question_modal() {
 
 #[test]
 fn incompatible_agent_rollback_restores_previous_model() {
-    // When SetDefaultModel optimistically updates models.current and the
-    // shell rejects with IncompatibleAgent, the handler must roll back
-    // models.current to the prev_model_id.
+    // SetDefaultModel optimistically updates models.current
+    // When the shell rejects with IncompatibleAgent, the handler must roll back models.current to the prev_model_id
     let mut app = test_app_with_agent();
     let id = AgentId(0);
 
@@ -1337,7 +1328,6 @@ fn incompatible_agent_rollback_restores_previous_model() {
         &mut app,
     );
 
-    // models.current must be rolled back to the previous model.
     assert_eq!(
         app.agents[&id].session.models.current,
         Some(prev_model),
@@ -1383,12 +1373,10 @@ fn incompatible_agent_closes_active_modal() {
         &mut app,
     );
 
-    // Active modal must be closed.
     assert!(
         app.agents[&id].active_modal.is_none(),
         "active modal must be closed when IncompatibleAgent fires",
     );
-    // Question modal must be open.
     assert!(
         app.agents[&id].question_view.is_some(),
         "question modal must be open",
@@ -1397,14 +1385,13 @@ fn incompatible_agent_closes_active_modal() {
 
 #[test]
 fn same_agent_type_switch_no_modal() {
-    // Switching between two models with the same (or no) agent type
-    // should succeed normally — no modal, no IncompatibleAgent error.
+    // Switching between two models with the same (or no) agent type succeeds normally: no modal, no IncompatibleAgent error
     let mut app = test_app_with_agent();
     let id = AgentId(0);
     let model_a = acp::ModelId::new(std::sync::Arc::from("grok-build-a"));
     let model_b = acp::ModelId::new(std::sync::Arc::from("grok-build-b"));
 
-    // Add both models to the catalog (no agentType → both use grok-build).
+    // Add both models to the catalog (no agentType, so both use grok-build)
     let agent = app.agents.get_mut(&id).unwrap();
     agent.session.models.available.insert(
         model_a.clone(),
@@ -1429,10 +1416,9 @@ fn same_agent_type_switch_no_modal() {
         &mut app,
     );
 
-    // Model should be switched, no modal.
+    // The model switched and no modal opened
     assert_eq!(app.agents[&id].session.models.current, Some(model_b));
     assert!(app.agents[&id].question_view.is_none());
-    // Should emit PersistPreferredModel.
     assert!(
         effects
             .iter()
@@ -1442,7 +1428,7 @@ fn same_agent_type_switch_no_modal() {
 
 #[test]
 fn switch_model_pending_lifecycle() {
-    // Full lifecycle: false -> dispatch SwitchModel -> true -> SwitchModelComplete -> false
+    // Full lifecycle: pending starts false, SwitchModel sets it true, SwitchModelComplete clears it
     let mut app = test_app_with_agent();
     let id = AgentId(0);
     let model_id = acp::ModelId::new(std::sync::Arc::from("grok-4.5"));
@@ -1476,8 +1462,7 @@ fn switch_model_pending_lifecycle() {
 
 #[test]
 fn no_deferred_switch_means_no_extra_effect() {
-    // When there is no deferred model switch, SessionCreated should
-    // not produce a SwitchModel effect.
+    // When there is no deferred model switch, SessionCreated must not produce a SwitchModel effect
     let mut app = test_app_with_agent();
     let id = AgentId(0);
 
@@ -1996,11 +1981,9 @@ fn delete_session_failed_keeps_all_entries() {
 
 #[test]
 fn rename_session_failed_keeps_local_display_name_and_pushes_system_block() {
-    // Pins the documented design decision: a failed on-disk rename
-    // does NOT roll back the local `display_name` cache (the cache
-    // is the source of truth for the modal's rendering and the
-    // disk write is best-effort). The user sees the failure via
-    // the system-block message instead.
+    // Pins the design decision: a failed on-disk rename does NOT roll back the local `display_name` cache
+    // The cache is the source of truth for the modal's rendering and the disk write is best-effort
+    // The user sees the failure via the system-block message instead
     let mut app = test_app_with_agent();
     // Seed the cache as the rename path would have done.
     if let Some(a) = app.agents.get_mut(&AgentId(0)) {
@@ -2016,7 +1999,6 @@ fn rename_session_failed_keeps_local_display_name_and_pushes_system_block() {
         &mut app,
     );
 
-    // No rollback.
     assert_eq!(
         app.agents[&AgentId(0)].display_name.as_deref(),
         Some("optimistic title"),
@@ -2189,12 +2171,10 @@ fn rollback_known_key_reverts_cache_and_no_effect() {
         effects.is_empty(),
         "rollback path must NOT emit any new Effects (would loop)",
     );
-    // Cache is reverted.
     assert!(!app.current_ui.compact_mode);
 }
 
-/// `apply_setting_rollback` on an unknown key surfaces a tracing
-/// error and a secondary toast, but does not panic.
+/// `apply_setting_rollback` on an unknown key surfaces a tracing error and a secondary toast, but does not panic.
 #[test]
 fn rollback_unknown_key_does_not_panic() {
     use crate::settings::SettingValue;
@@ -2208,8 +2188,7 @@ fn rollback_unknown_key_does_not_panic() {
         &mut app,
     );
     assert!(effects.is_empty());
-    // No assertion on cache state (no arm to rollback through);
-    // the toast surfaces the inconsistency to the user.
+    // No assertion on cache state (no arm to rollback through); the toast surfaces the inconsistency to the user
 }
 
 #[test]
@@ -2230,15 +2209,14 @@ fn persist_failed_toast_contains_key_and_error() {
     assert!(toast.contains('\u{2717}'));
 }
 
-/// Rollback path must revert BOTH `app.current_ui` AND the
-/// thread-local cache — failing only on one is the bug class
-/// the inner/outer split exists to prevent.
+/// The rollback path must revert BOTH `app.current_ui` AND the thread-local cache.
+/// Failing only on one is the bug class the inner/outer split exists to prevent.
 #[test]
 fn rollback_reverts_thread_local_cache_too() {
     use crate::settings::SettingValue;
     std::thread::spawn(|| {
         let mut app = test_app_with_agent();
-        // Optimistic set: cache → true.
+        // Optimistic set: the cache becomes true
         let _ = dispatch(Action::SetCompactMode(true), &mut app);
         assert!(crate::appearance::cache::load());
 
@@ -2265,8 +2243,7 @@ fn rollback_reverts_thread_local_cache_too() {
     .unwrap();
 }
 
-/// `set_yolo_mode_inner` is the backstop: even a (stale) rollback
-/// value of "always-approve" must not re-enable yolo under the pin.
+/// `set_yolo_mode_inner` is the backstop: even a (stale) rollback value of "always-approve" must not re-enable yolo under the pin.
 #[test]
 fn rollback_to_always_approve_blocked_by_policy_pin() {
     use crate::settings::SettingValue;
@@ -2292,8 +2269,7 @@ fn rollback_to_always_approve_blocked_by_policy_pin() {
 
 // -- Degraded conversations lane (SessionListLoaded.partial) ----------
 
-/// A degraded conversations lane surfaces an actionable notice instead of
-/// the misleading "No sessions found" toast.
+/// A degraded conversations lane surfaces an actionable notice instead of the misleading "No sessions found" toast.
 #[test]
 fn session_list_partial_no_oauth_surfaces_login_hint() {
     let mut app = test_app_with_agent();
@@ -2316,7 +2292,7 @@ fn session_list_partial_no_oauth_surfaces_login_hint() {
     );
 }
 
-/// Notice fires once per relaxed run; survives search, re-arms on a cwd-scoped browse.
+/// The notice fires once per relaxed run; it survives search and comes back on a cwd-scoped browse.
 #[test]
 fn session_list_relax_surfaces_notice_once() {
     let relax_response = |generation| {
@@ -2407,8 +2383,7 @@ fn session_list_relax_on_welcome_does_not_latch() {
     );
 }
 
-/// The notice is keyed by browse cwd: a different directory re-notifies even
-/// though the prior latch is set.
+/// The notice is keyed by browse cwd: a different directory re-notifies even though the prior latch is set.
 #[test]
 fn session_list_relax_renotifies_when_cwd_changes() {
     let relax = |generation| {
@@ -2463,8 +2438,7 @@ fn session_list_empty_without_partial_keeps_generic_toast() {
     assert!(read_toast(&app).contains("No sessions found"));
 }
 
-/// Non-empty degraded list under chat mode (welcome-fallback branch):
-/// entries land AND the retry notice surfaces; Build mode stays silent.
+/// Non-empty degraded list under chat mode (welcome-fallback branch): entries land AND the retry notice surfaces; Build mode stays silent.
 #[test]
 fn session_list_nonempty_partial_toasts_retry_in_chat_mode_only() {
     let mut app = test_app_with_agent();
@@ -2510,8 +2484,7 @@ fn session_list_nonempty_partial_toasts_retry_in_chat_mode_only() {
     );
 }
 
-/// Modal variant of the non-empty degraded-lane notice: same chat-mode-only
-/// gating as the welcome-fallback branch.
+/// Modal variant of the non-empty degraded-lane notice: same chat-mode-only gating as the welcome-fallback branch.
 #[test]
 fn session_list_nonempty_partial_modal_toasts_in_chat_mode_only() {
     use crate::views::modal::ActiveModal;
@@ -2564,5 +2537,179 @@ fn session_list_nonempty_partial_modal_toasts_in_chat_mode_only() {
     assert!(
         app.agents[&AgentId(0)].toast.is_none(),
         "Build-mode modal non-empty degraded list stays silent"
+    );
+}
+
+/// Drive `CompactComplete` with a wire error mapped exactly as the `Effect::Compact` arm maps it, and return the resulting session events.
+fn compact_complete_events_for(wire_error: acp::Error) -> Vec<SessionEvent> {
+    let mut app = test_app_with_agent();
+    let id = AgentId(0);
+    app.agents
+        .get_mut(&id)
+        .unwrap()
+        .session
+        .start_command(crate::app::agent::AgentCommand::Compact);
+    dispatch_task_result(
+        TaskResult::CompactComplete {
+            agent_id: id,
+            result: Err(crate::app::effects::compact_error(&wire_error)),
+        },
+        &mut app,
+    );
+    let agent = &app.agents[&id];
+    (0..agent.scrollback.len())
+        .filter_map(|i| match agent.scrollback.entry(i).map(|e| &e.block) {
+            Some(RenderBlock::SessionEvent(ev)) => Some(ev.event.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+fn compaction_failed_message(events: &[SessionEvent]) -> Option<String> {
+    events.iter().find_map(|ev| match ev {
+        SessionEvent::CompactionFailed { error } => Some(error.clone()),
+        _ => None,
+    })
+}
+
+fn routed_to_cancelled(events: &[SessionEvent]) -> bool {
+    events
+        .iter()
+        .any(|ev| matches!(ev, SessionEvent::CompactionCancelled))
+        && !events
+            .iter()
+            .any(|ev| matches!(ev, SessionEvent::CompactionFailed { .. }))
+}
+
+#[test]
+fn compact_complete_error_surfaces_real_error_in_scrollback() {
+    use xai_grok_shell::session::helpers::session_compact::{CompactErrorKind, compact_error_data};
+    // Real wire shape: typed data carrying the shell-normalized detail.
+    let events =
+        compact_complete_events_for(acp::Error::internal_error().data(compact_error_data(
+            CompactErrorKind::Failed,
+            "API error (status 400 Bad Request): invalid_image: too big",
+        )));
+    let error = compaction_failed_message(&events);
+    assert_eq!(
+        error.as_deref(),
+        Some("API error (status 400 Bad Request): invalid_image: too big"),
+        "manual /compact failure must surface the real error, not an empty string"
+    );
+    assert_eq!(
+        SessionEvent::CompactionFailed {
+            error: error.unwrap_or_default(),
+        }
+        .message(),
+        "Compaction failed - API error (status 400 Bad Request): invalid_image: too big"
+    );
+}
+
+#[test]
+fn compact_complete_typed_detail_between_the_two_caps_is_not_retruncated() {
+    use xai_grok_shell::session::helpers::session_compact::{CompactErrorKind, compact_error_data};
+    // 250 chars: over the pager sanitize cap, under the shell's 300-byte cap
+    // It must reach scrollback byte-identical, exactly as the auto path renders it
+    let detail = format!(
+        "API error (status 500 Internal Server Error): {}",
+        "y".repeat(204)
+    );
+    assert_eq!(detail.chars().count(), 250);
+    let events = compact_complete_events_for(
+        acp::Error::internal_error().data(compact_error_data(CompactErrorKind::Failed, &detail)),
+    );
+    assert_eq!(
+        compaction_failed_message(&events).as_deref(),
+        Some(detail.as_str()),
+        "shell-normalized detail must not be re-truncated or rewritten by the pager"
+    );
+}
+
+#[test]
+fn compact_complete_typed_cancellation_routes_to_cancelled() {
+    use xai_grok_shell::session::helpers::session_compact::{CompactErrorKind, compact_error_data};
+    let events = compact_complete_events_for(acp::Error::internal_error().data(
+        compact_error_data(CompactErrorKind::Cancelled, COMPACT_CANCELLED_MSG),
+    ));
+    assert!(
+        routed_to_cancelled(&events),
+        "typed cancel kind must route to CompactionCancelled, got {events:?}"
+    );
+}
+
+#[test]
+fn compact_complete_old_shell_string_cancel_still_routes_to_cancelled() {
+    // Old shells send bare strings with no kind; the text fallback still routes.
+    let events =
+        compact_complete_events_for(acp::Error::internal_error().data(COMPACT_CANCELLED_MSG));
+    assert!(
+        routed_to_cancelled(&events),
+        "old-shell string cancel must route to CompactionCancelled, got {events:?}"
+    );
+}
+
+#[test]
+fn compact_complete_typed_failure_echoing_cancel_phrase_stays_a_failure() {
+    use xai_grok_shell::session::helpers::session_compact::{CompactErrorKind, compact_error_data};
+    // An upstream echo of the cancel phrase must not reroute a typed failure.
+    let echoing = format!("upstream rejected input containing '{COMPACT_CANCELLED_MSG}' marker");
+    let events = compact_complete_events_for(
+        acp::Error::internal_error().data(compact_error_data(CompactErrorKind::Failed, &echoing)),
+    );
+    assert_eq!(
+        compaction_failed_message(&events).as_deref(),
+        Some(echoing.as_str()),
+        "typed failure must render as a failure with its text, got {events:?}"
+    );
+    assert!(
+        !events
+            .iter()
+            .any(|ev| matches!(ev, SessionEvent::CompactionCancelled)),
+        "an echoed cancel phrase must not misroute a typed failure"
+    );
+}
+
+#[test]
+fn compact_complete_renders_one_failure_line_per_completion() {
+    use xai_grok_shell::session::helpers::session_compact::{CompactErrorKind, compact_error_data};
+    // One /compact failure must paint exactly one line: `finish_command()` exits the compact state on the first completion
+    // A stray duplicate completion is dropped by the state guard instead of double-rendering
+    let mut app = test_app_with_agent();
+    let id = AgentId(0);
+    app.agents
+        .get_mut(&id)
+        .unwrap()
+        .session
+        .start_command(crate::app::agent::AgentCommand::Compact);
+    let wire_error = acp::Error::internal_error().data(compact_error_data(
+        CompactErrorKind::Failed,
+        "API error (status 500 Internal Server Error): should never be seen",
+    ));
+    for _ in 0..2 {
+        dispatch_task_result(
+            TaskResult::CompactComplete {
+                agent_id: id,
+                result: Err(crate::app::effects::compact_error(&wire_error)),
+            },
+            &mut app,
+        );
+    }
+    let agent = &app.agents[&id];
+    let failure_lines = (0..agent.scrollback.len())
+        .filter(|&i| {
+            matches!(
+                agent.scrollback.entry(i).map(|e| &e.block),
+                Some(RenderBlock::SessionEvent(ev))
+                    if matches!(ev.event, SessionEvent::CompactionFailed { .. })
+            )
+        })
+        .count();
+    assert_eq!(
+        failure_lines, 1,
+        "duplicate CompactComplete must not render a second failure line"
+    );
+    assert!(
+        agent.session.state.is_idle(),
+        "compact state must be exited after the first completion"
     );
 }
