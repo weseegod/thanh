@@ -39,6 +39,7 @@ separate from `~/.grok`, so both can run side by side.
 | How the repo is organized (for engineers/AI) | [`ARCHITECTURE.md`](ARCHITECTURE.md) |
 | BYOK model setup | [`docs/byok-models.md`](docs/byok-models.md) |
 | Syncing upstream | [`UPSTREAM-MERGE.md`](UPSTREAM-MERGE.md) |
+| Restore core surfaces after a sync (implement + test) | [`docs/post-merge-core-fix.md`](docs/post-merge-core-fix.md) |
 
 ## Installing & updating
 

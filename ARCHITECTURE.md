@@ -479,21 +479,26 @@ models (DeepSeek, OpenRouter, OpenAI-compatible) work with bring-your-own-key.
 Frequently touched fork-owned files (also the upstream-merge inventory in
 `UPSTREAM-MERGE.md`):
 
-- Identity: `thanh` binary, `~/.thanh` home (never `~/.grok`), fork release
-  feed in `xai-grok-update/src/version.rs` + `auto_update.rs`, home default in
-  `xai-grok-home` / `xai-grok-config/src/paths.rs`.
+- Identity: `thanh` binary, `~/.thanh` home (never `~/.grok`; single source of
+  truth `xai-dirs` `grok_home_in`), fork release feed in
+  `xai-grok-update/src/version.rs` + `auto_update.rs`.
 - BYOK model config: `xai-grok-shell/src/agent/config.rs`,
   `config_model_override_parse.rs`, `models.rs` — `input`/`input_modalities`
   parsing and text-only capability checks.
 - Image stripping for text-only models: `strip_image_parts_for_text_only` in
   `xai-grok-sampling-types/src/conversation.rs` (+ call sites in shell
   session code).
-- No consumer billing surface (upstream billing files stay deleted; usage
-  modal keeps a BYOK tab).
+- Plan approval: `g` run-as-goal (`ApprovedAsGoal`) and `/model` picker on
+  top of the overlay (not covered by `line_viewer`).
+- Trim grok.com chrome: no Privacy banner / `/privacy` / coding-data row; no
+  `/usage` limits or upgrade CTAs; no announcement promo; paywall stripped
+  (`subscription.rs` keeps the gate chokepoint). Keep `/context` and
+  `/session-info`.
 - TUI UX: `/clear`, `/new` keep-model behavior, turn-status/tasks-pane tweaks
   in `xai-grok-pager`.
 - Build/release: `build.sh`, `scripts/publish_release.sh` (local builds, no
-  CI), `docs/byok-models.md`.
+  CI), `docs/byok-models.md`, `docs/post-merge-core-fix.md`.
+- Merge playbook: `UPSTREAM-MERGE.md` (must-not-regress A/B/C + trim D).
 
 ### Conventions every engineer should know
 
