@@ -1360,6 +1360,7 @@ impl AppView {
     }
     /// Welcome privacy banner visibility gates.
     pub fn privacy_banner_should_show(&self) -> bool {
+        return false;
         if self.screen_mode.is_minimal() {
             return false;
         }
@@ -1460,7 +1461,7 @@ impl AppView {
     /// Mirror the `/usage` gate onto every slash surface (agents, welcome,
     /// dashboard dispatch / peek-reply).
     pub(crate) fn sync_billing_surface_to_agents(&mut self) {
-        let usage_cmd = !self.has_external_auth_provider;
+        let usage_cmd = false; // BYOK fork: no grok.com usage/limits UI
         for agent in self.agents.values_mut() {
             agent.set_usage_command_visible(usage_cmd);
         }

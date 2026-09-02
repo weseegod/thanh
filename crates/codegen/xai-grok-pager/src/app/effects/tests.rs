@@ -2472,14 +2472,14 @@ fn sanitize_user_error_rewrites_shared_service_names() {
 }
 #[test]
 fn compact_error_message_empty_data_renders_terse_and_no_data_uses_display() {
-    let empty = compact_error_message(&acp::Error::internal_error().data(""));
+    let empty = compact_error(&acp::Error::internal_error().data(""));
     assert_eq!(empty, "");
     assert_eq!(
             crate::scrollback::blocks::SessionEvent::CompactionFailed { error: empty }.message(),
             "Compaction failed."
         );
     assert_eq!(
-            compact_error_message(&acp::Error::internal_error()),
+            compact_error(&acp::Error::internal_error()),
             "Internal error"
         );
 }

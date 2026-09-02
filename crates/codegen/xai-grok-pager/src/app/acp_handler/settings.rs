@@ -400,32 +400,8 @@ pub(super) fn handle_sessions_changed(notif: &acp::ExtNotification, app: &mut Ap
     affected
 }
 
-pub(super) fn handle_announcements_update(notif: &acp::ExtNotification, app: &mut AppView) -> bool {
-    let Ok(parsed) =
-        serde_json::from_str::<xai_grok_announcements::AnnouncementsRefreshed>(notif.params.get())
-    else {
-        return false;
-    };
-
-    if parsed.r#gen <= app.announcements_last_gen {
-        return false;
-    }
-
-    // Re-merge config layers like startup does: the push carries the remote list only
-    // A wholesale replace would drop requirements/user/managed announcements and let the prune erase their persisted hide keys
-    // The settings handler performs the same disk reads; pushes are rare
-    let requirements = xai_grok_shell::config::load_merged_requirements();
-    let user_config = xai_grok_shell::config::load_from_disk().ok();
-    let managed_config = xai_grok_shell::config::load_managed_config().ok();
-    apply_announcements_update(
-        app,
-        parsed.r#gen,
-        &parsed.announcements,
-        requirements.as_ref(),
-        user_config.as_ref(),
-        managed_config.as_ref(),
-    );
-    true
+pub(super) fn handle_announcements_update(_notif: &acp::ExtNotification, _app: &mut AppView) -> bool {
+    false
 }
 
 /// Apply half of [`handle_announcements_update`], with config layers injected so the merge/prune behavior is unit-testable without disk state.
@@ -433,40 +409,13 @@ pub(super) fn handle_announcements_update(notif: &acp::ExtNotification, app: &mu
 pub(super) fn apply_announcements_update(
     app: &mut AppView,
     next_gen: u64,
-    remote: &[xai_grok_announcements::RemoteAnnouncement],
-    requirements: Option<&toml::Value>,
-    user_config: Option<&toml::Value>,
-    managed_config: Option<&toml::Value>,
+    _remote: &[xai_grok_announcements::RemoteAnnouncement],
+    _requirements: Option<&toml::Value>,
+    _user_config: Option<&toml::Value>,
+    _managed_config: Option<&toml::Value>,
 ) {
-    let merged = xai_grok_shell::util::config::resolve_announcements(
-        requirements,
-        user_config,
-        managed_config,
-        Some(remote),
-    );
-    let announcements = xai_grok_announcements::filter_expired(merged);
-
-    app.announcement = match app.announcement.as_ref() {
-        Some(current) => announcements
-            .iter()
-            .find(|a| *a == current)
-            .cloned()
-            .or_else(|| pick_random_announcement(&announcements)),
-        None => pick_random_announcement(&announcements),
-    };
-    app.active_announcements = announcements;
+    // BYOK fork: ignore remote promo banners; GROK_ANNOUNCEMENTS_OVERRIDE remains the escape hatch.
     app.announcements_last_gen = next_gen;
-    // Opportunistic per-ID prune on a real update (never per frame) so the hidden set cannot grow unboundedly.
-    if xai_grok_announcements::prune_hidden_announcement_ids(
-        &mut app.hidden_announcement_ids,
-        &app.active_announcements,
-    ) {
-        app.pending_effects
-            .push(Effect::PersistAnnouncementsHidden {
-                hidden_ids: app.hidden_announcement_ids.clone(),
-            });
-    }
-    app.sync_session_announcement_slash_gate();
 }
 
 pub(super) fn pick_random_announcement(

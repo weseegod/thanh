@@ -1,11 +1,15 @@
 //! Home-directory resolution generally: USERPROFILE-first `home_dir`, plus
-//! grok-home (`$GROK_HOME` or `<home>/.grok`). Shared by `xai-grok-config`
+//! grok-home (`$GROK_HOME` or `<home>/.thanh`). Shared by `xai-grok-config`
 //! and `xai-fast-worktree`.
+//!
+//! This fork uses `~/.thanh` instead of the official grok client's `~/.grok`
+//! so BYOK config and session data stay isolated from a co-installed grok.com
+//! binary.
 //!
 //! Which function to call:
 //! - [`grok_home`]: the usual choice, a cached, created path to build on.
 //! - [`user_grok_home`]: `None` instead of a cwd fallback when no home resolves.
-//! - [`default_grok_home`]: the `<home>/.grok` default, ignoring `$GROK_HOME`, so callers can detect an override.
+//! - [`default_grok_home`]: the `<home>/.thanh` default, ignoring `$GROK_HOME`, so callers can detect an override.
 //! - [`resolve_grok_home`]: a fresh, uncached resolve.
 //! - [`resolve_grok_home_with_source`]: [`resolve_grok_home`] plus where the path came from.
 //! - [`home_dir`]: the home directory itself, for sibling dot dirs (`~/.claude`, `~/.agents`, ...).
@@ -24,7 +28,7 @@ use std::sync::OnceLock;
 pub enum GrokHomeSource {
     /// A non-empty `$GROK_HOME` override.
     EnvOverride,
-    /// `<home>/.grok` derived from the home directory.
+    /// `<home>/.thanh` derived from the home directory.
     HomeDefault,
 }
 
@@ -33,7 +37,7 @@ pub enum GrokHomeSource {
 ///
 /// Deliberately not `dirs::home_dir()`: on Windows `dirs` asks the
 /// known-folder API and ignores a redirected `USERPROFILE`, while this crate
-/// resolves `~/.grok` from the profile variable — mixing the two sources puts
+/// resolves `~/.thanh` from the profile variable — mixing the two sources puts
 /// the grok directory and other home-anchored dot directories in different
 /// trees. Every home-anchored path must come from this one function.
 #[allow(deprecated, clippy::disallowed_methods)] // the one sanctioned std::env::home_dir call
@@ -41,15 +45,15 @@ pub fn home_dir() -> Option<PathBuf> {
     std::env::home_dir()
 }
 
-/// `<home>/.grok`, canonicalized via `dunce` (not `std::fs::canonicalize`,
+/// `<home>/.thanh`, canonicalized via `dunce` (not `std::fs::canonicalize`,
 /// which yields Windows `\\?\` verbatim paths).
 fn grok_home_in(home: &Path) -> PathBuf {
     dunce::canonicalize(home)
         .unwrap_or_else(|_| home.to_path_buf())
-        .join(".grok")
+        .join(".thanh")
 }
 
-/// `$GROK_HOME` verbatim when non-empty, else `<home>/.grok`. The env value is
+/// `$GROK_HOME` verbatim when non-empty, else `<home>/.thanh`. The env value is
 /// used as-is (not canonicalized) so it stays stable and comparable: callers do
 /// literal prefix checks against it, and downstream symlink guards must still see
 /// its original components.
@@ -76,7 +80,7 @@ pub fn resolve_grok_home_with_source() -> Option<(PathBuf, GrokHomeSource)> {
     )
 }
 
-/// The default `<home>/.grok`, used when `$GROK_HOME` is unset.
+/// The default `<home>/.thanh`, used when `$GROK_HOME` is unset.
 pub fn default_grok_home() -> PathBuf {
     grok_home_in(&home_dir().unwrap_or_else(|| PathBuf::from(".")))
 }
@@ -136,7 +140,7 @@ mod tests {
         assert_eq!(
             resolved,
             Some((
-                dunce::canonicalize(tmp.path()).unwrap().join(".grok"),
+                dunce::canonicalize(tmp.path()).unwrap().join(".thanh"),
                 GrokHomeSource::HomeDefault
             ))
         );
@@ -149,7 +153,7 @@ mod tests {
         // comparisons. No-op assertion on Unix.
         let home = default_grok_home();
         assert!(!home.to_string_lossy().starts_with(r"\\?\"));
-        assert!(home.ends_with(".grok"));
+        assert!(home.ends_with(".thanh"));
     }
 
     #[test]

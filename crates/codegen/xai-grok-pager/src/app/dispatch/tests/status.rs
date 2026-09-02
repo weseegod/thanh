@@ -615,31 +615,31 @@ fn privacy_banner_ready_app() -> AppView {
 #[test]
 fn privacy_banner_should_show_respects_gates() {
     let mut app = privacy_banner_ready_app();
-    assert!(app.privacy_banner_should_show());
+    assert!(
+        !app.privacy_banner_should_show(),
+        "BYOK fork hides the grok.com privacy banner"
+    );
 
     app.coding_data_retention_opt_out = false;
-    assert!(!app.privacy_banner_should_show(), "already opted in");
+    assert!(!app.privacy_banner_should_show());
     app.coding_data_retention_opt_out = true;
 
     app.is_zdr = true;
-    assert!(!app.privacy_banner_should_show(), "enterprise ZDR");
+    assert!(!app.privacy_banner_should_show());
     app.is_zdr = false;
 
     app.privacy_banner_acked = Some("2099-01-01T00:00:00Z".into());
-    assert!(
-        !app.privacy_banner_should_show(),
-        "recently acked, no reshow"
-    );
+    assert!(!app.privacy_banner_should_show());
 
     app.privacy_banner_reshow_days = Some(30);
     app.privacy_banner_acked = Some("2020-01-01T00:00:00Z".into());
     assert!(
-        app.privacy_banner_should_show(),
-        "acked long ago + reshow_days"
+        !app.privacy_banner_should_show(),
+        "fork chokepoint stays false even when upstream gates would show"
     );
 
     app.privacy_notice_rollout = false;
-    assert!(!app.privacy_banner_should_show(), "rollout off");
+    assert!(!app.privacy_banner_should_show());
 }
 
 /// `[Opt in]` success: ACP confirmation acks the banner.
@@ -702,8 +702,8 @@ fn privacy_banner_opt_in_failure_no_ack_sets_welcome_toast() {
         "rollback restores opt-out"
     );
     assert!(
-        app.privacy_banner_should_show(),
-        "failed [Opt in] must leave the banner eligible"
+        !app.privacy_banner_should_show(),
+        "fork hides the banner even after a failed [Opt in]"
     );
     let toast = app
         .welcome_toast
@@ -744,8 +744,8 @@ fn privacy_banner_opt_out_noop_while_opt_in_inflight() {
         &mut app,
     );
     assert!(
-        app.privacy_banner_should_show(),
-        "a failed [Opt in] must keep the banner even after a raced [Opt out]"
+        !app.privacy_banner_should_show(),
+        "fork hides the banner even after a raced [Opt out]"
     );
 }
 
@@ -876,8 +876,7 @@ fn privacy_banner_opt_out_is_idempotent() {
 #[test]
 fn settings_opt_out_while_already_out_acks_without_write() {
     let mut app = privacy_banner_ready_app();
-    assert!(app.privacy_banner_should_show());
-    assert!(app.coding_data_retention_opt_out);
+    assert!(!app.privacy_banner_should_show());
 
     let effects = dispatch(Action::SetCodingDataSharing { opted_in: false }, &mut app);
 
@@ -990,7 +989,7 @@ fn settings_opt_in_recommitted_while_inflight_does_not_ack() {
     assert!(!app.privacy_banner_opt_in_inflight);
     assert!(app.privacy_banner_acked.is_none());
     assert!(app.coding_data_retention_opt_out);
-    assert!(app.privacy_banner_should_show());
+    assert!(!app.privacy_banner_should_show());
 }
 
 /// A Settings pick before the notice is rolled out must not stamp an ack that would hide the banner when the cohort turns on.

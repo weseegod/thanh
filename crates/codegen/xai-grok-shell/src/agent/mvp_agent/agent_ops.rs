@@ -2443,7 +2443,10 @@ impl MvpAgent {
             #[cfg(test)]
             auto_gc_spawn_count: std::cell::Cell::new(0),
             #[cfg(test)]
+            #[cfg(test)]
             post_auth_settings_spawn_count: std::cell::Cell::new(0),
+            #[cfg(test)]
+            tier_recheck_run_count: std::cell::Cell::new(0),
         };
         instance
             .auth_manager

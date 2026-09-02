@@ -3135,6 +3135,84 @@ impl AgentView {
                 prompt_post_flush = Some(escapes.into());
             }
         }
+        let line_viewer_toast = self.active_toast_message().map(|s| s.to_string());
+        let is_plan_viewer = self.is_plan_viewer();
+        let has_plan_comments = !self.plan_comments.is_empty();
+        let casual_commenting = self.is_casual_commenting();
+        if self.line_viewer.is_some() {
+            use crate::views::file_search::line_viewer::render_line_viewer;
+            let overlay_bottom = if layout.turn_status.height > 0 {
+                layout.turn_status.y
+            } else if layout.voice_recording.height > 0 {
+                layout.voice_recording.y
+            } else {
+                layout.prompt.y
+            };
+            let overlay_area = Rect {
+                x: area.x,
+                y: area.y,
+                width: area.width,
+                height: overlay_bottom.saturating_sub(area.y),
+            };
+            let approval_comment_count = self
+                .plan_approval_view
+                .as_ref()
+                .map(|pav| pav.comments.len())
+                .unwrap_or(0);
+            let effective_comment_count = if approval_comment_count > 0 {
+                approval_comment_count
+            } else {
+                self.plan_comments.len()
+            };
+            let mermaid_placements = self
+                .line_viewer
+                .as_mut()
+                .map(|viewer| {
+                    if let Some(ref pav) = self.plan_approval_view {
+                        viewer.plan_mut().active_commenting_range = pav.commenting_range.clone();
+                    } else {
+                        viewer.plan_mut().active_commenting_range =
+                            self.casual_commenting_range.clone();
+                    }
+                    render_line_viewer(
+                        buf,
+                        overlay_area,
+                        viewer,
+                        &self.session.cwd,
+                        &theme,
+                        effective_comment_count,
+                    );
+                    viewer
+                        .last_popup_area
+                        .map(|area| viewer.diagram_affordance_placements(area))
+                        .unwrap_or_default()
+                })
+                .unwrap_or_default();
+            self.inline_media_hits = super::InlineMediaHitAreas::default();
+            self.paint_diagram_affordances(buf, mermaid_placements, &theme);
+            if let Some(viewer) = self.line_viewer.as_mut() {
+                let toast_area = viewer
+                    .last_popup_area
+                    .or(viewer.last_modal_area)
+                    .unwrap_or(overlay_area);
+                if let Some(ref msg) = line_viewer_toast
+                    && toast_area.height > 0
+                    && let Some(toast_text) = fit_toast_text(msg, toast_area.width.saturating_sub(1))
+                {
+                    let w = toast_text.chars().count() as u16;
+                    let tx = toast_area.right().saturating_sub(w + 1);
+                    let ty = toast_area.bottom().saturating_sub(1);
+                    for (i, ch) in toast_text.chars().enumerate() {
+                        if let Some(cell) = buf.cell_mut((tx + i as u16, ty)) {
+                            cell.set_char(ch);
+                            cell.fg = theme.accent_user;
+                            cell.bg = theme.bg_base;
+                            cell.modifier = ratatui::prelude::Modifier::BOLD;
+                        }
+                    }
+                }
+            }
+        }
         if self.prompt.file_search_visible() {
             use crate::views::file_search::dropdown::{MAX_DROPDOWN_ROWS, render_dropdown};
             let item_count = self.prompt.file_search.result_count();
@@ -3522,89 +3600,15 @@ impl AgentView {
                     .render(layout.shortcuts, buf);
             }
         }
-        let line_viewer_toast = self.active_toast_message().map(|s| s.to_string());
-        let is_plan_viewer = self.is_plan_viewer();
-        let has_plan_comments = !self.plan_comments.is_empty();
-        let casual_commenting = self.is_casual_commenting();
         if self.line_viewer.is_some() {
-            use crate::views::file_search::line_viewer::render_line_viewer;
             use crate::views::shortcuts_bar::HintItem;
             let plan_prompt_focused = self
                 .plan_approval_view
                 .as_ref()
                 .is_some_and(|p| p.focus != PlanApprovalFocus::Preview);
-            let overlay_bottom = if layout.turn_status.height > 0 {
-                layout.turn_status.y
-            } else if layout.voice_recording.height > 0 {
-                layout.voice_recording.y
-            } else {
-                layout.prompt.y
-            };
-            let overlay_area = Rect {
-                x: area.x,
-                y: area.y,
-                width: area.width,
-                height: overlay_bottom.saturating_sub(area.y),
-            };
-            let approval_comment_count = self
-                .plan_approval_view
-                .as_ref()
-                .map(|pav| pav.comments.len())
-                .unwrap_or(0);
-            let effective_comment_count = if approval_comment_count > 0 {
-                approval_comment_count
-            } else {
-                self.plan_comments.len()
-            };
-            let mermaid_placements = self
-                .line_viewer
-                .as_mut()
-                .map(|viewer| {
-                    if let Some(ref pav) = self.plan_approval_view {
-                        viewer.plan_mut().active_commenting_range = pav.commenting_range.clone();
-                    } else {
-                        viewer.plan_mut().active_commenting_range =
-                            self.casual_commenting_range.clone();
-                    }
-                    render_line_viewer(
-                        buf,
-                        overlay_area,
-                        viewer,
-                        &self.session.cwd,
-                        &theme,
-                        effective_comment_count,
-                    );
-                    viewer
-                        .last_popup_area
-                        .map(|area| viewer.diagram_affordance_placements(area))
-                        .unwrap_or_default()
-                })
-                .unwrap_or_default();
-            self.inline_media_hits = super::InlineMediaHitAreas::default();
-            self.paint_diagram_affordances(buf, mermaid_placements, &theme);
             let Some(viewer) = self.line_viewer.as_mut() else {
                 return (prompt_cursor_pos, prompt_post_flush);
             };
-            let toast_area = viewer
-                .last_popup_area
-                .or(viewer.last_modal_area)
-                .unwrap_or(overlay_area);
-            if let Some(ref msg) = line_viewer_toast
-                && toast_area.height > 0
-                && let Some(toast_text) = fit_toast_text(msg, toast_area.width.saturating_sub(1))
-            {
-                let w = toast_text.chars().count() as u16;
-                let tx = toast_area.right().saturating_sub(w + 1);
-                let ty = toast_area.bottom().saturating_sub(1);
-                for (i, ch) in toast_text.chars().enumerate() {
-                    if let Some(cell) = buf.cell_mut((tx + i as u16, ty)) {
-                        cell.set_char(ch);
-                        cell.fg = theme.accent_user;
-                        cell.bg = theme.bg_base;
-                        cell.modifier = ratatui::prelude::Modifier::BOLD;
-                    }
-                }
-            }
             let in_plan_approval = self.plan_approval_view.is_some();
             let on_comment = in_plan_approval
                 && viewer
@@ -4755,6 +4759,123 @@ mod voice_recording_overlay_tests {
             !text.contains("Recording"),
             "no record indicator when voice is idle:\n{text}"
         );
+    }
+}
+#[cfg(test)]
+mod plan_overlay_picker_z_order_tests {
+    use super::super::test_fixtures::{make_agent, make_plan_approval_view_state};
+    use super::AgentView;
+    use crate::actions::ActionRegistry;
+    use crate::app::bundle::BundleState;
+    use crate::key;
+    use crate::scrollback::render::ScratchBuffer;
+    use crate::views::modal::ActiveModal;
+    use agent_client_protocol as acp;
+    use crossterm::event::Event;
+    use ratatui::buffer::Buffer;
+    use ratatui::layout::Rect;
+    use std::sync::Arc;
+
+    fn render_text(agent: &mut AgentView) -> String {
+        let reg = ActionRegistry::defaults();
+        let area = Rect::new(0, 0, 100, 40);
+        let mut buf = Buffer::empty(area);
+        let mut scratch = ScratchBuffer::new();
+        agent.draw(
+            area,
+            &mut buf,
+            &reg,
+            &mut scratch,
+            None,
+            false,
+            crate::app::agent_view::BannerSlotParams::none(),
+            &BundleState::default(),
+            false,
+            false,
+            &mut Vec::new(),
+            super::AppRenderParams::default(),
+        );
+        (0..area.height)
+            .map(|y| {
+                (0..area.width)
+                    .filter_map(|x| buf.cell((x, y)).map(|c| c.symbol().to_string()))
+                    .collect::<String>()
+                    + "\n"
+            })
+            .collect()
+    }
+
+    fn plan_approval_agent() -> AgentView {
+        let mut agent = make_agent();
+        agent.plan_approval_view = Some(make_plan_approval_view_state());
+        agent.reopen_plan_approval();
+        agent
+    }
+
+    #[test]
+    fn model_picker_renders_above_parked_plan_overlay() {
+        let mut agent = plan_approval_agent();
+        let id = acp::ModelId::new(Arc::from("test-model"));
+        agent.session.models.available.insert(
+            id.clone(),
+            acp::ModelInfo::new(id, "Test Model".to_string()),
+        );
+        let reg = ActionRegistry::defaults();
+        agent.handle_input(&Event::Key(key!('m', CONTROL).to_key_event()), &reg);
+        let text = render_text(&mut agent);
+        assert!(
+            text.contains("Do something"),
+            "plan body should still be painted underneath:\n{text}"
+        );
+        assert!(
+            text.contains("Test Model"),
+            "model picker must render on top of the plan overlay:\n{text}"
+        );
+    }
+
+    #[test]
+    fn slash_model_dropdown_renders_above_parked_plan_overlay() {
+        let mut agent = plan_approval_agent();
+        agent.prompt.set_text("/model");
+        agent.prompt.set_cursor(agent.prompt.text().len());
+        agent.prompt.refresh_slash(&agent.session.models);
+        assert!(agent.prompt.slash_open());
+        let text = render_text(&mut agent);
+        assert!(
+            text.contains("Do something"),
+            "plan body should still be painted underneath:\n{text}"
+        );
+        assert!(
+            text.contains("/model") || text.contains("model"),
+            "slash dropdown must render on top of the plan overlay:\n{text}"
+        );
+    }
+
+    #[test]
+    fn active_modal_arg_picker_renders_above_plan() {
+        let mut agent = plan_approval_agent();
+        agent.active_modal = Some(ActiveModal::ArgPicker {
+            command: "model".to_string(),
+            args_query: String::new(),
+            items: vec![crate::slash::command::ArgItem {
+                display: "Test Model".to_string(),
+                match_text: "Test Model".to_string(),
+                insert_text: "test-model".to_string(),
+                description: String::new(),
+            }],
+            original_items: vec![crate::slash::command::ArgItem {
+                display: "Test Model".to_string(),
+                match_text: "Test Model".to_string(),
+                insert_text: "test-model".to_string(),
+                description: String::new(),
+            }],
+            state: crate::views::picker::PickerState::input_active(),
+            previous_palette: None,
+            window: crate::views::modal_window::ModalWindowState::new(),
+        });
+        let text = render_text(&mut agent);
+        assert!(text.contains("Do something"));
+        assert!(text.contains("Test Model"));
     }
 }
 #[cfg(test)]

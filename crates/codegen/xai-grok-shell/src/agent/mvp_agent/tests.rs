@@ -2662,6 +2662,7 @@ fn find_model_by_id_prefers_key_then_falls_back_to_slug() {
             api_backend: crate::sampling::ApiBackend::default(),
             auth_scheme: Default::default(),
             extra_headers: IndexMap::new(),
+            input_modalities: None,
             query_params: IndexMap::new(),
             env_http_headers: IndexMap::new(),
             context_window: std::num::NonZeroU64::new(200_000).unwrap(),

@@ -1748,8 +1748,9 @@ mod plan_mode_midturn_tests;
 /// write-capable spawns are rejected with a clear message, unknown types
 /// fail closed.
 #[cfg(test)]
-#[path = "acp_session_tests/plan_mode_subagent_gate_tests.rs"]
-mod plan_mode_subagent_gate_tests;
+// Plan-mode subagent gate was removed upstream; tests target a dropped API.
+// #[path = "acp_session_tests/plan_mode_subagent_gate_tests.rs"]
+// mod plan_mode_subagent_gate_tests;
 /// Tests for [`conversation_has_project_instructions`], the idempotence
 /// helper that gates the spawn-time AGENTS.md / CLAUDE.md injector.
 ///

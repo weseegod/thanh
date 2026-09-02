@@ -34,8 +34,8 @@ impl SlashCommand for AnnouncementsCommand {
         ])
     }
 
-    fn visible(&self, ctx: &AppCtx) -> bool {
-        ctx.has_session_announcements
+    fn visible(&self, _ctx: &AppCtx) -> bool {
+        false
     }
 
     fn run(&self, _ctx: &mut CommandExecCtx, args: &str) -> CommandResult {
@@ -120,6 +120,35 @@ mod tests {
     }
 
     #[test]
+    fn visible_is_always_false() {
+        let models = ModelState::default();
+        let cmd = AnnouncementsCommand;
+        assert!(!cmd.visible(&AppCtx {
+            models: &models,
+            cwd: std::path::Path::new("."),
+            has_session_announcements: false,
+            usage_command_visible: true,
+            workflows_available: true,
+            saved_workflows: &[],
+            workflow_runs: &[],
+            screen_mode: crate::app::ScreenMode::Fullscreen,
+            current_title: None,
+        }));
+        assert!(!cmd.visible(&AppCtx {
+            models: &models,
+            cwd: std::path::Path::new("."),
+            has_session_announcements: true,
+            usage_command_visible: true,
+            workflows_available: true,
+            saved_workflows: &[],
+            workflow_runs: &[],
+            screen_mode: crate::app::ScreenMode::Fullscreen,
+            current_title: None,
+        }));
+    }
+
+    #[test]
+    #[ignore = "fork hides /announcements"]
     fn visible_only_with_session_announcements() {
         let models = ModelState::default();
         let cmd = AnnouncementsCommand;

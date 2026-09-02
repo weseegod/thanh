@@ -332,7 +332,9 @@ pub(super) const BUILTIN_COMMANDS: &[BuiltinCommand] = &[
     BuiltinCommand {
         name: "goal",
         description: "Set, manage, or check an autonomous goal",
-        argument_hint: Some("<objective> [--budget <tokens>] | status | pause | resume | clear"),
+        argument_hint: Some(
+            "<objective> [--budget <tokens>] [--plan <path> | --from-plan] | status | pause | resume | clear",
+        ),
         aliases: &[],
         model_authored_eligibility: ModelAuthoredEligibility::Denied,
         gate: BuiltinGate::Goal,
@@ -345,38 +347,124 @@ pub(super) const BUILTIN_COMMANDS: &[BuiltinCommand] = &[
                 "resume" => BuiltinAction::GoalResume,
                 "clear" => BuiltinAction::GoalClear,
                 _ => {
-                    let (objective, token_budget) = parse_goal_budget(trimmed);
+                    let parsed = parse_goal_args(trimmed);
                     BuiltinAction::GoalSet {
-                        objective,
-                        token_budget,
+                        objective: parsed.objective,
+                        token_budget: parsed.token_budget,
+                        plan_source: parsed.plan_source,
                     }
                 }
             }
         },
     },
 ];
-/// Split a trailing `--budget <tokens>` flag off a `/goal` objective.
+/// Where a `/goal` run should source its plan from. The shell reads the
+/// file at goal-setup time; `Content` carries an already-read plan body
+/// (the approve-as-goal UI path) so no re-read is needed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum GoalPlanSource {
+    /// Read the plan from this path (resolved relative to the session cwd).
+    Path(String),
+    /// Read the session's plan-mode plan file (`<session_dir>/plan.md`).
+    SessionPlan,
+    /// Inline plan body (already obtained; e.g. the approved plan content).
+    Content(String),
+}
+
+/// Parsed `/goal` arguments: the objective plus optional trailing flags.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct GoalArgs {
+    pub objective: String,
+    pub token_budget: Option<i64>,
+    pub plan_source: Option<GoalPlanSource>,
+}
+
+/// Split the trailing `--budget <tokens>` / `--plan <path>` / `--from-plan`
+/// flags off a `/goal` objective.
 ///
-/// Only a TRAILING, standalone flag is consumed: the flag must be its own whitespace-separated token and the value a final all-digit positive token.
-/// Anything else stays part of the objective so a goal text that merely mentions the flag is never silently mangled.
-fn parse_goal_budget(trimmed: &str) -> (String, Option<i64>) {
-    if let Some((head, tail)) = trimmed.rsplit_once("--budget") {
-        let value = tail.trim();
-        let flag_is_own_token = head.ends_with(char::is_whitespace)
-            && tail.starts_with(char::is_whitespace)
-            && !value.contains(char::is_whitespace);
-        let head = head.trim_end();
-        if flag_is_own_token
-            && !head.is_empty()
-            && !value.is_empty()
+/// Only TRAILING, standalone flags are consumed: each flag must be its own
+/// whitespace-separated token and any value a final whitespace-free token.
+/// Anything else stays part of the objective so a goal text that merely
+/// mentions a flag is never silently mangled. `--budget` requires an
+/// all-digit positive value; `--plan` a non-empty whitespace-free path;
+/// `--from-plan` is a boolean. At most one plan flag is consumed — a second
+/// (or a duplicate) leaves the whole input untouched as the objective, so a
+/// conflicting pair is never silently resolved.
+fn parse_goal_args(trimmed: &str) -> GoalArgs {
+    let mut rest = trimmed;
+    let mut token_budget = None;
+    let mut plan_source = None;
+    loop {
+        if let Some((head, value)) = trailing_flag_with_value(rest, "--budget")
             && value.bytes().all(|b| b.is_ascii_digit())
             && let Ok(budget) = value.parse::<i64>()
             && budget > 0
         {
-            return (head.to_string(), Some(budget));
+            token_budget = Some(budget);
+            rest = head;
+            continue;
         }
+        if let Some(head) = trailing_flag_boolean(rest, "--from-plan") {
+            if plan_source.is_some() {
+                return goal_args_untouched(trimmed);
+            }
+            plan_source = Some(GoalPlanSource::SessionPlan);
+            rest = head;
+            continue;
+        }
+        if let Some((head, value)) = trailing_flag_with_value(rest, "--plan") {
+            if plan_source.is_some() {
+                return goal_args_untouched(trimmed);
+            }
+            plan_source = Some(GoalPlanSource::Path(value.to_string()));
+            rest = head;
+            continue;
+        }
+        break;
     }
-    (trimmed.to_string(), None)
+    GoalArgs {
+        objective: rest.to_string(),
+        token_budget,
+        plan_source,
+    }
+}
+
+/// Fail-closed: a conflicting/duplicate plan flag pair leaves the whole
+/// input as the objective so nothing is silently dropped or mangled.
+fn goal_args_untouched(trimmed: &str) -> GoalArgs {
+    GoalArgs {
+        objective: trimmed.to_string(),
+        token_budget: None,
+        plan_source: None,
+    }
+}
+
+/// If `text` ends with `flag` as its own token followed by a single
+/// whitespace-free value token, return the objective head and the value.
+fn trailing_flag_with_value<'a>(text: &'a str, flag: &str) -> Option<(&'a str, &'a str)> {
+    let (head, tail) = text.rsplit_once(flag)?;
+    let value = tail.trim();
+    let flag_is_own_token = head.ends_with(char::is_whitespace)
+        && tail.starts_with(char::is_whitespace)
+        && !value.contains(char::is_whitespace)
+        && !value.is_empty();
+    let head = head.trim_end();
+    if !flag_is_own_token || head.is_empty() {
+        return None;
+    }
+    Some((head, value))
+}
+
+/// If `text` ends with the boolean trailing flag `flag` as its own token
+/// (only whitespace after it, objective non-empty), return the objective head.
+fn trailing_flag_boolean<'a>(text: &'a str, flag: &str) -> Option<&'a str> {
+    let (head, tail) = text.rsplit_once(flag)?;
+    let flag_is_own_token = head.ends_with(char::is_whitespace) && tail.trim().is_empty();
+    let head = head.trim_end();
+    if !flag_is_own_token || head.is_empty() {
+        return None;
+    }
+    Some(head)
 }
 const PROMPT_COMMANDS: &[BuiltinCommand] = &[BuiltinCommand {
     name: "loop",
@@ -1278,6 +1366,7 @@ pub(super) enum BuiltinAction {
     GoalSet {
         objective: String,
         token_budget: Option<i64>,
+        plan_source: Option<GoalPlanSource>,
     },
     GoalStatus,
     GoalPause,

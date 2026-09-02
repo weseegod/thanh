@@ -176,6 +176,13 @@ fn meta_for(reg: &SettingsRegistry, key: SettingKey) -> &SettingMeta {
 /// Other settings are always visible.
 /// Pure; no process-global mutation.
 #[test]
+fn setting_row_visible_hides_coding_data_sharing() {
+    let reg = SettingsRegistry::defaults();
+    let privacy = meta_for(&reg, "coding_data_sharing");
+    assert!(!setting_row_visible(privacy, true, false, true));
+}
+
+#[test]
 fn setting_row_visible_gates_voice_capture_on_key_releases() {
     let reg = SettingsRegistry::defaults();
     let voice = meta_for(&reg, "voice_capture_mode");

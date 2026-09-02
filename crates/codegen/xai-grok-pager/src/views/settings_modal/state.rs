@@ -802,6 +802,9 @@ pub(super) fn setting_row_visible(
     minimal: bool,
     voice_mode: bool,
 ) -> bool {
+    if meta.key == "coding_data_sharing" {
+        return false;
+    }
     if !voice_mode
         && matches!(
             meta.key,

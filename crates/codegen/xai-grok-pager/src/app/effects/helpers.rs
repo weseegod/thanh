@@ -154,6 +154,18 @@ pub(super) fn format_acp_error(err: &acp::Error, is_api_key_auth: bool) -> Strin
         )
         .message()
 }
+
+/// Extract the user-facing compaction failure detail from a wire `acp::Error`.
+/// Typed compact payloads surface their `message` verbatim; empty `data` yields
+/// an empty string; everything else falls back to the JSON-RPC message.
+pub(crate) fn compact_error(err: &acp::Error) -> String {
+    match err.data.as_ref() {
+        None => err.message.clone(),
+        Some(data) if data.as_str() == Some("") => String::new(),
+        Some(data) => error_detail_from_data(data).unwrap_or_else(|| err.message.clone()),
+    }
+}
+
 /// Format a Duration for user-visible restore progress messages.
 pub(super) fn format_restore_elapsed(d: std::time::Duration) -> String {
     let secs = d.as_secs();
