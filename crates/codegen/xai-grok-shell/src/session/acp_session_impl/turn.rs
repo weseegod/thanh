@@ -843,7 +843,7 @@ impl SessionActor {
             let user_images = self
                 .normalize_images_with_notices(&mut context, raw_images, is_cursor)
                 .await;
-            let (query, extra_images) = if !self.is_cursor_harness() {
+            let (query, extra_images) = if self.harness_attaches_vision_images(&model_id) {
                 let extraction = xai_grok_tools::util::base64_images::extract_base64_images(query);
                 if extraction.images.is_empty() {
                     (extraction.text, Vec::new())
@@ -913,7 +913,7 @@ impl SessionActor {
                 .send(PersistenceMsg::ContentChunk(PersistenceContentChunk::new(
                     prompt_blocks.to_vec(),
                 )));
-            let model_id = self
+            let telemetry_model_id = self
                 .chat_state_handle
                 .get_sampling_config()
                 .await
@@ -926,7 +926,7 @@ impl SessionActor {
                     prompt_client_identifier.or_else(|| self.client_identifier.clone());
                 let ev = xai_grok_telemetry::events::PromptSubmitted {
                     prompt_length: user_message.len(),
-                    model_id,
+                    model_id: telemetry_model_id,
                     client_identifier: effective_client_identifier,
                     screen_mode: prompt_screen_mode,
                     prompt_text: None,
@@ -1030,7 +1030,7 @@ impl SessionActor {
                 }
             };
             user_chat.set_prompt_index(current_prompt_index);
-            if !self.is_cursor_harness() {
+            if self.harness_attaches_vision_images(&model_id) {
                 for image in &user_images {
                     user_chat.add_image(pick_user_image_url(image));
                 }
@@ -2597,6 +2597,25 @@ impl SessionActor {
                 .tool_context
                 .clamp_task_model_request(request.max_output_tokens)
                 .map_err(|message| acp::Error::internal_error().data(message))?;
+            // Text-only BYOK models (`input = ["text"]` in config.toml) reject
+            // `image_url` content blocks with HTTP 400 ("unknown variant
+            // `image_url`, expected `text`"). Strip image parts up front so a
+            // declared text-only model never receives one — this covers pasted
+            // images, interjection images, and tool-result images already
+            // persisted in the conversation.
+            if let Some(model_id) = request.model.clone()
+                && !self.models_manager.model_accepts_images(&model_id)
+            {
+                let stripped = request.strip_images_for_text_only();
+                if stripped > 0 {
+                    tracing::info!(
+                        session_id = %self.session_info.id,
+                        model = model_id,
+                        stripped,
+                        "text-only model: stripped image parts from request"
+                    );
+                }
+            }
             if salvage.enabled() {
                 request.length_policy = xai_grok_sampling_types::LengthPolicy::CompletePartial;
             }

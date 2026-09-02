@@ -41,6 +41,12 @@ impl SessionActor {
     pub(super) fn is_cursor_harness(&self) -> bool {
         false
     }
+    /// Whether vision images may be attached to the conversation for `model_id`.
+    /// False when the harness is cursor-style or the catalog declares text-only
+    /// (`input = ["text"]` in config.toml).
+    pub(super) fn harness_attaches_vision_images(&self, model_id: &str) -> bool {
+        !self.is_cursor_harness() && self.models_manager.model_accepts_images(model_id)
+    }
     pub(super) async fn handle_session_mode(&self, session_mode_id: acp::SessionModeId) {
         use xai_grok_tools::types::SessionMode;
         let prompt_mode = prompt_mode_from_session_mode_id(&session_mode_id);

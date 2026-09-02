@@ -2888,6 +2888,7 @@ impl SessionActor {
                 Vec::new(),
             )
         } else {
+            let attach_images = self.harness_attaches_vision_images(model_id);
             self.render_non_replaced_tool_body(
                 &result.output,
                 prompt_text,
@@ -2896,6 +2897,7 @@ impl SessionActor {
                 effective_tool_name,
                 requested_tool_name,
                 tool_layer_images,
+                attach_images,
             )
             .await
         };
@@ -2910,7 +2912,7 @@ impl SessionActor {
         };
         self.chat_state_handle.push_tool_result(tool_chat);
         let mut deferred_followups = Vec::new();
-        if !extracted_images.is_empty() {
+        if !extracted_images.is_empty() && self.harness_attaches_vision_images(model_id) {
             let count = extracted_images.len();
             tracing::info!(
                 session_id = %self.session_info.id,
@@ -2962,6 +2964,7 @@ impl SessionActor {
         effective_tool_name: &str,
         requested_tool_name: &str,
         tool_layer_images: Vec<xai_grok_tools::util::base64_images::ExtractedImage>,
+        attach_images: bool,
     ) -> (
         String,
         Vec<ContentPart>,
@@ -2970,7 +2973,7 @@ impl SessionActor {
         use crate::session::acp_conversion::maybe_rewrite;
         let mut prompt_text = prompt_text;
         let mut inline_images: Vec<ContentPart> = Vec::new();
-        let extraction = if !self.is_cursor_harness()
+        let extraction = if attach_images
             && !matches!(
                 *output,
                 ToolsToolOutput::ReadFile(ReadFileOutput::ImageContent(_))
@@ -2985,12 +2988,12 @@ impl SessionActor {
         };
         let mut extracted_images = extraction.images;
         split_tool_layer_for_harness(
-            self.is_cursor_harness(),
+            !attach_images,
             &mut extracted_images,
             tool_layer_images,
         );
         prompt_text = maybe_rewrite(path_rewriter, extraction.text);
-        if !self.is_cursor_harness()
+        if attach_images
             && let ToolsToolOutput::ReadFile(ReadFileOutput::ImageContent(ref image_content)) =
                 *output
         {
@@ -3023,7 +3026,7 @@ impl SessionActor {
                 }
             }
         }
-        if !self.is_cursor_harness()
+        if attach_images
             && let ToolsToolOutput::ReadFile(ReadFileOutput::PdfPageImages(ref pdf)) = *output
         {
             for page in &pdf.pages {

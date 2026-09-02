@@ -5,6 +5,8 @@ use base64::Engine;
 use xai_grok_sampling_types::{ContentPart, ConversationItem};
 use xai_grok_tools::types::output::{MCPOutput, ToolOutput, ToolRunResult};
 use xai_grok_tools::util::base64_images::{ExtractedImage, IMAGE_CONTENT_PLACEHOLDER};
+use crate::agent::config::{ModelEntry, ModelInfo};
+use xai_grok_sampling_types::InputModality;
 /// A 32×32 solid PNG, above the vision minimum side and area, so normalize keeps it.
 fn vision_ok_png_b64() -> String {
     use image::{ImageBuffer, Rgba};
@@ -118,6 +120,74 @@ async fn handle_bridge_tool_success_multimodal_mcp_image_deferred_followup() {
                 !text.contains("image omitted"),
                 "no budget-omit copy: {text}"
             );
+        })
+        .await;
+}
+fn text_only_model_entry(model_id: &str) -> ModelEntry {
+    let mut info = ModelInfo::fallback(model_id);
+    info.input_modalities = Some(vec![InputModality::Text]);
+    ModelEntry {
+        info,
+        api_key: None,
+        env_key: None,
+        auth_provider: None,
+        api_base_url: None,
+    }
+}
+/// Text-only models (`input = ["text"]`) must not receive tool-layer images as
+/// deferred vision follow-ups or inline tool-result image_url blocks.
+#[tokio::test(flavor = "current_thread")]
+async fn handle_bridge_tool_success_text_only_model_skips_image_followup() {
+    let local = tokio::task::LocalSet::new();
+    local
+        .run_until(async {
+            let (gateway_tx, _) = tokio::sync::mpsc::unbounded_channel::<
+                xai_acp_lib::AcpClientMessage,
+            >();
+            let (persistence_tx, _) = tokio::sync::mpsc::unbounded_channel::<
+                PersistenceMsg,
+            >();
+            let mut actor = create_test_actor(0, 256_000, 85, gateway_tx, persistence_tx)
+                .await;
+            actor
+                .models_manager
+                .insert_test_entry("text-only-model", text_only_model_entry("text-only-model"));
+            let payload = vision_ok_png_b64();
+            let parsed_args = serde_json::json!({});
+            let followups = actor
+                .handle_bridge_tool_success(BridgeToolSuccess {
+                    tool_call_id: &acp::ToolCallId::new("tc-mcp-text-only"),
+                    call_id: "tc-mcp-text-only",
+                    requested_tool_name: "browser_screenshot",
+                    effective_tool_name: "browser_screenshot",
+                    drained: DrainedToolSuccess::new(mcp_screenshot_result(&payload)),
+                    concatenated_json_count: 0,
+                    model_id: "text-only-model",
+                    tool_parsed_args: &parsed_args,
+                    model_output_override: None,
+                })
+                .await
+                .expect("bridge success");
+            assert!(
+                !followup_has_data_image(&followups),
+                "text-only model must not get deferred image follow-up: {followups:?}"
+            );
+            let conv = actor.chat_state_handle.get_conversation().await;
+            let tool = conv
+                .iter()
+                .rev()
+                .find(|i| matches!(i, ConversationItem::ToolResult(_)))
+                .expect("tool result pushed");
+            match tool {
+                ConversationItem::ToolResult(tr) => {
+                    assert!(
+                        tr.images.is_empty(),
+                        "text-only model must not get inline tool-result images: {:?}",
+                        tr.images
+                    );
+                }
+                other => panic!("expected ToolResult, got {other:?}"),
+            }
         })
         .await;
 }
